@@ -13,9 +13,9 @@
     <!-- Site config: the LUMA nodes every visitor connects to. Edit here, commit, and the site redeploys. -->
     <script>
       window.STARSKY_CONFIG = {
-        // Point this at your node's public address, e.g. main: { url: 'wss://your-node.example.net' }.
-        // Left empty, Starsky uses the local node (ws://127.0.0.1:6006) on whatever computer is running the chain.
+        // Mainnet node, reached through an ngrok tunnel from the node's computer (keep `ngrok http --url=boaster-lapdog-jelly.ngrok-free.dev 6006` running there).
         default: 'main',
+        main: { url: 'wss://boaster-lapdog-jelly.ngrok-free.dev' },
       };
     </script>
   </head>
