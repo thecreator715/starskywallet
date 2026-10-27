@@ -1266,3 +1266,14 @@ table.nmtab tbody tr.clk:hover{background:rgba(0,255,140,.05)}
 #hd .pgrid.nwk .big2{font-size:clamp(.95rem,2vw,1.6rem);overflow-wrap:anywhere}
 #hd .pgrid.nwk .tile{padding:.7rem .8rem}
 @media(max-width:700px){#hd .pgrid.nwk{grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:.3rem}#hd .pgrid.nwk .k{font-size:.55rem;letter-spacing:.04em}#hd .pgrid.nwk .big2{font-size:.8rem}#hd .pgrid.nwk .tile{padding:.45rem}}
+
+#netstrip{margin:0 0 1rem}
+#netstrip .nsrow{display:flex;gap:.5rem;margin-bottom:.6rem}#netstrip .nsrow input{flex:1;min-width:0}
+#nsstats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr)) minmax(0,2.2fr);gap:.5rem}
+#nsstats .nst{padding:.55rem .75rem;border-radius:.9rem;border:1px solid var(--line);background:linear-gradient(145deg,rgba(90,240,160,.07),rgba(255,255,255,.02));min-width:0}
+#nsstats .nst small{display:block;font-size:.6rem;letter-spacing:.1em;color:var(--mut,#8aa097)}
+#nsstats .nst b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#nsstats .nst i{display:block;font-size:.66rem;color:var(--mut,#8aa097);font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#nsstats .nsl{display:flex;flex-direction:column;gap:.05rem;font-size:.72rem;margin-top:.1rem}
+#nsstats .nsa{cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,monospace}#nsstats .nsa em{font-style:normal;color:var(--ok)}
+@media(max-width:900px){#nsstats{grid-template-columns:repeat(3,minmax(0,1fr))}#nsstats .nsw{grid-column:1/-1}}

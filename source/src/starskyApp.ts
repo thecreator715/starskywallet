@@ -1125,7 +1125,10 @@ const ICON: Record<string, string> = {
   nfts: '<path d="M4 4h16v16H4zM4 15l4-4 4 4 5-5 3 3M14 8a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/>',
   activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
   more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
-  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+  holders: '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M16 5.2a3.2 3.2 0 010 5.6M18 14.4c2 .7 3.5 2.7 3.5 5.6"/>',
+  runnode: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01M12 7.5h5M12 16.5h5"/>',
+  burn: '<path d="M12 22c4.4 0 7-2.9 7-6.6 0-3-1.8-4.9-3.2-6.4-.4 1.4-1.2 2.2-2.3 2.6.4-3.7-1-6.6-3.5-9.6-.2 3.2-1.8 5.3-3.1 7C5.6 10.6 5 12.4 5 15.4 5 19.1 7.6 22 12 22z"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/> y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
 };
 
 export const ic = (k: string) =>
@@ -1172,11 +1175,58 @@ export function renderTop() {
   if (!c) return;
   if (st.status === 'online') startTopStats();
   else refreshTopStats();
+  renderNetStrip();
   const isOnline = st.status === 'online';
   c.className = `pill ${isOnline ? 'on' : ''}`;
   c.innerHTML = isOnline
     ? (st.walletMode === 'xrpl' ? `<i></i>XRP Ledger · ${(CFG.urls[CFG.net] || '').includes('altnet') || /test/.test(CFG.net) ? 'Testnet' : 'Mainnet'} (XRPL wallet)` : `<i></i>${esc(getNet().name)} · Ledger #${fq(st.ledger, 0)}`)
     : `<i></i>${st.status === 'connecting' ? 'Connecting to ' + esc(st.url || getNet().url) + '…' : 'Offline'}`;
+}
+
+const avgN = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+export function renderNetStrip() {
+  const e = document.getElementById('nsstats');
+  if (!e) return;
+  const sc = st.scan, ct = avgN(sc.closeTimes), tps = ct ? avgN(sc.txPerLedger) / ct : 0;
+  const ok = sc.seenCount ? (100 * (sc.seenCount - sc.failCount)) / sc.seenCount : null;
+  const tile = (k: string, v: string, sub = '') => `<div class="nst"><small>${k}</small><b>${v}</b>${sub ? `<i>${sub}</i>` : ''}</div>`;
+  const last = sc.txs.slice(0, 5).map((t: any) => `<span class="nsa" onclick="window.globalSearch('${esc(t.hash)}')"><em>${esc(t.type)}</em> ${esc(showAddr(t.from || '').slice(0, 6))}…${esc(showAddr(t.from || '').slice(-4))}</span>`).join('');
+  const h = [
+    tile('LEDGER', st.ledger ? '#' + Number(st.ledger).toLocaleString() : '–'),
+    tile('TPS', tps.toFixed(2), 'tx / second'),
+    tile('CLOSE TIME', ct ? ct.toFixed(1) + 's' : '–'),
+    tile('TX SEEN', sc.seenCount.toLocaleString(), ok != null ? ok.toFixed(1) + '% succeeded' : ''),
+    tile('LAST LEDGER', String(sc.txPerLedger[sc.txPerLedger.length - 1] ?? '–'), 'transactions'),
+    tile('SUPPLY', sc.totalCoins != null ? Math.round(sc.totalCoins).toLocaleString() : '–', getNet().native + ' after burns'),
+    `<div class="nst nsw"><small>LATEST ACTIVITY</small><div class="nsl">${last || '<i>waiting…</i>'}</div></div>`,
+  ].join('');
+  if ((e as any).__h !== h) { (e as any).__h = h; e.innerHTML = h; }
+}
+(window as any).globalSearch = async (v: string) => {
+  v = String(v || '').trim();
+  if (!v) return;
+  if (/^[0-9A-Fa-f]{64}$/.test(v)) return showTxModal(v.toUpperCase());
+  let a = v;
+  try { a = /^[LT]/.test(v) ? LumaAddr.normalize(v) : v; } catch {}
+  if (!/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(a)) return toast('Enter a 64-character transaction hash or a wallet address (L… / T… / r…)', true);
+  (window as any).goTab('holders');
+  setTimeout(() => (window as any).hd.view(a), 150);
+};
+async function showTxModal(h: string) {
+  modal(`<h2>Transaction</h2><div class="mut" id="gtx">loading…</div><div class="row" style="margin-top:1rem"><button class="grow" onclick="window.closeModal()">Close</button></div>`);
+  try {
+    const cl: any = st.client;
+    const r: any = (await cl.request({ command: 'tx', transaction: h })).result;
+    const t = r.tx_json || r, m = r.meta || {}, res = m.TransactionResult || '', ok = res === 'tesSUCCESS';
+    const side = (v: any) => (v == null ? '' : typeof v === 'string' ? (Number(v) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 }) + ' ' + getNet().native : Number(v.value).toLocaleString(undefined, { maximumFractionDigits: 6 }) + ' ' + String(v.currency).slice(0, 8));
+    const kv = (k: string, v: string) => `<div class="kv"><span>${k}</span><b style="word-break:break-all">${v}</b></div>`;
+    const lk = (a: string) => `<span class="mono" style="cursor:pointer;color:var(--ok)" onclick="window.closeModal();window.globalSearch('${esc(a)}')">${esc(showAddr(a))}</span>`;
+    const el = document.getElementById('gtx');
+    if (el) el.outerHTML = `${kv('Type', esc(t.TransactionType))}${kv('Result', `<span class="${ok ? 'ok' : 'crit'}">${esc(res || 'pending')}</span>`)}${kv('From', lk(t.Account))}${t.Destination ? kv('To', lk(t.Destination)) : ''}${t.Amount != null ? kv('Amount', esc(side(t.Amount))) : ''}${t.TakerGets != null ? kv('Offer', esc(side(t.TakerGets)) + ' for ' + esc(side(t.TakerPays))) : ''}${kv('Fee', ((Number(t.Fee) || 0) / 1e6) + ' ' + getNet().native + ' (burned)')}${kv('Ledger', '#' + esc(String(r.ledger_index || '')))}${kv('Hash', esc(h))}`;
+  } catch (e: any) {
+    const el = document.getElementById('gtx');
+    if (el) el.textContent = 'Could not find that transaction: ' + (e?.data?.error_message || e?.message || e);
+  }
 }
 
 export function renderBanner() {
@@ -1786,6 +1836,7 @@ export function renderApp() {
             : ''
         }
 
+        <div id="netstrip"><div class="nsrow"><input id="gs" placeholder="Search a transaction hash or wallet address" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')window.globalSearch(this.value)"><button class="sm pri" onclick="window.globalSearch(document.getElementById('gs').value)">Search</button></div><div id="nsstats"></div></div>
         <div id="banner"></div>
         <div id="view">${body}</div>
       </main>
@@ -1834,6 +1885,7 @@ export function renderApp() {
     Mg.paintNow();
     Bn.load();
   }
+  renderNetStrip();
   if (st.tab === 'runnode') RunNode.mount();
   else RunNode.unmount();
   if (st.tab === 'markets') Pages.marketsMount();
