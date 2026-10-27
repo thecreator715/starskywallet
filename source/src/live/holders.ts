@@ -68,30 +68,54 @@ async function loadDet(a: string) {
 }
 function detail(): string {
   const D = H.det || {}, a = H.view, d = H.data;
-  const back = `<button class="sm ghost" onclick="window.hd.back()">‹ Back to holders</button>`;
-  if (D.loading) return `${back}<p class="mut" style="margin-top:.8rem">Reading ${esc(addr(a))}…</p>`;
-  const row = d && d.rows.find((x: any) => x.addr === a), I = D.info, tok = assetOf(H.sel);
+  const back = `<button class="pri acc" style="margin-bottom:.9rem" onclick="window.hd.back()">‹ Back to holders</button>`;
+  if (D.loading) return `${back}<div class="mut">Reading ${esc(addr(a))}…</div>`;
+  const row = d && d.rows.find((x: any) => x.addr === a), I = D.info, tok = assetOf(H.sel), N = ctx.native();
+  const sample = H.tokens.find((t: M.TokenRow) => t.usdPx != null && t.nativePx);
+  const upn: number | null = sample ? (sample.usdPx as number) / (sample.nativePx as number) : null;
+  const bal = I ? Number(I.Balance) / 1e6 : 0;
+  const pxOf = (l: any) => { const t = H.tokens.find((x: M.TokenRow) => x.a.c === l.currency && x.a.i === l.account); return t && t.usdPx != null ? t.usdPx : null; };
+  const lines = (D.lines || []).slice().sort((x: any, y: any) => (Number(y.balance) * (pxOf(y) || 0)) - (Number(x.balance) * (pxOf(x) || 0)) || Number(y.balance) - Number(x.balance));
+  const tokUsd = lines.reduce((t: number, l: any) => t + (Number(l.balance) > 0 && pxOf(l) != null ? Number(l.balance) * pxOf(l) : 0), 0);
+  const total = upn != null ? bal * upn + tokUsd : null;
   const roles: string[] = [];
-  if (D.pool) roles.push('AMM pool'); if (row && row.label) roles.push('Your wallet: ' + row.label);
-  const amtS = (v: any) => v == null ? '' : typeof v === 'string' ? fmt(Number(v) / 1e6, 6) + ' ' + ctx.native() : fmt(Number(v.value), 6) + ' ' + String(v.currency).slice(0, 12);
-  const kv = (k: string, v: string) => `<div class="tile kvt"><div class="k">${k}</div><div class="big2" style="font-size:1.05rem;word-break:break-all">${v}</div></div>`;
+  if (D.pool) roles.push('AMM pool'); if (row && row.label) roles.push('Your wallet · ' + row.label);
+  const nm = (c: string) => (String(c).length === 40 ? String(c).slice(0, 6) + '…' + String(c).slice(-4) : String(c));
+  const amtS = (v: any) => v == null ? '' : typeof v === 'string' ? fmt(Number(v) / 1e6, 6) + ' ' + N : fmt(Number(v.value), 6) + ' ' + nm(v.currency);
+  const stat = (k: string, v: string, sub = '') => `<div style="padding:.8rem 1rem;border-radius:1rem;background:rgba(255,255,255,.04);border:1px solid var(--line)"><div class="k" style="margin:0">${k}</div><div style="font-size:1.25rem;font-weight:700;margin-top:.2rem;word-break:break-word">${v}</div>${sub ? `<div class="mut" style="font-size:.74rem">${sub}</div>` : ''}</div>`;
+  const hue = (c: string) => { let h = 0; for (const ch of c) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+  const tcard = (title: string, sub: string, amt: string, usdv: string, c: string) => `<div style="padding:.9rem;border-radius:1rem;border:1px solid var(--line);background:linear-gradient(145deg,hsla(${hue(c)},70%,45%,.16),rgba(255,255,255,.02));display:flex;gap:.7rem;align-items:center"><div style="flex:none;width:2.4rem;height:2.4rem;border-radius:50%;display:grid;place-items:center;font-weight:800;background:hsla(${hue(c)},70%,50%,.35)">${esc((title[0] || '?').toUpperCase())}</div><div style="min-width:0;flex:1"><div style="font-weight:700">${esc(title)}</div><div class="mut mono" style="font-size:.7rem;overflow:hidden;text-overflow:ellipsis">${esc(sub)}</div></div><div style="text-align:right"><div style="font-weight:700">${amt}</div><div class="mut" style="font-size:.74rem">${usdv}</div></div></div>`;
+  const cards = [tcard(N, 'native coin', fmt(bal, 4), upn != null ? usd(bal * upn) : '', N)].concat(lines.map((l: any) => {
+    const p = pxOf(l), bv = Number(l.balance);
+    return tcard(nm(l.currency), 'issuer ' + short(addr(l.account), 6, 4), fmt(bv, bv < 1 ? 6 : 2), p != null ? usd(bv * p) : '', l.currency + l.account);
+  }));
+  const txr = (D.txs || []).map((t: any) => {
+    const out = t.from === a, ok = t.res === 'tesSUCCESS', other = out ? (t.to || '') : t.from;
+    return `<div style="display:flex;gap:.6rem;align-items:center;padding:.6rem .2rem;border-bottom:1px solid var(--line);flex-wrap:wrap"><span class="chip">${esc(t.type)}</span><span class="mono mut" style="font-size:.76rem;flex:1;min-width:8rem">${other ? (out ? '→ ' : '← ') + esc(short(addr(other), 6, 4)) : ''}</span><b>${esc(amtS(t.amt))}</b><span class="${ok ? 'ok' : 'crit'}" style="font-size:.74rem">${ok ? '✓' : esc(t.res)}</span><span class="mut" style="font-size:.74rem">#${esc(String(t.ledger))}</span></div>`;
+  }).join('');
   return `${back}
-  <div class="mono" style="word-break:break-all;margin:.7rem 0;font-size:.95rem">${esc(addr(a))} ${roles.map(r => `<span class="chip">${esc(r)}</span>`).join(' ')}</div>
-  <div class="pgrid nwk" style="margin:.4rem 0">${[
-    ['Balance', I ? fmt(Number(I.Balance) / 1e6, 6) + ' ' + ctx.native() : 'not on ledger'],
-    ['Holds of ' + (isNative(tok) ? ctx.native() : esc(tok.c.slice(0, 10))), row ? fmt(row.amt, 6) : '–'],
-    ['Share of supply held', row ? row.pct.toFixed(4) + '%' : '–'],
-    ['Sequence', I ? String(I.Sequence) : '–'],
-    ['Owned objects', I ? String(I.OwnerCount || 0) : '–'],
-  ].map(([k, v]) => kv(k, v)).join('')}</div>
-  ${I ? `<div class="mut" style="font-size:.8rem;margin:.3rem 0">Classic address <span class="mono">${esc(a)}</span>${I.Domain ? ' · domain set' : ''}${I.RegularKey ? ' · has a regular key' : ''}${I.Flags ? ' · flags ' + I.Flags : ''}</div>` : ''}
-  ${D.pool ? `<div class="card" style="margin:.6rem 0"><div class="k">AMM pool</div><div class="mut" style="font-size:.85rem">This account holds the reserves of a liquidity pool.</div></div>` : ''}
-  <div class="k" style="margin-top:1rem">Tokens held (${D.lines.length}${D.lines.length >= 100 ? '+' : ''})</div>
-  ${D.lines.length ? `<table class="dxt"><thead><tr><th>Token</th><th>Issuer</th><th class="r">Balance</th><th class="r">Limit</th></tr></thead><tbody>${D.lines.map((l: any) => `<tr><td>${esc(String(l.currency).length === 40 ? String(l.currency).slice(0, 6) + '…' : l.currency)}</td><td class="mono mut" style="font-size:.74rem">${esc(short(addr(l.account), 6, 4))}</td><td class="r">${fmt(Number(l.balance), 6)}</td><td class="r mut">${fmt(Number(l.limit), 0)}</td></tr>`).join('')}</tbody></table>` : '<div class="mut">No trust lines.</div>'}
-  <div class="k" style="margin-top:1rem">NFTs (${D.nfts.length}${D.nftMore ? '+' : ''})</div>
-  ${D.nfts.length ? `<div class="mono mut" style="font-size:.74rem;max-height:7rem;overflow:auto">${D.nfts.slice(0, 40).map((n: any) => `#${esc(String(n.nft_serial ?? ''))} · taxon ${esc(String(n.NFTokenTaxon ?? ''))}`).join('<br>')}</div>` : '<div class="mut">None.</div>'}
-  <div class="k" style="margin-top:1rem">Recent transactions</div>
-  ${D.txs.length ? `<table class="dxt"><thead><tr><th>Type</th><th>Counterparty</th><th class="r">Amount</th><th>Result</th><th class="r">Ledger</th></tr></thead><tbody>${D.txs.map((t: any) => `<tr><td>${esc(t.type)}</td><td class="mono mut" style="font-size:.74rem">${esc(short(addr(t.from === a ? (t.to || t.from) : t.from), 6, 4))}</td><td class="r">${esc(amtS(t.amt))}</td><td class="${t.res === 'tesSUCCESS' ? 'ok' : 'crit'}">${esc(t.res)}</td><td class="r mut">${esc(String(t.ledger))}</td></tr>`).join('')}</tbody></table>` : '<div class="mut">No transactions.</div>'}`;
+  <div style="padding:1.3rem;border-radius:1.4rem;border:1px solid var(--line);background:radial-gradient(120% 140% at 0% 0%,rgba(90,240,160,.16),transparent 55%),linear-gradient(160deg,rgba(130,90,255,.18),rgba(255,255,255,.02))">
+    <div class="k" style="margin:0">Wallet</div>
+    <div class="mono" style="word-break:break-all;font-size:1rem;margin:.3rem 0">${esc(addr(a))} <a href="#" class="mut" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(addr(a))}');return false">copy</a></div>
+    <div>${roles.map(r => `<span class="chip">${esc(r)}</span>`).join(' ')}</div>
+    <div style="display:flex;gap:1.6rem;flex-wrap:wrap;margin-top:1rem;align-items:flex-end">
+      <div><div class="mut" style="font-size:.78rem">${total != null ? 'Estimated value' : 'Balance'}</div><div style="font-size:2.3rem;font-weight:800;line-height:1.1">${total != null ? usd(total) : fmt(bal, 4) + ' ' + esc(N)}</div></div>
+      ${total != null ? `<div><div class="mut" style="font-size:.78rem">${esc(N)} balance</div><div style="font-size:1.3rem;font-weight:700">${fmt(bal, 4)}</div></div>` : ''}
+    </div>
+  </div>
+  <div class="pgrid nwk" style="margin:1rem 0;gap:.6rem">${[
+    stat('Holds of ' + (isNative(tok) ? esc(N) : esc(nm(tok.c))), row ? fmt(row.amt, 4) : '–', row ? row.pct.toFixed(4) + '% of supply' : ''),
+    stat('Tokens', String(lines.length) + (lines.length >= 100 ? '+' : '')),
+    stat('NFTs', String((D.nfts || []).length) + (D.nftMore ? '+' : '')),
+    stat('Owned objects', I ? String(I.OwnerCount || 0) : '–'),
+    stat('Sequence', I ? String(I.Sequence) : '–', I ? (I.RegularKey ? 'has a regular key' : '') : 'not on ledger'),
+  ].join('')}</div>
+  <div class="k" style="margin:1.2rem 0 .5rem">Everything this wallet holds</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));gap:.7rem">${cards.join('')}</div>
+  ${(D.nfts || []).length ? `<div class="k" style="margin:1.4rem 0 .5rem">NFTs</div><div class="mono mut" style="font-size:.76rem;max-height:8rem;overflow:auto">${D.nfts.slice(0, 60).map((n: any) => `#${esc(String(n.nft_serial ?? ''))} · taxon ${esc(String(n.NFTokenTaxon ?? ''))}`).join('<br>')}</div>` : ''}
+  <div class="k" style="margin:1.4rem 0 .3rem">Recent transactions</div>
+  ${txr || '<div class="mut">No transactions.</div>'}
+  <div style="margin-top:1.2rem">${back}</div>`;
 }
 function paint() {
   const r = $('hd');
