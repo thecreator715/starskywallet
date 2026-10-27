@@ -390,15 +390,39 @@ export async function index(force = false) {
   NF.loading = false;
 }
 let metaBusy = false;
+const metaFails = new Map<string, number>();
+let metaWarned = false;
 async function metaFill(list: Item[]) {
   if (metaBusy) return;
   metaBusy = true;
-  const todo = list.filter(i => !NF.meta.has(i.id));
+  const todo = list.filter(i => !NF.meta.has(i.id) && (metaFails.get(i.id) || 0) < 4);
+  let ok = 0;
   await poolMap(todo, 5, async it => {
-    NF.meta.set(it.id, await loadMeta(it));
+    const m = await loadMeta(it);
+    if (m) { NF.meta.set(it.id, m); ok++; }
+    else metaFails.set(it.id, (metaFails.get(it.id) || 0) + 1);
   });
+  if (todo.length && !ok && !metaWarned) {
+    metaWarned = true;
+    ctx.toast('NFT images load from the node\'s IPFS through the tunnel. If they stay blank, the node tunnel needs the updated gateway (luma-tunnel).', true);
+  }
   metaBusy = false;
   if (todo.length) paint();
+}
+// ngrok's free tunnel puts a warning page in front of plain <img> requests; a fetch with the skip header gets the real file, shown from a local blob
+async function viaBlob(u: string, resp?: Response): Promise<string> {
+  if (!u || !/ngrok/.test(u)) return u;
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 15000);
+    const r = resp && resp.ok ? resp : await fetch(u, { signal: c.signal, headers: { 'ngrok-skip-browser-warning': '1' } });
+    const b = await r.blob();
+    clearTimeout(t);
+    if (!r.ok || !/^(image|video|audio)\//.test(b.type)) return '';
+    return URL.createObjectURL(b);
+  } catch {
+    return '';
+  }
 }
 async function loadMeta(it: Item): Promise<Meta | null> {
   const gws = it.uri.startsWith('ipfs://') ? [IP().gw, ...PUBLIC_GW.filter(g => g !== IP().gw)] : [''];
@@ -406,7 +430,7 @@ async function loadMeta(it: Item): Promise<Meta | null> {
     const m = await loadMetaVia(it, gw);
     if (m) return m;
   }
-  return { name: '', desc: '', image: '', attrs: [], coll: '', mime: '' };
+  return it.uri.startsWith('ipfs://') ? null : { name: '', desc: '', image: '', attrs: [], coll: '', mime: '' };
 }
 async function loadMetaVia(it: Item, gw: string): Promise<Meta | null> {
   const u = resolve(it.uri, gw);
@@ -418,10 +442,10 @@ async function loadMetaVia(it: Item, gw: string): Promise<Meta | null> {
     const r = await fetch(u, { signal: c.signal, headers: /ngrok/.test(u) ? { 'ngrok-skip-browser-warning': '1' } : {} });
     clearTimeout(t);
     const ct = r.headers.get('content-type') || '';
-    if (ct.startsWith('image/') || ct.startsWith('video/') || ct.startsWith('audio/')) return { ...base, image: u, mime: ct };
+    if (ct.startsWith('image/') || ct.startsWith('video/') || ct.startsWith('audio/')) return { ...base, image: await viaBlob(u, r), mime: ct };
     const j: any = await r.json();
     const attrs = Array.isArray(j.attributes) ? j.attributes.map((a: any) => ({ k: String(a.trait_type ?? a.key ?? ''), v: String(a.value ?? '') })) : [];
-    return { name: String(j.name || ''), desc: String(j.description || ''), image: resolve(String(j.image || j.animation_url || ''), gw), attrs, coll: String((j.collection && (j.collection.name || j.collection)) || ''), mime: String(j.mime || ''), cdesc: String((j.collection && j.collection.description) || ''), cover: !!(j.collection && j.collection.cover), mint: j.collection && j.collection.mint, total: Number((j.collection && j.collection.total) || 0) };
+    return { name: String(j.name || ''), desc: String(j.description || ''), image: await viaBlob(resolve(String(j.image || j.animation_url || ''), gw)), attrs, coll: String((j.collection && (j.collection.name || j.collection)) || ''), mime: String(j.mime || ''), cdesc: String((j.collection && j.collection.description) || ''), cover: !!(j.collection && j.collection.cover), mint: j.collection && j.collection.mint, total: Number((j.collection && j.collection.total) || 0) };
   } catch {
     return null;
   }
