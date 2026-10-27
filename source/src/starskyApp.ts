@@ -2861,6 +2861,29 @@ export function initWindowBindings() {
     toast('✓ Account added');
   };
 
+  (window as any).revealWalletSecret = (id: string) => {
+    if (!VAULT) return toast('Unlock the vault first', true);
+    const a = VAULT.data.accounts.find(x => x.id === id);
+    if (!a || !a.seed) return toast('This account has no seed saved here', true);
+    (window as any)._seedShown = a.seed;
+    modal(`
+      <h2>Secret seed</h2>
+      <p class="mut" style="margin:.6rem 0">This seed is the master key to <b>${esc(a.label)}</b>. Anyone who has it controls the account. Never share it; keep it offline.</p>
+      <div id="seedBox" class="mono card" style="word-break:break-all;margin:.8rem 0;user-select:all;color:var(--ok)">••••••••••••••••••••••••••••</div>
+      <div class="row" style="gap:.5rem;flex-wrap:wrap">
+        <button class="grow" onclick="window.closeModal()">Close</button>
+        <button class="grow" id="seedTgl" onclick="window.toggleSeed()">Reveal</button>
+        <button class="pri acc grow" onclick="window.copyText(window._seedShown)">Copy</button>
+      </div>`);
+  };
+  (window as any).toggleSeed = () => {
+    const b = document.getElementById('seedBox'), t = document.getElementById('seedTgl');
+    if (!b || !t) return;
+    const hidden = t.textContent === 'Reveal';
+    b.textContent = hidden ? String((window as any)._seedShown || '') : '••••••••••••••••••••••••••••';
+    t.textContent = hidden ? 'Hide' : 'Reveal';
+  };
+
   (window as any).generateNewWalletInMode = async () => {
     if (!VAULT) return toast('Unlock the vault first', true);
     const mode = st.walletMode;
