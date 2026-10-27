@@ -25,6 +25,7 @@ export function shell() {
   <select id="rn_role"><option value="api">Supporting node (light)</option><option value="history">History node (full history, large disk)</option></select>
   <input id="rn_name" class="grow" placeholder="Name your node (e.g. Sam's laptop)"></div>
   <div class="row" style="gap:.5rem;flex-wrap:wrap;margin-top:.5rem"><input id="rn_host" class="grow" placeholder="Your public address (optional, for peers to reach you)"><input id="rn_reward" class="grow" placeholder="Address for rewards (optional, L… / T…)"></div>
+  <label style="display:flex;gap:.5rem;align-items:center;margin-top:.7rem;font-size:.85rem"><input type="checkbox" id="rn_close" checked style="width:auto"> Close any previously running LUMA nodes on that computer first</label>
   <div style="margin-top:.7rem"><button class="pri acc" onclick="window.rn.request(this)">Request to join</button> <button onclick="window.rn.check()">Check approval</button></div>
   <div id="rn_msg" class="mut" style="font-size:.85rem;margin-top:.5rem"></div></div>
   <div class="card" id="rn_out" style="margin-top:1rem;display:none"></div></div>`;
@@ -65,7 +66,7 @@ async function check(quiet = false) {
     render();
   } catch (e: any) { quiet || msg(e.message, true); }
 }
-function script(): string {
+function script(close = true): string {
   const n = NET, hist = REQ.role === 'history', nm = 'luma-node-' + String(REQ.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const peer = (n.host || 'OPERATOR_HOST') + ' ' + n.peerPort, ws = n.wsPort || 6006, rpc = n.rpcPort || 5006;
   const cfg = `[server]\nport_rpc_admin_local\nport_rpc_public\nport_peer\nport_ws_public\n\n[port_rpc_admin_local]\nport = 5005\nip = 127.0.0.1\nadmin = 127.0.0.1\nprotocol = http\n\n[port_rpc_public]\nport = 5006\nip = 0.0.0.0\nprotocol = http\n\n[port_ws_public]\nport = 6006\nip = 0.0.0.0\nprotocol = ws\n\n[port_peer]\nport = 51235\nip = 0.0.0.0\nprotocol = peer\n\n[node_size]\n${hist ? 'huge' : 'medium'}\n\n[node_db]\ntype=NuDB\npath=/var/lib/rippled/db/nudb\n${hist ? '' : 'online_delete=2000\nadvisory_delete=0\n'}\n[database_path]\n/var/lib/rippled/db\n\n[debug_logfile]\n/var/log/rippled/debug.log\n\n[network_id]\n${n.networkId}\n\n[voting]\nreference_fee = ${n.feeDrops}\naccount_reserve = ${n.reserveDrops}\nowner_reserve = ${Math.round(n.reserveDrops / 5)}\n\n[ledger_history]\n${hist ? 'full' : '256'}\n\n[fetch_depth]\n${hist ? 'full' : '256'}\n\n[peer_private]\n0\n\n[validators_file]\n/config/validators.txt\n\n[ips_fixed]\n${peer}\n`;
@@ -79,7 +80,7 @@ ${cfg}CFG_EOF
 cat > validators.txt <<'VAL_EOF'
 ${(n.validators || '').trim()}
 VAL_EOF
-docker rm -f ${nm} 2>/dev/null || true
+${close ? `# close previously running LUMA nodes first\nfor c in $(docker ps -aq --filter "name=luma-node-"); do docker rm -f "$c" >/dev/null 2>&1 || true; done\n` : ''}docker rm -f ${nm} 2>/dev/null || true
 docker run -d --name ${nm} --restart unless-stopped -e LUMA_JOIN=1 \\
   -p ${n.peerPort}:51235 -p ${ws}:6006 -p ${rpc}:5006 \\
   -v "$PWD/rippled.cfg:/config/rippled.cfg:ro" -v "$PWD/validators.txt:/config/validators.txt:ro" \\
@@ -95,7 +96,7 @@ function render() {
     return;
   }
   if (!NET) { o.innerHTML = '<p class="mut">Loading network details…</p>'; return; }
-  const sh = script(); (window as any)._rnsh = sh;
+  const sh = script(((($('rn_close') || {}) as any).checked) !== false); (window as any)._rnsh = sh;
   o.innerHTML = `<div class="k">Approved: run this on the computer that will host the node</div>
   <p class="mut" style="font-size:.85rem;margin:.4rem 0">Paste into a terminal (Mac, Linux, or WSL). It writes the config and starts the node in Docker. First time only, load the node image the operator gives you: <code>docker load &lt; luma-node-image.tar</code>.</p>
   <pre style="white-space:pre-wrap;word-break:break-all;max-height:18rem;overflow:auto;font-size:.72rem">${esc(sh)}</pre>
