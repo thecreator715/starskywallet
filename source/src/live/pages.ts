@@ -29,7 +29,7 @@ const restore = (id: string, dflt: string) => keep[id] || dflt;
 export { networkShell, networkMount, networkUnmount, networkLoad, nwApi, NW } from './network.ts';
 
 /* =============================== MARKETS =============================== */
-export const MK: any = { tokens: null, bal: null, timer: null, range: '24h', busy: false };
+export const MK: any = { other: new Set<string>(), tokens: null, bal: null, timer: null, range: '24h', busy: false };
 export function marketsShell() {
   return `<div id="mk">
     <div class="row" style="gap:.6rem;margin-bottom:.8rem;align-items:center"><span class="mut" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.08em">Chart range</span>
@@ -97,7 +97,10 @@ export async function marketsLoad() {
     if (!ctx.online()) return setHtml('mk_tiles', wait('Not connected to a node. Check the node address in Settings.'));
     await loadLines();
     const lineAssets: Asset[] = (MK.bal ? MK.bal.lines : []).map((l: any) => ({ c: l.currency, i: l.account }));
-    const t = await M.tokenTable(lineAssets);
+    const regList = await TK.registry().catch(() => [] as TK.TokenMeta[]);
+    const bl: Asset[] = await import('./bridge.ts').then(m => m.laneAssets()).catch(() => [] as Asset[]);
+    MK.other = new Set<string>([...regList.map(x => akey(x.a)), ...bl.map(x => akey(x))]);
+    const t = await M.tokenTable([...lineAssets, ...regList.map(x => x.a), ...bl]);
     if (!alive(g, 'mk')) return;
     MK.tokens = t;
     const refs = await M.poolRefs();
@@ -219,9 +222,8 @@ function renderTokens(t: { rows: M.TokenRow[]; now: M.Snap; ws: M.WinSnap[] }, r
   const nat = ctx.native();
   const poolSum = (k: string) => { let inPool = 0, vol = 0; for (const p of t.now.pools) { if (akey(p.a) === k) inPool += p.ra; else if (akey(p.b) === k) inPool += p.rb; } for (const p of refs) { if (akey(p.a) === k || akey(p.b) === k) vol += (acts.get(p.account) || ({} as Act)).vol || 0; } return { inPool, vol }; };
   const K = ['1h', '24h', '7d', 'all'];
-  setHtml(
-    'mk_tokens',
-    `<table class="dxt"><thead><tr><th>Token</th><th class="r">Price</th>${K.map(k => `<th class="r">${k === 'all' ? 'Since start' : k}</th>`).join('')}<th class="r">Supply</th><th class="r">Market cap</th><th class="r">In pools</th><th class="r">% pooled</th><th class="r">24h volume</th><th class="r">Yours</th><th></th></tr></thead><tbody>${t.rows
+  const tbl = (rows: M.TokenRow[]) =>
+    `<table class="dxt"><thead><tr><th>Token</th><th class="r">Price</th>${K.map(k => `<th class="r">${k === 'all' ? 'Since start' : k}</th>`).join('')}<th class="r">Supply</th><th class="r">Market cap</th><th class="r">In pools</th><th class="r">% pooled</th><th class="r">24h volume</th><th class="r">Yours</th><th></th></tr></thead><tbody>${rows
       .map(r => {
         const l = isNative(r.a) ? null : lineOf(r.a);
         const bal = isNative(r.a) ? (MK.bal ? MK.bal.native : null) : l ? Number(l.balance) : null;
@@ -233,7 +235,14 @@ function renderTokens(t: { rows: M.TokenRow[]; now: M.Snap; ws: M.WinSnap[] }, r
             : `<button class="sm pri" onclick="window.mk.trust('${esc(r.key)}',this)">Add trust line</button>`;
         return `<tr><td><b>${esc(r.name)}</b><div class="mut mono" style="font-size:.7rem">${isNative(r.a) ? 'native coin' : esc(short(ctx.show(r.issuer), 8, 5))}</div></td><td class="r">${r.usdPx != null ? usd(r.usdPx) : r.nativePx != null ? fmt(r.nativePx) + ' ' + nat : '–'}</td>${K.map(k => `<td class="r">${pctHtml(r.chg[k])}${r.partial[k] ? '<small class="mut" title="Since listing">*</small>' : ''}</td>`).join('')}<td class="r">${r.supply != null ? fmt(r.supply) : '–'}</td><td class="r">${r.mcapUsd != null ? usd(r.mcapUsd) : r.mcapNative != null ? fmt(r.mcapNative) + ' ' + nat : '–'}</td><td class="r">${fmt(ps.inPool)}</td><td class="r">${r.supply ? ((ps.inPool / r.supply) * 100).toFixed(3) + '%' : '–'}</td><td class="r">${t.now.usdPerNative != null ? usd(ps.vol * t.now.usdPerNative) : fmt(ps.vol)}</td><td class="r">${bal != null ? fmt(bal) : '<span class="mut">–</span>'}</td><td class="r">${act}</td></tr>`;
       })
-      .join('')}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.4rem">Prices come from the deepest pools; changes are in dollars when a dollar-token pool exists, otherwise in ${esc(nat)}. * = since the token first appeared in a pool.</div>`
+      .join('')}</tbody></table>`;
+  const other = t.rows.filter(r => MK.other.has(r.key)), main = t.rows.filter(r => !MK.other.has(r.key));
+  setHtml(
+    'mk_tokens',
+    tbl(main) +
+      `<div class="k" style="margin:1.2rem 0 .3rem">Other tokens <span class="mut" style="text-transform:none;letter-spacing:0">MAGIC, MINT and every token created on this network</span></div>` +
+      (other.length ? tbl(other) : '<div class="mut" style="padding:.6rem 0">No other tokens are visible yet. MAGIC and MINT appear here once the operator feed reports them; new tokens appear automatically.</div>') +
+      `<div class="mut" style="font-size:.74rem;margin-top:.4rem">Prices come from the deepest pools; changes are in dollars when a dollar-token pool exists, otherwise in ${esc(nat)}. * = since the token first appeared in a pool.</div>`
   );
 }
 async function renderPortfolio(g: number, t: { rows: M.TokenRow[]; now: M.Snap; ws: M.WinSnap[] }) {

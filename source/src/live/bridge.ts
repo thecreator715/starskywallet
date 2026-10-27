@@ -83,7 +83,7 @@ const lAddr = (a: string) => { try { return ctx.showL(ctx.toClassic(a)); } catch
 /* ---------------------------------- operator link ---------------------------------- */
 async function loadOperator(url: string): Promise<any> {
   const base = url.replace(/\/$/, '');
-  let r: Response; try { r = await fetch(base + '/api/public/bridge', { cache: 'no-store' }); } catch { throw new Error('Cannot reach ' + base + '. Is the control panel running, and is the address right? (From another computer use an SSH tunnel or Tailscale.)'); }
+  let r: Response; try { r = await fetch(base + '/api/public/bridge', { cache: 'no-store', headers: { 'ngrok-skip-browser-warning': '1' } }); } catch { throw new Error('Cannot reach ' + base + '. Is the control panel running, and is the address right? (From another computer use an SSH tunnel or Tailscale.)'); }
   if (!r.ok) throw new Error('The operator answered ' + r.status);
   const txt = await r.text(); let j: any; try { j = JSON.parse(txt); } catch { throw new Error('That address answered with a web page, not the bridge feed. Use the control panel address (for example http://127.0.0.1:8090), and make sure the control panel is the latest version: update it and restart it, then try again.'); }
   if (!j.ok) throw new Error(j.error || 'The operator sent an error');
@@ -91,7 +91,10 @@ async function loadOperator(url: string): Promise<any> {
 }
 async function tryOperator() {
   const c = bcfg();
-  const cands = [c.opUrl, location.protocol.startsWith('http') ? location.origin : ''].filter(Boolean);
+  const sc = (window as any).STARSKY_CONFIG || {};
+  const t = ctx.netKey() === 'test' ? 'test' : 'main';
+  const tun = String((sc[t] || sc.main || {}).url || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
+  const cands = [c.opUrl, tun && /^https:/.test(tun) ? tun + '/panel/' + t : '', location.protocol.startsWith('http') ? location.origin : ''].filter(Boolean);
   for (const u of [...new Set(cands)]) {
     try { const j = await loadOperator(u); OP.snap = j; OP.err = ''; OP.at = Date.now(); OP.url = u; return; } catch (e: any) { OP.err = String(e?.message || e); }
   }
