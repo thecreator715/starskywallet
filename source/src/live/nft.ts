@@ -93,12 +93,22 @@ export const NF: any = {
 const nat = () => ctx.native();
 // Same storage node as the LUMA control panel (Kubo): Mainnet API 5001 / gateway 8081, Testnet API 5101 / gateway 8181.
 // The browser reaches the API through Starsky's own server (/kubo/main, /kubo/test), so no CORS setup is needed.
+// The site's own node address (STARSKY_CONFIG) also serves the node's IPFS gateway under /ipfs/ (see luma-gateway.js), so NFT pictures come from the LUMA node itself.
+const siteGw = (test: boolean): string => {
+  try {
+    const c: any = (window as any).STARSKY_CONFIG || {};
+    const u = String((c[test ? 'test' : 'main'] || {}).url || '');
+    return /^wss?:\/\//.test(u) ? u.replace(/^ws/, 'http').replace(/\/+$/, '') + '/ipfs/' : '';
+  } catch {
+    return '';
+  }
+};
 const PUBLIC_GW = ['https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://w3s.link/ipfs/'];
 const IP = () => {
   const t = ctx.netKey() === 'test';
   const local = /^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(location.hostname);
   // On a public site (GitHub Pages, a phone) 127.0.0.1 is the visitor's own device and https pages cannot load http gateways, so read through a public IPFS gateway.
-  const d = { api: location.origin + (t ? '/kubo/test' : '/kubo/main'), gw: local ? (t ? 'http://127.0.0.1:8181/ipfs/' : 'http://127.0.0.1:8081/ipfs/') : PUBLIC_GW[0] };
+  const d = { api: location.origin + (t ? '/kubo/test' : '/kubo/main'), gw: local ? (t ? 'http://127.0.0.1:8181/ipfs/' : 'http://127.0.0.1:8081/ipfs/') : siteGw(t) || PUBLIC_GW[0] };
   try {
     return { ...d, ...JSON.parse(localStorage.getItem('starsky.ipfs.' + ctx.netKey()) || '{}') };
   } catch {
