@@ -240,6 +240,14 @@ try {
     if (given) CFG.net = given; else if (LOCAL_ONLY) CFG.net = 'xrpl-main';
   }
   if (SITE.default && new URLSearchParams(location.search).get('net')) CFG.net = SITE.default;
+  // The site's node address changed since this browser last saved one: drop the stale saved address so the new default wins.
+  const C: any = CFG; C.siteUrls = C.siteUrls || {};
+  let moved = false;
+  for (const id of ['main', 'test']) {
+    const u = SITE[id] && SITE[id].url;
+    if (u && C.siteUrls[id] !== u) { delete C.urls[id]; C.siteUrls[id] = u; moved = true; }
+  }
+  if (moved) { if (SITE.default) CFG.net = SITE.default; store.set(CK, JSON.stringify(CFG)); }
 } catch {}
 
 export const saveCfg = () => store.set(CK, JSON.stringify(CFG));
