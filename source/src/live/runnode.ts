@@ -22,7 +22,7 @@ export function shell() {
   return `<div id="rn"><div class="card"><div class="k">Run a node for LUMA</div>
   <p class="mut" style="font-size:.85rem;margin:.4rem 0">Set up a supporting node: it syncs and relays the ledger and serves your own RPC and WebSocket, but does not validate. Request to join here, the network operator approves it in the control panel, and then you get one command to run.</p>
   <div class="row" style="gap:.5rem;flex-wrap:wrap"><select id="rn_net" onchange="window.rn.pick()"><option value="main">Mainnet</option><option value="test">Testnet</option></select>
-  <select id="rn_role"><option value="api">Supporting node (light)</option><option value="history">History node (full history, large disk)</option></select>
+  <select id="rn_role" disabled><option value="api">Supporting node (partial, light)</option></select>
   <input id="rn_name" class="grow" placeholder="Name your node (e.g. Sam's laptop)"></div>
   <div class="row" style="gap:.5rem;flex-wrap:wrap;margin-top:.5rem"><input id="rn_host" class="grow" placeholder="Your public address (optional, for peers to reach you)"><input id="rn_reward" class="grow" placeholder="Address for rewards (optional, L… / T…)"></div>
   <label style="display:flex;gap:.5rem;align-items:center;margin-top:.7rem;font-size:.85rem"><input type="checkbox" id="rn_close" checked style="width:auto"> Close any previously running LUMA nodes on that computer first</label>
@@ -49,8 +49,8 @@ async function request(b: HTMLButtonElement) {
   const name = $('rn_name').value.trim(); if (!name) return msg('Give your node a name first.', true);
   b.disabled = true;
   try {
-    const r = await api('/api/public/request', { label: name, role: $('rn_role').value, host: $('rn_host').value.trim(), pubkey: '', rewardAddress: $('rn_reward').value.trim() });
-    REQ = { id: r.id, net: which, name, role: $('rn_role').value, status: r.status };
+    const r = await api('/api/public/request', { label: name, role: 'api', host: $('rn_host').value.trim(), pubkey: '', rewardAddress: $('rn_reward').value.trim() });
+    REQ = { id: r.id, net: which, name, role: 'api', status: r.status };
     localStorage.setItem(KEY, JSON.stringify(REQ));
     msg(r.status === 'approved' ? 'Approved.' : 'Request sent. Waiting for the operator to approve it in the control panel.');
     render();
