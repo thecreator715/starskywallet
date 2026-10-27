@@ -1,0 +1,45 @@
+const { chromium } = require('playwright'); const fs = require('fs'); const { webcrypto: C } = require('crypto');
+const seed = JSON.parse(fs.readFileSync(__dirname + '/.run/seed-main.json')); const b64 = u => Buffer.from(u).toString('base64');
+(async () => {
+  const salt = C.getRandomValues(new Uint8Array(16)), iv = C.getRandomValues(new Uint8Array(12));
+  const km = await C.subtle.importKey('raw', Buffer.from('testpass123'), 'PBKDF2', false, ['deriveKey']);
+  const key = await C.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const data = { accounts: [{ id: 'a1', label: 'Trader', seed: seed.user.master_seed, address: seed.user.account_id, type: 'luma' }] };
+  const ct = new Uint8Array(await C.subtle.encrypt({ name: 'AES-GCM', iv }, key, Buffer.from(JSON.stringify(data))));
+  const vault = JSON.stringify({ v: 1, iter: 250000, salt: b64(salt), iv: b64(iv), ct: b64(ct) });
+  const cfg = fs.readFileSync(__dirname + '/nft.cjs', 'utf8').match(/starsky\.cfg', JSON\.stringify\((\{.*?\})\)\)/s);
+  const br = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
+  const pg = await br.newPage({ viewport: { width: 1500, height: 1000 } }); const errs = []; pg.on('console', m => { if (m.type()==='error'||m.type()==='warning') console.log('CONSOLE', m.text().slice(0,200)); }); pg.on('pageerror', e => errs.push(String(e).slice(0, 300)));
+  const stub = { ok: true, set: true, net: 'testnet', xrplUrl: '', xrplWs: 'ws://127.0.0.1:1', explorer: '', xrplVault: 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe', xrplIssuer: 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh', lumaVault: seed.trader.account_id, lumaxHex: '', rlusd: null, codes: { XRP: 'XRPZ', LUMA: 'LUMAX', USD: 'USD' }, assets: { XRP: { on: true, feeBps: 30, minFee: 0.1, min: 1, max: 1000, daily: 5000, approvalOver: 500 }, LUMA: { on: true, feeBps: 30, minFee: 1, min: 10, max: 5000, daily: 50000, approvalOver: 5000 }, USD: { on: false }, MINT: { on: true, feeBps: 10, minFee: 0.01, min: 1, max: 1000000, daily: 5000000, approvalOver: 100000 }, MAGIC: { on: true, feeBps: 10, minFee: 0.01, min: 1, max: 1000000, daily: 5000000, approvalOver: 100000 } }, tokenLanes: { MINT: { luma: 'MINT', xrplName: 'MINT', xrplIssuer: 'rwCsCz93A1svS6Yv8hFqUeKLdTLhBpvqGD' }, MAGIC: { luma: 'MAGIC', xrplName: 'MAGIC', xrplIssuer: 'rwCsCz93A1svS6Yv8hFqUeKLdTLhBpvqGD' } }, running: true, enabled: true, paused: false, heartbeatSec: 3, everySec: 15, alive: true, backed: true, used: {} };
+  await pg.route('**/api/public/bridge', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(stub) }));
+  await pg.addInitScript(([v, c]) => { if (!localStorage.getItem('starsky.vault')) { localStorage.setItem('starsky.vault', v); localStorage.setItem('starsky.cfg', c); } }, [vault, JSON.stringify({ net: 'main', urls: { main: 'ws://127.0.0.1:6006', test: 'ws://127.0.0.1:6106' } })]);
+  await pg.goto('http://127.0.0.1:4173/'); await pg.fill('#pw', 'testpass123'); await pg.press('#pw', 'Enter'); await pg.waitForTimeout(3000);
+  await pg.evaluate(() => window.goTab('bridge')); await pg.waitForTimeout(3000);
+  const txt = () => pg.evaluate(() => document.getElementById('br') && document.getElementById('br').innerText.slice(0, 1800));
+  console.log('--- initial\n' + await txt());
+  await pg.fill('#br_op', 'http://127.0.0.1:8090'); await pg.click('button:has-text("Load from operator")'); for (let i=0;i<6;i++){ await pg.waitForTimeout(3000); console.log('t+'+(i+1)*3, await pg.evaluate(() => (document.getElementById('br_chk')||{innerText:'?'}).innerText.replace(/\n/g,' ').slice(0,260))); }
+  console.log('cmsg:', await pg.evaluate(() => document.getElementById('br_cmsg') && document.getElementById('br_cmsg').innerText), await pg.evaluate(() => ['br_lv','br_xv','br_xu','br_xi'].map(i => document.getElementById(i).value).join(' | ')));console.log((await txt()).split('BRIDGE CHECKLIST')[1].slice(0,500));
+  await pg.screenshot({ path: __dirname + '/s_bridge.png', fullPage: true });
+  // own-wallet vault rejection
+  await pg.fill('#br_lv', seed.user.account_id); await pg.click('button:has-text("Save settings")'); await pg.waitForTimeout(400);
+  console.log('--- own vault msg:', await pg.evaluate(() => document.getElementById('br_cmsg').innerText));
+  await pg.fill('#br_amt', '25'); await pg.waitForTimeout(1500);
+  console.log('--- estimate:', await pg.evaluate(() => document.getElementById('br_est') ? document.getElementById('br_est').innerText : [...document.querySelectorAll('#br .brest')].map(e => e.innerText).join('|')));
+  await pg.evaluate(() => window.switchAcct('a1')); await pg.waitForTimeout(2500); await pg.evaluate(() => window.goTab('bridge')); await pg.waitForTimeout(3000);
+  await pg.fill('#br_lv', seed.trader.account_id); await pg.fill('#br_xu', 'wss://s.altnet.rippletest.net:51233'); await pg.click('button:has-text("Save settings")'); await pg.waitForTimeout(1500);
+  await pg.click('#br button:has-text("LUMA → LUMAX")'); await pg.waitForTimeout(500);
+  await pg.fill('#br_dst', 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh'); await pg.fill('#br_amt', '25'); await pg.waitForTimeout(1200);
+  console.log('--- lane estimate:', await pg.evaluate(() => [...document.querySelectorAll('#br .brest')].map(e => e.innerText.replace(/\n/g,' ')).join(' | ')));
+  pg.on('dialog', d => d.accept());
+  await pg.click('#br_go'); await pg.waitForTimeout(6000);
+  console.log('--- send msg:', await pg.evaluate(() => document.getElementById('br_msg').innerText));
+  const tx = await (await fetch('http://127.0.0.1:5006', { method: 'POST', body: JSON.stringify({ method: 'account_tx', params: [{ account: seed.user.account_id, limit: 3 }] }) })).json();
+  const t = (tx.result.transactions || []).map(x => x.tx || x.tx_json).find(x => x && x.TransactionType === 'Payment' && x.Destination === seed.trader.account_id);
+  console.log('--- ledger tx:', t ? JSON.stringify({ Destination: t.Destination, Amount: t.Amount, memo: t.Memos && Buffer.from(t.Memos[0].Memo.MemoData, 'hex').toString() }) : 'NOT FOUND');
+  await pg.click('#br button:has-text("MINT ⇄")').catch(async()=>{await pg.evaluate(()=>window.br.lane('mint'))}); await pg.waitForTimeout(800);
+  await pg.evaluate(() => window.br.dir('in')); await pg.waitForTimeout(500); await pg.fill('#br_amt', '100'); await pg.waitForTimeout(1500);
+  console.log('--- MINT lane:', await pg.evaluate(() => document.getElementById('br_claim').innerText.slice(0, 520).replace(/\n/g,' ')));
+  console.log('--- MINT est:', await pg.evaluate(() => [...document.querySelectorAll('#br .brest')].map(e => e.innerText.replace(/\n/g,' ')).join(' | ')));
+  console.log('errors', errs);
+  await br.close();
+})().catch(e => { console.log('CRASH', e.message); process.exit(1); });

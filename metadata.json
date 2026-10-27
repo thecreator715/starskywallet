@@ -1,0 +1,6 @@
+{
+  "name": "Starsky - LUMA & XRPL Wallet, DEX & Network Scan",
+  "description": "Non-custodial wallet for LUMA and XRPL networks with live WSS nodes, full on-ledger DEX swap, order book trading, AMM pools, and real-time network scanner.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

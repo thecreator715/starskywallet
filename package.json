@@ -1,0 +1,38 @@
+{
+  "name": "starsky",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port=3000 --host=0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit",
+    "start": "vite build && node serve.mjs",
+    "operator": "esbuild src/node-operator.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-node/operator.mjs && node dist-node/operator.mjs"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/qrcode": "^1.5.6",
+    "@vitejs/plugin-react": "^6.1.1",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "qrcode": "^1.5.4",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "vite": "^8.3.0",
+    "xrpl": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.27.0",
+    "source-map-explorer": "^2.5.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite-plugin-singlefile": "^2.3.4"
+  }
+}

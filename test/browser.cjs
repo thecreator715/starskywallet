@@ -1,0 +1,42 @@
+const { webkit, chromium } = (()=>{try{return require('playwright')}catch{return require('/usr/local/lib/node_modules/playwright')}})();
+const fs = require('fs'); const { webcrypto: C } = require('crypto');
+const seed = JSON.parse(fs.readFileSync(__dirname + '/.run/seed-main.json'));
+const b64 = u => Buffer.from(u).toString('base64');
+(async () => {
+  const salt = C.getRandomValues(new Uint8Array(16)), iv = C.getRandomValues(new Uint8Array(12));
+  const km = await C.subtle.importKey('raw', Buffer.from('testpass123'), 'PBKDF2', false, ['deriveKey']);
+  const key = await C.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const data = { accounts: [{ id: 'a1', label: 'Trader', seed: seed.user.master_seed, address: seed.user.account_id, type: 'luma' }], active: 'a1' };
+  const ct = new Uint8Array(await C.subtle.encrypt({ name: 'AES-GCM', iv }, key, Buffer.from(JSON.stringify(data))));
+  const vault = { v: 1, iter: 250000, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+  const br = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
+  const pg = await br.newPage({ viewport: { width: 1500, height: 1000 } });
+  const errs = []; pg.on('pageerror', e => errs.push(String(e))); pg.on('console', m => m.type() === 'error' && errs.push(m.text()));
+  await pg.addInitScript(([v]) => { if (!localStorage.getItem('starsky.wallet.vault.v2')) { localStorage.setItem('starsky.wallet.vault.v2', v); localStorage.setItem('starsky.cfg', JSON.stringify({ net: 'main', urls: { main: 'ws://127.0.0.1:6006' }, usd: {}, book: [], lockMin: 15, pairs: {}, pair: {} })); } }, [JSON.stringify(data)]);
+  await pg.goto('http://127.0.0.1:4173/');
+  await pg.waitForTimeout(3000);
+  await pg.evaluate(() => window.goTab('dex'));
+  await pg.waitForTimeout(9000);
+  await pg.screenshot({ path: __dirname + '/dex.png', fullPage: true });
+  console.log(JSON.stringify(await pg.evaluate(() => ({ head: document.getElementById('dx_head')?.innerText, tok: document.getElementById('dx_tok')?.innerText.slice(0, 300), rows: document.querySelectorAll('#dx_table tbody tr').length, candles: document.querySelectorAll('#dx_chart rect').length }))));
+  // interaction: market buy 100 LUMA -> USD, then limit sell, then cancel
+  const bal0 = await pg.evaluate(() => document.getElementById('dx_bal').innerText);
+  await pg.fill('#dx_amt', '100'); await pg.waitForTimeout(700);
+  console.log('quote', await pg.evaluate(() => [document.getElementById('dx_out').innerText, document.getElementById('dx_rate').innerText, document.getElementById('dx_imp').innerText]));
+  console.log('btn', await pg.evaluate(() => { const b=document.getElementById('dx_go'); return [b.innerText,b.disabled,JSON.stringify({a:1})]; }).catch(e=>String(e)));
+  await pg.click('#dx_go'); await pg.waitForTimeout(6000);
+  console.log('after swap', await pg.evaluate(() => [document.getElementById('dx_msg').innerText, document.getElementById('dx_bal').innerText]), 'was', bal0);
+  await pg.evaluate(() => window.dx.setType('limit')); await pg.waitForTimeout(300);
+  await pg.evaluate(() => window.dx.setSide('sell'));
+  await pg.fill('#dx_px', '5'); await pg.fill('#dx_amt', '10'); await pg.waitForTimeout(500);
+  await pg.click('#dx_go'); await pg.waitForTimeout(6000);
+  console.log('limit', await pg.evaluate(() => document.getElementById('dx_msg').innerText));
+  await pg.evaluate(() => window.dx.setTab('orders')); await pg.waitForTimeout(500);
+  console.log('orders', await pg.evaluate(() => document.getElementById('dx_table').innerText.slice(0, 200)));
+  await pg.evaluate(() => { const b = document.querySelector('#dx_table .dng'); b && b.click(); }); await pg.waitForTimeout(5000);
+  console.log('orders after cancel', await pg.evaluate(() => document.getElementById('dx_table').innerText.slice(0, 120)));
+  for (const t of ['pools', 'holders', 'book']) { await pg.evaluate(t => window.dx.setTab(t), t); await pg.waitForTimeout(400); console.log(t, await pg.evaluate(() => document.getElementById('dx_table').innerText.slice(0, 150).replace(/\n/g, ' '))); }
+  await pg.screenshot({ path: __dirname + '/dex2.png', fullPage: true });
+  console.log('errors', errs.slice(0, 5));
+  await br.close();
+})();
