@@ -239,7 +239,8 @@ function renderTokens(t: { rows: M.TokenRow[]; now: M.Snap; ws: M.WinSnap[] }, r
         return `<tr><td><b>${esc(r.name)}</b><div class="mut mono" style="font-size:.7rem">${isNative(r.a) ? 'native coin' : esc(short(ctx.show(r.issuer), 8, 5))}</div></td><td class="r">${r.usdPx != null ? usd(r.usdPx) : r.nativePx != null ? fmt(r.nativePx) + ' ' + nat : '–'}</td>${K.map(k => `<td class="r">${pctHtml(r.chg[k])}${r.partial[k] ? '<small class="mut" title="Since listing">*</small>' : ''}</td>`).join('')}<td class="r">${r.supply != null ? fmt(r.supply) : '–'}</td><td class="r">${r.mcapUsd != null ? usd(r.mcapUsd) : r.mcapNative != null ? fmt(r.mcapNative) + ' ' + nat : '–'}</td><td class="r">${fmt(ps.inPool)}</td><td class="r">${r.supply ? ((ps.inPool / r.supply) * 100).toFixed(3) + '%' : '–'}</td><td class="r">${t.now.usdPerNative != null ? usd(ps.vol * t.now.usdPerNative) : fmt(ps.vol)}</td><td class="r">${bal != null ? fmt(bal) : '<span class="mut">–</span>'}</td><td class="r">${act}</td></tr>`;
       })
       .join('')}</tbody></table>`;
-  const other = t.rows.filter(r => MK.other.has(r.key)), main = t.rows.filter(r => !MK.other.has(r.key));
+  const vis = t.rows.filter(r => isNative(r.a) || !M.isOldUsd(r.a));
+  const other = vis.filter(r => MK.other.has(r.key)), main = vis.filter(r => !MK.other.has(r.key));
   setHtml(
     'mk_tokens',
     tbl(main) +
