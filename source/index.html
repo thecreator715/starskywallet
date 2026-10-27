@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07030f" />
+    <title>Starsky - LUMA & XRPL Wallet, DEX & Network Scan</title>
+    <meta name="description" content="Non-custodial wallet for LUMA and XRPL networks with live WSS nodes, full on-ledger DEX swap, order book trading, AMM pools, and real-time network scanner." />
+    <meta property="og:title" content="Starsky - LUMA & XRPL Wallet, DEX & Network Scan" />
+    <meta property="og:description" content="Non-custodial wallet for LUMA and XRPL networks with live WSS nodes, full on-ledger DEX swap, order book trading, AMM pools, and real-time network scanner." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <!-- Site config: the LUMA nodes every visitor connects to. Edit here, commit, and the site redeploys. -->
+    <script>
+      window.STARSKY_CONFIG = {
+        default: 'main',
+        main: { url: 'wss://ws.lumanetwork.org', panel: 'https://api.lumanetwork.org' },
+        test: { url: 'wss://ws-test.lumanetwork.org', panel: 'https://api-test.lumanetwork.org' },
+      };
+    </script>
+  </head>
+  <body>
+    <canvas id="sky"></canvas>
+    <div class="aur"></div>
+    <div id="app"></div>
+    <div id="toast"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
