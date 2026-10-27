@@ -99,8 +99,11 @@ export async function marketsLoad() {
     const lineAssets: Asset[] = (MK.bal ? MK.bal.lines : []).map((l: any) => ({ c: l.currency, i: l.account }));
     const regList = await TK.registry().catch(() => [] as TK.TokenMeta[]);
     const bl: Asset[] = await import('./bridge.ts').then(m => m.laneAssets()).catch(() => [] as Asset[]);
-    MK.other = new Set<string>([...regList.map(x => akey(x.a)), ...bl.map(x => akey(x))]);
-    const t = await M.tokenTable([...lineAssets, ...regList.map(x => x.a), ...bl]);
+    const found: Asset[] = await M.discoverTokens().catch(() => [] as Asset[]);
+    const t = await M.tokenTable([...lineAssets, ...regList.map(x => x.a), ...bl, ...found]);
+    const pooled = new Set<string>();
+    for (const p of t.now.pools) { pooled.add(akey(p.a)); pooled.add(akey(p.b)); }
+    MK.other = new Set<string>([...regList.map(x => akey(x.a)), ...bl.map(x => akey(x)), ...found.map(x => akey(x)).filter(k => !pooled.has(k))]);
     if (!alive(g, 'mk')) return;
     MK.tokens = t;
     const refs = await M.poolRefs();

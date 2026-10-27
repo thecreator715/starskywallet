@@ -18,6 +18,31 @@ export interface PoolState extends PoolRef {
 const sameAsset = (x: Asset, y: Asset) => akey(x) === akey(y);
 
 /** every AMM pool on the ledger */
+/** every token that exists on the ledger (found from the trust lines), with or without a pool: MAGIC, MINT and anything created later */
+export async function discoverTokens(): Promise<Asset[]> {
+  return cached('discover', 60000, async () => {
+    const seen = new Map<string, Asset>();
+    let marker: any;
+    for (let p = 0; p < 30; p++) {
+      const r: any = await tryReq('ledger_data', { type: 'state', ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) });
+      if (!r) break;
+      for (const o of r.state || []) {
+        if (o.LedgerEntryType !== 'RippleState') continue;
+        const lo = o.LowLimit || {}, hi = o.HighLimit || {}, cur = (o.Balance || {}).currency;
+        if (!cur || !lo.issuer || !hi.issuer) continue;
+        const bal = Number((o.Balance || {}).value || 0);
+        const loZero = Number(lo.value) === 0, hiZero = Number(hi.value) === 0;
+        const iss = bal > 0 ? hi.issuer : bal < 0 ? lo.issuer : loZero && !hiZero ? lo.issuer : hiZero && !loZero ? hi.issuer : '';
+        if (!iss || /^03/.test(cur)) continue; // 03… are AMM liquidity tokens
+        const a = { c: cur, i: iss };
+        seen.set(akey(a), a);
+      }
+      marker = r.marker;
+      if (!marker) break;
+    }
+    return [...seen.values()];
+  });
+}
 export async function poolRefs(): Promise<PoolRef[]> {
   return cached('poolrefs', 30000, async () => {
     const out: PoolRef[] = [];
