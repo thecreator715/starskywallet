@@ -93,9 +93,12 @@ export const NF: any = {
 const nat = () => ctx.native();
 // Same storage node as the LUMA control panel (Kubo): Mainnet API 5001 / gateway 8081, Testnet API 5101 / gateway 8181.
 // The browser reaches the API through Starsky's own server (/kubo/main, /kubo/test), so no CORS setup is needed.
+const PUBLIC_GW = ['https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://w3s.link/ipfs/'];
 const IP = () => {
   const t = ctx.netKey() === 'test';
-  const d = { api: location.origin + (t ? '/kubo/test' : '/kubo/main'), gw: t ? 'http://127.0.0.1:8181/ipfs/' : 'http://127.0.0.1:8081/ipfs/' };
+  const local = /^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(location.hostname);
+  // On a public site (GitHub Pages, a phone) 127.0.0.1 is the visitor's own device and https pages cannot load http gateways, so read through a public IPFS gateway.
+  const d = { api: location.origin + (t ? '/kubo/test' : '/kubo/main'), gw: local ? (t ? 'http://127.0.0.1:8181/ipfs/' : 'http://127.0.0.1:8081/ipfs/') : PUBLIC_GW[0] };
   try {
     return { ...d, ...JSON.parse(localStorage.getItem('starsky.ipfs.' + ctx.netKey()) || '{}') };
   } catch {
@@ -124,9 +127,9 @@ const hexToStr = (h: string) => {
   }
 };
 const strToHex = (s: string) => Array.from(new TextEncoder().encode(s)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-const resolve = (u: string) => {
+const resolve = (u: string, gw?: string) => {
   if (!u) return '';
-  if (u.startsWith('ipfs://')) return IP().gw.replace(/\/?$/, '/') + u.slice(7).replace(/^ipfs\//, '');
+  if (u.startsWith('ipfs://')) return (gw || IP().gw).replace(/\/?$/, '/') + u.slice(7).replace(/^ipfs\//, '');
   return u;
 };
 const acctOf = (hex40: string) => xrpl.encodeAccountID(new Uint8Array((hex40.match(/../g) || []).map(x => parseInt(x, 16))) as any);
@@ -379,7 +382,15 @@ async function metaFill(list: Item[]) {
   if (todo.length) paint();
 }
 async function loadMeta(it: Item): Promise<Meta | null> {
-  const u = resolve(it.uri);
+  const gws = it.uri.startsWith('ipfs://') ? [IP().gw, ...PUBLIC_GW.filter(g => g !== IP().gw)] : [''];
+  for (const gw of gws) {
+    const m = await loadMetaVia(it, gw);
+    if (m) return m;
+  }
+  return { name: '', desc: '', image: '', attrs: [], coll: '', mime: '' };
+}
+async function loadMetaVia(it: Item, gw: string): Promise<Meta | null> {
+  const u = resolve(it.uri, gw);
   const base: Meta = { name: '', desc: '', image: '', attrs: [], coll: '', mime: '' };
   if (!u) return base;
   try {
@@ -391,9 +402,9 @@ async function loadMeta(it: Item): Promise<Meta | null> {
     if (ct.startsWith('image/') || ct.startsWith('video/') || ct.startsWith('audio/')) return { ...base, image: u, mime: ct };
     const j: any = await r.json();
     const attrs = Array.isArray(j.attributes) ? j.attributes.map((a: any) => ({ k: String(a.trait_type ?? a.key ?? ''), v: String(a.value ?? '') })) : [];
-    return { name: String(j.name || ''), desc: String(j.description || ''), image: resolve(String(j.image || j.animation_url || '')), attrs, coll: String((j.collection && (j.collection.name || j.collection)) || ''), mime: String(j.mime || ''), cdesc: String((j.collection && j.collection.description) || ''), cover: !!(j.collection && j.collection.cover), mint: j.collection && j.collection.mint, total: Number((j.collection && j.collection.total) || 0) };
+    return { name: String(j.name || ''), desc: String(j.description || ''), image: resolve(String(j.image || j.animation_url || ''), gw), attrs, coll: String((j.collection && (j.collection.name || j.collection)) || ''), mime: String(j.mime || ''), cdesc: String((j.collection && j.collection.description) || ''), cover: !!(j.collection && j.collection.cover), mint: j.collection && j.collection.mint, total: Number((j.collection && j.collection.total) || 0) };
   } catch {
-    return base;
+    return null;
   }
 }
 const nameOf = (i: Item) => (NF.meta.get(i.id) || ({} as Meta)).name || `NFT #${i.serial}`;
