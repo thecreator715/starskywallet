@@ -244,6 +244,7 @@ export async function tokenTable(extra: Asset[] = []): Promise<{ rows: TokenRow[
     keys.add(akey(p.b));
   }
   for (const a of extra) keys.add(akey(a));
+  for (const a of await discoverTokens().catch(() => [] as Asset[])) keys.add(akey(a)); // every token on the ledger, pooled or not
   const useUsd = now.usdPerNative != null;
   const mode = (s: Snap, k: string) => (useUsd ? (s.usdPerNative != null ? usdPx(s, k) : null) : (s.px.get(k) ?? null));
   const rows = await pool([...keys], 6, async k => {
