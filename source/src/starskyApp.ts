@@ -6,6 +6,7 @@ import { nameToCur, akey } from './live/util.ts';
 import * as M from './live/market.ts';
 import * as Dex from './live/dex.ts';
 import * as Pages from './live/pages.ts';
+import * as RunNode from './live/runnode.ts';
 import { lpApi } from './live/lp.ts';
 import * as Supply from './live/supply.ts';
 import * as Bot from './live/bot.ts';
@@ -289,7 +290,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -1129,6 +1130,7 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['pools', 'Liquidity Pools'],
   ['bridge', 'Bridge'],
   ['network', 'Network'],
+  ['runnode', 'Run a Node'],
   ['supply', 'LUMA Supply'],
   ['burn', 'Burns'],
   ['bot', 'Trading Bot'],
@@ -1604,6 +1606,10 @@ export function renderApp() {
       body = Hold.shell();
       break;
 
+    case 'runnode':
+      body = RunNode.shell();
+      break;
+
     case 'more':
       body = `
         <div class="grid">
@@ -1714,6 +1720,7 @@ export function renderApp() {
 
         <div class="nav-section">Explorer</div>
         ${renderNavItem('network', 'Network')}
+        ${renderNavItem('runnode', 'Run a Node')}
         ${renderNavItem('supply', 'LUMA Supply')}
         ${renderNavItem('burn', 'Burns')}
 
@@ -1812,6 +1819,8 @@ export function renderApp() {
     Mg.paintNow();
     Bn.load();
   }
+  if (st.tab === 'runnode') RunNode.mount();
+  else RunNode.unmount();
   if (st.tab === 'markets') Pages.marketsMount();
   else Pages.marketsUnmount();
   if (st.tab === 'bridge') Pages.bridgeMount();
