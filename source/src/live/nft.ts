@@ -94,6 +94,15 @@ const nat = () => ctx.native();
 // Same storage node as the LUMA control panel (Kubo): Mainnet API 5001 / gateway 8081, Testnet API 5101 / gateway 8181.
 // The browser reaches the API through Starsky's own server (/kubo/main, /kubo/test), so no CORS setup is needed.
 // The site's own node address (STARSKY_CONFIG) also serves the node's IPFS gateway under /ipfs/ (see luma-gateway.js), so NFT pictures come from the LUMA node itself.
+const siteBase = (test: boolean): string => {
+  try {
+    const c: any = (window as any).STARSKY_CONFIG || {};
+    const u = String((c[test ? 'test' : 'main'] || {}).url || '');
+    return /^wss?:\/\//.test(u) ? u.replace(/^ws/, 'http').replace(/\/+$/, '') : '';
+  } catch {
+    return '';
+  }
+};
 const siteGw = (test: boolean): string => {
   try {
     const c: any = (window as any).STARSKY_CONFIG || {};
@@ -108,7 +117,7 @@ const IP = () => {
   const t = ctx.netKey() === 'test';
   const local = /^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(location.hostname);
   // On a public site (GitHub Pages, a phone) 127.0.0.1 is the visitor's own device and https pages cannot load http gateways, so read through a public IPFS gateway.
-  const d = { api: location.origin + (t ? '/kubo/test' : '/kubo/main'), gw: local ? (t ? 'http://127.0.0.1:8181/ipfs/' : 'http://127.0.0.1:8081/ipfs/') : siteGw(t) || PUBLIC_GW[0] };
+  const d = { api: (local ? location.origin : siteBase(t) || location.origin) + (t ? '/kubo/test' : '/kubo/main'), gw: local ? (t ? 'http://127.0.0.1:8181/ipfs/' : 'http://127.0.0.1:8081/ipfs/') : siteGw(t) || PUBLIC_GW[0] };
   try {
     return { ...d, ...JSON.parse(localStorage.getItem('starsky.ipfs.' + ctx.netKey()) || '{}') };
   } catch {
@@ -406,7 +415,7 @@ async function loadMetaVia(it: Item, gw: string): Promise<Meta | null> {
   try {
     const c = new AbortController();
     const t = setTimeout(() => c.abort(), 5000);
-    const r = await fetch(u, { signal: c.signal });
+    const r = await fetch(u, { signal: c.signal, headers: /ngrok/.test(u) ? { 'ngrok-skip-browser-warning': '1' } : {} });
     clearTimeout(t);
     const ct = r.headers.get('content-type') || '';
     if (ct.startsWith('image/') || ct.startsWith('video/') || ct.startsWith('audio/')) return { ...base, image: u, mime: ct };
@@ -1039,7 +1048,7 @@ const nsApi: any = {
       const fd = new FormData();
       fd.append('file', blob, name);
       let r: Response;
-      try { r = await fetch(`${api}/api/v0/add?pin=true&cid-version=1&raw-leaves=true`, { method: 'POST', body: fd }); }
+      try { r = await fetch(`${api}/api/v0/add?pin=true&cid-version=1&raw-leaves=true`, { method: 'POST', body: fd, headers: { 'ngrok-skip-browser-warning': '1' } }); }
       catch { throw new Error(`Cannot reach the NFT storage node (${api}).\nOpen the LUMA control panel → NFT storage → Start (Docker must be running), then press Mint again: nothing is lost, finished items are skipped.`); }
       if (!r.ok) throw new Error('IPFS add failed: HTTP ' + r.status);
       const lines = (await r.text()).trim().split('\n');
