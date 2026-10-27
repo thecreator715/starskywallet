@@ -19,7 +19,7 @@ export async function mount() {
 }
 function assetOf(k: string): Asset { if (k === 'native') return NATIVE; const r = H.tokens.find((t: M.TokenRow) => t.key === k); return r ? r.a : { c: k.split('|')[0], i: k.split('|')[1] || '' }; }
 async function open(k: string) {
-  H.sel = k; H.data = null; H.page = 0; H.hq = ''; H.err = '';
+  H.sel = k; H.view = ''; H.det = null; H.data = null; H.page = 0; H.hq = ''; H.err = '';
   paint();
   const a = assetOf(k);
   H.busy = true;
@@ -50,6 +50,49 @@ async function open(k: string) {
   H.busy = false;
   paint();
 }
+async function loadDet(a: string) {
+  H.view = a; H.det = { loading: true }; paint();
+  const D: any = { addr: a };
+  try {
+    const [ai, al, nf, tx]: any[] = await Promise.all([
+      req('account_info', { account: a, ledger_index: 'validated' }).catch(() => null),
+      req('account_lines', { account: a, ledger_index: 'validated', limit: 100 }).catch(() => null),
+      req('account_nfts', { account: a, ledger_index: 'validated', limit: 100 }).catch(() => null),
+      req('account_tx', { account: a, limit: 25 }).catch(() => null),
+    ]);
+    D.info = ai && ai.account_data; D.lines = (al && al.lines) || []; D.nfts = (nf && nf.account_nfts) || []; D.nftMore = !!(nf && nf.marker);
+    D.txs = ((tx && tx.transactions) || []).map((x: any) => { const t = x.tx_json || x.tx || {}; return { hash: t.hash || x.hash || '', type: t.TransactionType || '', from: t.Account || '', to: t.Destination || '', amt: t.Amount, res: (x.meta && x.meta.TransactionResult) || '', ledger: x.ledger_index || t.ledger_index || '' }; });
+    try { const pools = await M.poolRefs(); D.pool = pools.find((p: any) => p.account === a) || null; } catch { D.pool = null; }
+  } catch (e: any) { D.err = String(e?.message || e); }
+  if (H.view === a) { H.det = D; paint(); }
+}
+function detail(): string {
+  const D = H.det || {}, a = H.view, d = H.data;
+  const back = `<button class="sm ghost" onclick="window.hd.back()">‹ Back to holders</button>`;
+  if (D.loading) return `${back}<p class="mut" style="margin-top:.8rem">Reading ${esc(addr(a))}…</p>`;
+  const row = d && d.rows.find((x: any) => x.addr === a), I = D.info, tok = assetOf(H.sel);
+  const roles: string[] = [];
+  if (D.pool) roles.push('AMM pool'); if (row && row.label) roles.push('Your wallet: ' + row.label);
+  const amtS = (v: any) => v == null ? '' : typeof v === 'string' ? fmt(Number(v) / 1e6, 6) + ' ' + ctx.native() : fmt(Number(v.value), 6) + ' ' + String(v.currency).slice(0, 12);
+  const kv = (k: string, v: string) => `<div class="tile kvt"><div class="k">${k}</div><div class="big2" style="font-size:1.05rem;word-break:break-all">${v}</div></div>`;
+  return `${back}
+  <div class="mono" style="word-break:break-all;margin:.7rem 0;font-size:.95rem">${esc(addr(a))} ${roles.map(r => `<span class="chip">${esc(r)}</span>`).join(' ')}</div>
+  <div class="pgrid nwk" style="margin:.4rem 0">${[
+    ['Balance', I ? fmt(Number(I.Balance) / 1e6, 6) + ' ' + ctx.native() : 'not on ledger'],
+    ['Holds of ' + (isNative(tok) ? ctx.native() : esc(tok.c.slice(0, 10))), row ? fmt(row.amt, 6) : '–'],
+    ['Share of supply held', row ? row.pct.toFixed(4) + '%' : '–'],
+    ['Sequence', I ? String(I.Sequence) : '–'],
+    ['Owned objects', I ? String(I.OwnerCount || 0) : '–'],
+  ].map(([k, v]) => kv(k, v)).join('')}</div>
+  ${I ? `<div class="mut" style="font-size:.8rem;margin:.3rem 0">Classic address <span class="mono">${esc(a)}</span>${I.Domain ? ' · domain set' : ''}${I.RegularKey ? ' · has a regular key' : ''}${I.Flags ? ' · flags ' + I.Flags : ''}</div>` : ''}
+  ${D.pool ? `<div class="card" style="margin:.6rem 0"><div class="k">AMM pool</div><div class="mut" style="font-size:.85rem">This account holds the reserves of a liquidity pool.</div></div>` : ''}
+  <div class="k" style="margin-top:1rem">Tokens held (${D.lines.length}${D.lines.length >= 100 ? '+' : ''})</div>
+  ${D.lines.length ? `<table class="dxt"><thead><tr><th>Token</th><th>Issuer</th><th class="r">Balance</th><th class="r">Limit</th></tr></thead><tbody>${D.lines.map((l: any) => `<tr><td>${esc(String(l.currency).length === 40 ? String(l.currency).slice(0, 6) + '…' : l.currency)}</td><td class="mono mut" style="font-size:.74rem">${esc(short(addr(l.account), 6, 4))}</td><td class="r">${fmt(Number(l.balance), 6)}</td><td class="r mut">${fmt(Number(l.limit), 0)}</td></tr>`).join('')}</tbody></table>` : '<div class="mut">No trust lines.</div>'}
+  <div class="k" style="margin-top:1rem">NFTs (${D.nfts.length}${D.nftMore ? '+' : ''})</div>
+  ${D.nfts.length ? `<div class="mono mut" style="font-size:.74rem;max-height:7rem;overflow:auto">${D.nfts.slice(0, 40).map((n: any) => `#${esc(String(n.nft_serial ?? ''))} · taxon ${esc(String(n.NFTokenTaxon ?? ''))}`).join('<br>')}</div>` : '<div class="mut">None.</div>'}
+  <div class="k" style="margin-top:1rem">Recent transactions</div>
+  ${D.txs.length ? `<table class="dxt"><thead><tr><th>Type</th><th>Counterparty</th><th class="r">Amount</th><th>Result</th><th class="r">Ledger</th></tr></thead><tbody>${D.txs.map((t: any) => `<tr><td>${esc(t.type)}</td><td class="mono mut" style="font-size:.74rem">${esc(short(addr(t.from === a ? (t.to || t.from) : t.from), 6, 4))}</td><td class="r">${esc(amtS(t.amt))}</td><td class="${t.res === 'tesSUCCESS' ? 'ok' : 'crit'}">${esc(t.res)}</td><td class="r mut">${esc(String(t.ledger))}</td></tr>`).join('')}</tbody></table>` : '<div class="mut">No transactions.</div>'}`;
+}
 function paint() {
   const r = $('hd');
   if (!r) return;
@@ -73,12 +116,12 @@ function paint() {
     ${d.truncated ? '<div class="crit">Very large token: only the first holders were read.</div>' : ''}
     <div class="mut" style="font-size:.78rem;margin-bottom:.4rem">${isNative(a) ? 'Native coin: every funded account.' : `Issuer <span class="mono">${esc(addr(a.i))}</span>`}</div>
     <div class="row" style="gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap"><input placeholder="Search address or name" value="${esc(H.hq)}" oninput="window.hd.hsearch(this.value)" style="width:20rem"><button class="sm ghost" onclick="window.hd.refresh()">Refresh</button><button class="sm ghost" onclick="window.hd.csv()">Export CSV</button></div>
-    <div style="overflow:auto"><table class="dxt"><thead><tr><th>#</th>${th('addr', 'Wallet')}${th('label', 'Name')}${th('amount', 'Amount', 'r')}<th class="r">Share</th><th style="width:12rem"></th></tr></thead><tbody>${sl.map((x: any, i: number) => `<tr><td class="mut">${H.page * per + i + 1}</td><td class="mono" style="word-break:break-all">${esc(addr(x.addr))} <a href="#" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(addr(x.addr))}');return false" class="mut">copy</a></td><td>${x.label ? esc(x.label) + ' <span class="chip">yours</span>' : x.tag ? `<span class="chip">${esc(x.tag)}</span>` : '<span class="mut">–</span>'}</td><td class="r">${esc(fmt(x.amt, 6))}</td><td class="r">${x.pct.toFixed(2)}%</td><td><div style="height:6px;border-radius:3px;background:rgba(255,255,255,.07)"><i style="display:block;height:100%;width:${Math.min(100, x.pct).toFixed(1)}%;background:#00ff8c;border-radius:3px"></i></div></td></tr>`).join('') || '<tr><td colspan="6" class="mut" style="padding:1rem">No holders.</td></tr>'}</tbody></table></div>
+    <div style="overflow:auto"><table class="dxt"><thead><tr><th>#</th>${th('addr', 'Wallet')}${th('label', 'Name')}${th('amount', 'Amount', 'r')}<th class="r">Share</th><th style="width:12rem"></th></tr></thead><tbody>${sl.map((x: any, i: number) => `<tr style="cursor:pointer" onclick="window.hd.view('${esc(x.addr)}')"><td class="mut">${H.page * per + i + 1}</td><td class="mono" style="word-break:break-all">${esc(addr(x.addr))} <a href="#" onclick="event.stopPropagation();navigator.clipboard&&navigator.clipboard.writeText('${esc(addr(x.addr))}');return false" class="mut">copy</a></td><td>${x.label ? esc(x.label) + ' <span class="chip">yours</span>' : x.tag ? `<span class="chip">${esc(x.tag)}</span>` : '<span class="mut">–</span>'}</td><td class="r">${esc(fmt(x.amt, 6))}</td><td class="r">${x.pct.toFixed(2)}%</td><td><div style="height:6px;border-radius:3px;background:rgba(255,255,255,.07)"><i style="display:block;height:100%;width:${Math.min(100, x.pct).toFixed(1)}%;background:#00ff8c;border-radius:3px"></i></div></td></tr>`).join('') || '<tr><td colspan="6" class="mut" style="padding:1rem">No holders.</td></tr>'}</tbody></table></div>
     ${pages > 1 ? `<div class="nmpg"><button class="sm ghost" ${H.page === 0 ? 'disabled' : ''} onclick="window.hd.pg(${H.page - 1})">‹ Prev</button><span class="mut">Page ${H.page + 1} of ${pages}</span><button class="sm ghost" ${H.page >= pages - 1 ? 'disabled' : ''} onclick="window.hd.pg(${H.page + 1})">Next ›</button></div>` : ''}`;
   }
   r.innerHTML = `<div class="card"><div class="row" style="gap:.6rem;flex-wrap:wrap;justify-content:space-between"><div class="k" style="margin:0">Token holders</div><input placeholder="Search tokens by name or issuer" value="${esc(H.q)}" oninput="window.hd.search(this.value)" style="width:20rem"></div>
     <div style="margin:.5rem 0">${chip('native', ctx.native(), ' <small class="mut">native</small>')}${toks.map((t: M.TokenRow) => chip(t.key, t.name, t.usdPx != null ? ` <small class="mut">${esc(usd(t.usdPx))}</small>` : '')).join('')}</div></div>
-    <div class="card" style="margin-top:1rem">${body}</div>`;
+    <div class="card" style="margin-top:1rem">${H.view ? detail() : body}</div>`;
   const e = document.querySelector('#hd input[oninput*="hsearch"]') as HTMLInputElement;
   void e; void akey; void short;
 }
@@ -89,6 +132,8 @@ export const hdApi = {
   sort(k: string) { if (H.sort === k) H.dir = -H.dir; else { H.sort = k; H.dir = k === 'amount' ? -1 : 1; } paint(); },
   pg(p: number) { H.page = Math.max(0, p); paint(); },
   refresh() { open(H.sel); },
+  view(a: string) { loadDet(a); },
+  back() { H.view = ''; H.det = null; paint(); },
   csv() {
     const d = H.data; if (!d) return;
     const csv = 'rank,wallet,name,amount,share_pct\n' + d.rows.slice().sort((a: any, b: any) => b.amt - a.amt).map((x: any, i: number) => `${i + 1},${addr(x.addr)},"${(x.label || x.tag).replace(/"/g, '')}",${x.amt},${x.pct.toFixed(4)}`).join('\n');

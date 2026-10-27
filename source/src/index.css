@@ -1261,3 +1261,8 @@ table.nmtab thead th{position:sticky;top:0;background:var(--card,#0d1117);z-inde
 table.nmtab th.srt:hover{opacity:1;color:var(--ok)}
 table.nmtab tbody tr.clk:hover{background:rgba(0,255,140,.05)}
 .nmtb select,.nmtb input{padding:.3rem .5rem}
+
+#hd .pgrid.nwk{grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:.6rem}
+#hd .pgrid.nwk .big2{font-size:clamp(.95rem,2vw,1.6rem);overflow-wrap:anywhere}
+#hd .pgrid.nwk .tile{padding:.7rem .8rem}
+@media(max-width:700px){#hd .pgrid.nwk{grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:.3rem}#hd .pgrid.nwk .k{font-size:.55rem;letter-spacing:.04em}#hd .pgrid.nwk .big2{font-size:.8rem}#hd .pgrid.nwk .tile{padding:.45rem}}
