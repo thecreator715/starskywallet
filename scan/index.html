@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>LUMA Scan — live network explorer</title><meta name="theme-color" content="#000">
+<style>
+:root{--acc:#00ff8c;--acc2:#00b86b;--vio:#7a5cff;--warn:#ffb020;--crit:#ff453a;--fg:#f5f5f7;--mut:#8e8e93;--line:rgba(255,255,255,.1);--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}html,body{height:100%;background:#000;color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Inter",system-ui,sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased;touch-action:manipulation}
+#bg{position:fixed;inset:0;z-index:0}
+#app{position:fixed;inset:0;display:flex;flex-direction:column;z-index:1}
+header{display:flex;align-items:center;gap:.8rem;padding:calc(env(safe-area-inset-top) + .7rem) 1rem .6rem;background:linear-gradient(180deg,rgba(0,0,0,.8),rgba(0,0,0,0));backdrop-filter:blur(14px)}
+.mk{width:1.6rem;height:1.6rem;border-radius:.5rem;background:linear-gradient(135deg,#00b35f,#00ff8c 60%,#9dffd0);box-shadow:0 0 22px rgba(0,255,140,.5)}
+.brand{font-weight:700;letter-spacing:.2em;font-size:.9rem}.brand small{display:block;letter-spacing:.14em;color:var(--mut);font-size:.6rem;font-weight:500}
+.grow{flex:1}.pill{display:flex;align-items:center;gap:.45rem;padding:.4rem .8rem;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);font-size:.78rem;color:#cfcfd4;cursor:pointer}
+.dot{width:.55rem;height:.55rem;border-radius:50%;background:#555}.dot.ok{background:var(--acc);box-shadow:0 0 10px var(--acc);animation:pl 1.6s infinite}.dot.bad{background:var(--crit)}@keyframes pl{50%{opacity:.35}}
+#pager{flex:1;overflow:hidden;position:relative}
+#track{display:flex;height:100%;width:100%;transition:transform .5s cubic-bezier(.2,.8,.2,1);will-change:transform}
+.page{flex:0 0 100%;height:100%;overflow-y:auto;overflow-x:hidden;padding:.4rem 1rem 7rem;-webkit-overflow-scrolling:touch}
+.page::-webkit-scrollbar{display:none}
+dock{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + .9rem);transform:translateX(-50%);display:flex;gap:.2rem;padding:.4rem;border-radius:1.6rem;background:rgba(18,18,20,.72);border:1px solid var(--line);backdrop-filter:blur(26px) saturate(180%);z-index:5;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+dock button{border:0;background:transparent;color:#a1a1a6;padding:.55rem .72rem;border-radius:1.2rem;font:600 .78rem inherit;display:flex;flex-direction:column;align-items:center;gap:.2rem;cursor:pointer;transition:all .3s}
+dock button svg{width:1.3rem;height:1.3rem;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+dock button.on{background:linear-gradient(135deg,rgba(0,255,140,.25),rgba(125,255,196,.12));color:var(--acc);box-shadow:inset 0 0 0 1px rgba(0,255,140,.35)}
+h2{font-size:1.9rem;letter-spacing:-.03em;margin:.4rem 0 .9rem}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:.8rem}
+.t{grid-column:span 12;border-radius:1.5rem;padding:1.1rem 1.2rem;border:1px solid var(--line);background:linear-gradient(150deg,rgba(0,255,140,.08),rgba(122,92,255,.05) 55%,rgba(255,255,255,.02));backdrop-filter:blur(12px);position:relative;overflow:hidden;animation:up .7s cubic-bezier(.2,.8,.2,1) both}
+@keyframes up{from{opacity:0;transform:translateY(24px) scale(.98)}}
+@media(min-width:760px){.t.c4{grid-column:span 4}.t.c6{grid-column:span 6}.t.c8{grid-column:span 8}.t.c3{grid-column:span 3}}
+@media(max-width:759px){.t.c4,.t.c3{grid-column:span 6}}
+.k{font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);font-weight:600}
+.big{font-size:2.5rem;font-weight:800;letter-spacing:-.04em;font-variant-numeric:tabular-nums;background:linear-gradient(90deg,#fff,var(--acc));-webkit-background-clip:text;background-clip:text;color:transparent;line-height:1.1;margin:.25rem 0}
+.sub{color:var(--mut);font-size:.82rem}.page[data-seen] .t,.page[data-seen] .list>div{animation:none}@media(max-width:560px){.big{font-size:1.9rem}}
+canvas.vis{width:100%;display:block;border-radius:1rem}
+.row{display:flex;align-items:center;gap:.6rem}
+.list>div{display:flex;gap:.7rem;align-items:center;padding:.65rem .2rem;border-bottom:1px solid var(--line);font-size:.86rem;cursor:pointer;animation:fl .5s}
+@keyframes fl{from{opacity:0;transform:translateX(-16px);background:rgba(0,255,140,.15)}}
+.list .a{font-family:var(--mono);color:var(--acc);min-width:5.5rem}.list .m{color:var(--mut);margin-left:auto;font-size:.78rem;white-space:nowrap}
+.chip{font:600 .68rem var(--mono);padding:.15rem .5rem;border-radius:999px;background:rgba(0,255,140,.12);color:var(--acc);border:1px solid rgba(0,255,140,.3);white-space:nowrap}
+.chip.b{background:rgba(125,255,196,.1);color:var(--acc2);border-color:rgba(125,255,196,.3)}.chip.v{background:rgba(122,92,255,.14);color:#b3a2ff;border-color:rgba(122,92,255,.4)}.chip.w{background:rgba(255,176,32,.12);color:var(--warn);border-color:rgba(255,176,32,.4)}
+input{width:100%;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:1rem;padding:.9rem 1.1rem;color:#fff;font:.95rem var(--mono);outline:0;transition:box-shadow .3s}input:focus{box-shadow:0 0 0 3px rgba(0,255,140,.35)}
+button.p{white-space:nowrap;border:0;border-radius:1rem;padding:.85rem 1.3rem;font:700 .9rem inherit;background:linear-gradient(135deg,#00ff8c,#00d98a 55%,#7dffc4);color:#001a0d;cursor:pointer;box-shadow:0 6px 24px rgba(0,255,140,.3)}
+.kv{display:flex;justify-content:space-between;gap:1rem;padding:.55rem 0;border-bottom:1px solid var(--line);font-size:.88rem}.kv b{font-family:var(--mono);font-weight:600;text-align:right;word-break:break-all}
+.al{padding:.7rem 1rem;border-radius:1rem;margin:.35rem 0;font-size:.88rem}.al.ok{background:rgba(0,255,140,.1);color:var(--acc)}.al.warn{background:rgba(255,176,32,.1);color:var(--warn)}.al.crit{background:rgba(255,69,58,.12);color:var(--crit)}
+.sheet{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);display:flex;align-items:flex-end;animation:fi .3s}@keyframes fi{from{opacity:0}}
+.sheet>div{width:100%;max-height:82vh;overflow:auto;border-radius:1.8rem 1.8rem 0 0;padding:1.2rem 1.3rem 2.4rem;background:linear-gradient(160deg,#0b1a14,#07090c);border:1px solid var(--line);animation:su .5s cubic-bezier(.2,.8,.2,1)}@keyframes su{from{transform:translateY(100%)}}
+.sheet .grab{width:3rem;height:.3rem;border-radius:9px;background:#444;margin:0 auto 1rem}
+.hint{position:fixed;left:50%;top:5.2rem;transform:translateX(-50%);z-index:4;font-size:.72rem;color:var(--mut);pointer-events:none;opacity:.8}
+pre{font:.74rem/1.5 var(--mono);color:#b7f5d4;white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.35);padding:.8rem;border-radius:.9rem;max-height:40vh;overflow:auto}
+.empty{padding:2.4rem 1rem;text-align:center;color:var(--mut)}
+.bars{display:flex;align-items:flex-end;gap:3px;height:5rem}.bars i{flex:1;border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--acc),rgba(0,255,140,.08));min-height:2px;transition:height .6s}
+.nsw{display:flex;gap:2px;background:rgba(255,255,255,.08);border-radius:999px;padding:2px;margin-right:.4rem}.nsw button{border:0;background:transparent;color:#a1a1a6;font:700 .72rem inherit;padding:.38rem .7rem;border-radius:999px;cursor:pointer}.nsw button.on{background:var(--acc);color:#04130b}#dock{max-width:96vw;overflow-x:auto}#dock::-webkit-scrollbar{display:none}.fl{display:flex;flex-wrap:wrap;gap:.4rem;margin:.5rem 0}.fl .chip{cursor:pointer;opacity:.55}.fl .chip.on{opacity:1}.lg{max-height:60vh;overflow:auto}</style></head><body>
+<canvas id="bg"></canvas>
+<div id="app">
+ <header><i class="mk"></i><div class="brand">LUMA<small>SCAN · explorer</small></div><span class="grow"></span><div class="nsw" id="nsw"></div><div class="pill" id="conn" onclick="sheetConnect()"><i class="dot" id="cd"></i><span id="ct">connect</span></div></header>
+ <div class="hint" id="hint">swipe ← → between views</div>
+ <div id="pager"><div id="track">
+  <section class="page" id="p0"></section><section class="page" id="p1"></section><section class="page" id="p2"></section><section class="page" id="p3"></section><section class="page" id="p4"></section><section class="page" id="p5"></section><section class="page" id="p6"></section><section class="page" id="p7"></section><section class="page" id="p8"></section>
+ </div></div>
+ <dock id="dock"></dock>
+</div>
+<script></script>
+<script>window.LUMA_SCAN_CONFIG={default:'main',main:{ws:'wss://boaster-lapdog-jelly.ngrok-free.dev',panel:''}};window.LUMA_SCAN_CONFIG=window.LUMA_SCAN_CONFIG||{};</script>
+<script>// LUMA address layer. The ledger itself uses standard XRPL account IDs (20 bytes). LUMA wallet addresses are the
+// same 20 bytes encoded with version byte 48, which always yields a 34-char address starting with "L".
+// The panel translates L <-> r at its edge, so rippled and standard XRPL tooling keep working unchanged.
+'use strict';
+const ALPHABET = 'rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz';
+const L_VERSION = 48, T_VERSION = 65, R_VERSION = 0;
+// Two LUMA networks, two address families over the same 20-byte account IDs: Mainnet "L…" (version 48), Testnet "T…" (version 65).
+// A Testnet address can never pass as a Mainnet one (different checksum payload), so funds cannot be sent to the wrong network by typo or paste.
+const VERS = { L: L_VERSION, T: T_VERSION }; let ACTIVE = 'L';
+function use(prefix) { if (!VERS[prefix]) throw new Error('unknown address prefix'); ACTIVE = prefix; }
+const active = () => ACTIVE;
+
+// pure-JS SHA-256 (no dependencies)
+const primes = []; for (let n = 2; primes.length < 64; n++) if (primes.every(p => n % p)) primes.push(n);
+const frac = x => Math.floor((x % 1) * 4294967296);
+const K = primes.map(p => frac(Math.cbrt(p))), H0 = primes.slice(0, 8).map(p => frac(Math.sqrt(p)));
+const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+function sha256(bytes) {
+  const l = bytes.length, pl = ((l + 9 + 63) >> 6) << 6, m = new Uint8Array(pl);
+  m.set(bytes); m[l] = 0x80;
+  const dv = new DataView(m.buffer); dv.setUint32(pl - 8, Math.floor(l * 8 / 4294967296)); dv.setUint32(pl - 4, (l * 8) >>> 0);
+  const h = H0.slice(), w = new Array(64);
+  for (let o = 0; o < pl; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(o + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const a = w[i - 15], b = w[i - 2];
+      w[i] = (w[i - 16] + (rotr(a, 7) ^ rotr(a, 18) ^ (a >>> 3)) + w[i - 7] + (rotr(b, 17) ^ rotr(b, 19) ^ (b >>> 10))) | 0;
+    }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    h[0] = (h[0] + a) | 0; h[1] = (h[1] + b) | 0; h[2] = (h[2] + c) | 0; h[3] = (h[3] + d) | 0;
+    h[4] = (h[4] + e) | 0; h[5] = (h[5] + f) | 0; h[6] = (h[6] + g) | 0; h[7] = (h[7] + hh) | 0;
+  }
+  const out = new Uint8Array(32), ov = new DataView(out.buffer);
+  h.forEach((v, i) => ov.setUint32(i * 4, v >>> 0)); return out;
+}
+
+function b58encode(bytes) {
+  let n = 0n; for (const b of bytes) n = (n << 8n) | BigInt(b);
+  let s = ''; while (n > 0n) { s = ALPHABET[Number(n % 58n)] + s; n /= 58n; }
+  for (const b of bytes) { if (b === 0) s = ALPHABET[0] + s; else break; }
+  return s;
+}
+function b58decode(str) {
+  let n = 0n;
+  for (const ch of str) { const i = ALPHABET.indexOf(ch); if (i < 0) throw new Error('invalid character in address'); n = n * 58n + BigInt(i); }
+  const hex = n.toString(16); const body = hex === '0' ? [] : hex.padStart(hex.length + (hex.length % 2), '0').match(/../g).map(h => parseInt(h, 16));
+  let lead = 0; for (const ch of str) { if (ch === ALPHABET[0]) lead++; else break; }
+  return Uint8Array.from([...new Array(lead).fill(0), ...body]);
+}
+function encodeAccount(id, version) {
+  const payload = Uint8Array.from([version, ...id]);
+  const chk = sha256(sha256(payload)).slice(0, 4);
+  return b58encode(Uint8Array.from([...payload, ...chk]));
+}
+function decodeAccount(addr) {
+  const raw = b58decode(String(addr));
+  if (raw.length !== 25) throw new Error('invalid address length');
+  const payload = raw.slice(0, 21), chk = sha256(sha256(payload)).slice(0, 4);
+  for (let i = 0; i < 4; i++) if (chk[i] !== raw[21 + i]) throw new Error('invalid address checksum');
+  return { version: payload[0], id: payload.slice(1) };
+}
+const R_RE = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/, LT_RE = /^[LT][1-9A-HJ-NP-Za-km-z]{33}$/;
+// 'r' | 'L' | 'T' | null for a well-formed, checksum-valid address
+function kind(a) { try { a = String(a); const v = decodeAccount(a).version; if (v === R_VERSION && R_RE.test(a)) return 'r'; if (LT_RE.test(a)) return v === L_VERSION ? 'L' : v === T_VERSION ? 'T' : null; return null; } catch { return null; } }
+const NETNAME = { L: 'LUMA Mainnet (L…)', T: 'LUMA Testnet (T…)' };
+function isL(a) { return kind(a) === ACTIVE; }          // "is a LUMA address of the ACTIVE network"
+function wrongNet(a) { const k = kind(a); return (k === 'L' || k === 'T') && k !== ACTIVE ? `That is a ${NETNAME[k]} address, but this is ${NETNAME[ACTIVE]}. Funds sent to it would not arrive.` : ''; }
+function isR(a) { try { return R_RE.test(a) && decodeAccount(a).version === R_VERSION; } catch { return false; } }
+function toL(a) { if (isL(a)) return a; if (!isR(a)) throw new Error('not a valid address'); return encodeAccount(decodeAccount(a).id, VERS[ACTIVE]); }
+function toR(a) { if (isR(a)) return a; const w = wrongNet(a); if (w) throw new Error(w); if (!isL(a)) throw new Error('not a valid address'); return encodeAccount(decodeAccount(a).id, R_VERSION); }
+// accepts an L or r address, returns the r form the ledger uses; throws a clear error otherwise
+function normalize(a) {
+  a = String(a || '').trim();
+  if (isL(a) || isR(a)) return toR(a);
+  const w = wrongNet(a); if (w) throw new Error(w);
+  throw new Error(a ? `invalid address (expected a ${ACTIVE}… ${NETNAME[ACTIVE]} address; bad character or checksum)` : 'address required');
+}
+// convert every r-address string inside a JSON value to its L form (hashes/hex never match)
+function deepToL(v) {
+  if (typeof v === 'string') return R_RE.test(v) && isR(v) ? toL(v) : v;
+  if (Array.isArray(v)) return v.map(deepToL);
+  if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v)) o[k] = deepToL(v[k]); return o; }
+  return v;
+}
+const api = { sha256, encodeAccount, decodeAccount, isL, isR, toL, toR, normalize, deepToL, L_VERSION, T_VERSION, use, active, kind, wrongNet, NETNAME };
+if (typeof module === 'object') module.exports = api; else globalThis.LumaAddr = api;
+</script>
+<script>
+'use strict';
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=(n,d=0)=>n==null||isNaN(n)?'–':Number(n).toLocaleString(undefined,{maximumFractionDigits:d});
+const store={get:k=>{try{return localStorage.getItem(k)}catch{return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
+/* ===== state: everything below comes from the connected node. Nothing is generated. ===== */
+const fixWs=u=>String(u||'').replace(/^(wss?:\/\/[^\/:]+):\d+(:\d+)/,'$1$2');const S={url:fixWs(store.get('luma.scan.url'))||'ws://127.0.0.1:6006',ws:null,ok:false,info:null,fee:null,ledgers:[],txs:[],types:{},closeTimes:[],tps:[],total:null,err:'',tab:0,acct:null,peers:null,t0:0,sinceTx:0,txPerLedger:[],valAge:null,lastClose:0,accts:{},fees:0,fail:0,seen:0,big:[]};
+const PAGES=[['Pulse','M3 12h4l3-8 4 16 3-8h4'],['Ledgers','M4 6h16M4 12h16M4 18h16'],['Activity','M12 3v18M3 12h18M6 6l12 12'],['Pools','M12 3s6.5 6.6 6.5 11.2a6.5 6.5 0 0 1-13 0C5.5 9.6 12 3 12 3z'],['Search','M12 12a4 4 0 100-8 4 4 0 000 8zM4 21c0-4 4-6 8-6s8 2 8 6'],['Health','M12 21s-8-5-8-11a4.5 4.5 0 018-2.8A4.5 4.5 0 0120 10c0 6-8 11-8 11z'],['Log','M5 4h14M5 9h14M5 14h9M5 19h6'],['Tokens','M12 3a9 9 0 100 18 9 9 0 000-18zM9 12h6M12 9v6'],['Nodes','M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01']];
+$('#dock').innerHTML=PAGES.map(([n,p],i)=>`<button data-i="${i}"><svg viewBox="0 0 24 24"><path d="${p}"/></svg>${n}</button>`).join('');
+document.querySelectorAll('#dock button').forEach(b=>b.onclick=()=>go(+b.dataset.i));
+function go(i){S.tab=Math.max(0,Math.min(8,i));$('#track').style.transform=`translateX(${-S.tab*100}%)`;document.querySelectorAll('#dock button').forEach((b,n)=>b.classList.toggle('on',n===S.tab));$('#hint').style.opacity=0;paint()}
+/* swipe between pages (touch-pad style) */
+(()=>{let x0=null,y0=0,t=0;const el=$('#pager');el.addEventListener('pointerdown',e=>{x0=e.clientX;y0=e.clientY;t=Date.now()});el.addEventListener('pointerup',e=>{if(x0==null)return;const dx=e.clientX-x0,dy=e.clientY-y0;if(Math.abs(dx)>70&&Math.abs(dx)>Math.abs(dy)*1.6&&Date.now()-t<700)go(S.tab+(dx<0?1:-1));x0=null});addEventListener('keydown',e=>{if(e.key==='ArrowRight')go(S.tab+1);if(e.key==='ArrowLeft')go(S.tab-1)})})();
+
+/* ===== pairing ===== */
+function firstOpen(list,ms){list=[].concat(list);if(list.length<2)return Promise.resolve(list[0]);const sec=location.protocol==='https:',L=list.filter(u=>!(sec&&/^ws:/.test(u)));return new Promise(res=>{let left=L.length,done=0;const fin=()=>{if(--left===0&&!done)res(list[0])};if(!left)return res(list[0]);L.forEach(u=>{let w;try{w=new WebSocket(u)}catch{return fin()}const t=setTimeout(()=>{try{w.close()}catch{}fin()},ms||4000);w.onopen=()=>{clearTimeout(t);if(!done){done=1;res(u)}try{w.close()}catch{}};w.onerror=()=>{clearTimeout(t);fin()}})})}
+function parseNets(t){t=String(t||'').trim();if(!t)throw new Error('nothing to import');const ok=u=>typeof u==='string'&&/^wss?:\/\/[^\s]+$/.test(u);let o=null;
+ const h=t.match(/[#?&]pair=([A-Za-z0-9_\-]+)/),c=t.match(/STARSKY1\.([A-Za-z0-9_\-]+)/);
+ const dec=b=>JSON.parse(decodeURIComponent(escape(atob(b.replace(/-/g,'+').replace(/_/g,'/')))));
+ try{if(h)o=dec(h[1]);else if(c)o=dec(c[1]);else if(t[0]==='{')o=JSON.parse(t);else{const q=new URLSearchParams(t.replace(/^[^#]*#/,'')),m=q.get('main'),te=q.get('test');if(m||te)o={main:m,test:te}}}catch{}
+ if(!o){const u=t.match(/wss?:\/\/[^\s"']+/g);if(u&&u.length===1)o={[/(:|\/\/)(test|testnet)|6106/i.test(u[0])?'test':'main']:u[0]};else if(u&&u.length>1)o={main:u[0],test:u[1]}}
+ if(!o)throw new Error('that is not a LUMA pairing code, link or node address');const out={};for(const k of ['main','test'])if(o[k]){const l=[].concat(o[k]).filter(Boolean);for(const u of l)if(!ok(u))throw new Error(k+' must be a ws:// or wss:// address');if(l.length)out[k]=l.length>1?l.map(u=>u.replace(/\/$/,'')):l[0].replace(/\/$/,'')}if(!out.main&&!out.test)throw new Error('no main or test address found');return out}
+const hintUrl=u=>(location.protocol==='https:'&&/^ws:\/\//.test(u||''))?'This page is on https, so the browser only allows wss:// nodes. Pair with a wss:// address (tunnel or gateway) or open the app from the file / http.':(/^wss?:\/\/(127\.0\.0\.1|localhost)/.test(u||'')&&location.hostname&&!/^(127\.0\.0\.1|localhost|)$/.test(location.hostname)?'This node address points at this device (127.0.0.1). Pair with the address of the machine that runs the nodes.':'');
+const PAIR=(()=>{try{return JSON.parse(store.get('luma.scan.nets')||'{}')}catch{return{}}})();function savePair(o){Object.assign(PAIR,o);store.set('luma.scan.nets',JSON.stringify(PAIR))}
+/* ===== node connection ===== */
+async function diagNode(u){try{const m=String(u).match(/^wss?:\/\/([^\/:]+)(?::(\d+))?/);if(!m)return'';const h=m[1],p=+m[2]||0,local=/^(127\.0\.0\.1|localhost)$/.test(h);
+ const probe=async(url)=>{try{const c=new AbortController();setTimeout(()=>c.abort(),3000);await fetch(url,{mode:'no-cors',signal:c.signal});return true}catch{return false}};
+ const rpc=p?p-1000:5006;const tests=[`http://${h}:${rpc}/`,`http://${h}:8090/`,`http://${h}:8091/`];const r=await Promise.all(tests.map(probe));
+ if(r.some(Boolean))return `The machine ${h} answers on HTTP but the WebSocket ${u} is refused. Check that the node is running on this network and its ws port ${p||'6006'} is published (LUMA panel → Nodes → Fix now).`;
+ if(local)return `Nothing answers on this computer's LUMA ports. Either the nodes are not running here (start LUMA: "Start LUMA" or the panel → Start) or the browser blocks pages from reaching local ports: in Brave/Chrome click the lock/shield icon → Site settings → allow "Local network access" (and turn Shields down) for this page, then reload. Or open the app from http://localhost:8090/wallet (served by the panel) instead of the file.`;
+ return `Nothing answers at ${h}. Check the machine is on, the nodes are running, and its firewall/router allows ports ${p||'6006'} (ws) — or pair with a wss:// tunnel/gateway address.`}catch{return''}}
+
+let reqId=10,pending=new Map();
+function ask(cmd){return new Promise((res,rej)=>{if(!S.ws||S.ws.readyState!==1)return rej(new Error('not connected'));const id=++reqId;pending.set(id,{res,rej});S.ws.send(JSON.stringify({id,...cmd}));setTimeout(()=>{if(pending.delete(id))rej(new Error('timeout'))},9000)})}
+function connect(){try{S.ws&&S.ws.close()}catch{}S.ok=false;S.err='';setConn('connecting…','');let w;try{w=new WebSocket(S.url)}catch(e){S.err=hintUrl(S.url)||('Cannot use "'+S.url+'" — it must look like ws://host:6006 or wss://host');setConn('error','bad');paint();return}S.ws=w;const gen=connect.gen=(connect.gen||0)+1;
+ const to=setTimeout(()=>{if(gen!==connect.gen)return;if(!S.ok){S.err=hintUrl(S.url)||('No node reachable at '+S.url+'. If the nodes are on another machine, use its address (not 127.0.0.1) and make sure ports 6006/6106 are open, or pair with a wss:// tunnel.');try{w.close()}catch{}setConn('offline','bad');paint();diagNode(S.url).then(m=>{if(m&&!S.ok){S.err=m;paint()}})}},6000);
+ w.onopen=async()=>{clearTimeout(to);if(gen!==connect.gen)return;S.ok=true;logAdd('health','Connected to '+S.url);S.t0=Date.now();setConn('live','ok');try{await refreshInfo();w.send(JSON.stringify({id:2,command:'subscribe',streams:['ledger','transactions','validations']}));const f=await ask({command:'fee'});S.fee=f;backfill();loadPools()}catch{}clearInterval(S.ivl);S.ivl=setInterval(()=>{if(S.ok){refreshInfo().catch(()=>{});watch()}},4000);paint()};
+ w.onclose=()=>{clearTimeout(to);if(gen!==connect.gen)return;if(S.ok)logAdd('health','Connection to the node was lost');if(!S.ok&&!S.err){S.err='No node reachable at '+S.url;setConn('offline','bad');paint()}if(S.ok){S.ok=false;setConn('reconnecting…','bad');setTimeout(connect,3000)}};w.onerror=()=>{};
+ w.onmessage=m=>{let j;try{j=JSON.parse(m.data)}catch{return}if(gen!==connect.gen)return;
+  if(j.id&&pending.has(j.id)){const p=pending.get(j.id);pending.delete(j.id);return j.status==='error'?p.rej(new Error(j.error_message||j.error)):p.res(j.result)}
+  if(j.id===2&&j.result){S.total=j.result.total_coins?+j.result.total_coins/1e6:S.total}
+  if(j.type==='validationReceived')onVal(j);if(j.type==='ledgerClosed')onLedger(j);if(j.type==='transaction')onTx(j)}}
+function setConn(t,c){$('#ct').textContent=t;$('#cd').className='dot '+c}
+async function refreshInfo(){const r=await ask({command:'server_info'});S.info=r.info;healthNote(r.info);try{LumaAddr.use(+r.info.network_id===4243?'T':'L')}catch(e){}{const nk=+r.info.network_id===4243?'test':+r.info.network_id===4242?'main':S.net;if(nk!==S.net){S.net=nk;store.set('luma.scan.net',nk);drawSw()}}try{const l=await ask({command:'ledger',ledger_index:'validated'});if(l.ledger&&l.ledger.total_coins)S.total=+l.ledger.total_coins/1e6}catch{}if(r.info.validated_ledger){S.valAge=r.info.validated_ledger.age}paint()}
+function onLedger(j){const now=Date.now();S.valHash[j.ledger_index]=j.ledger_hash;try{const ks=Object.keys(S.valHash);if(ks.length>80)delete S.valHash[ks[0]]}catch{}logAdd('ledger','Ledger #'+fmt(j.ledger_index)+' closed · '+j.txn_count+' tx',null);if(S.lastClose&&(now-S.lastClose)/1000>8)logAdd('health','Slow ledger close: '+((now-S.lastClose)/1000).toFixed(1)+'s');if(S.lastClose)S.closeTimes.push((now-S.lastClose)/1000);S.closeTimes=S.closeTimes.slice(-40);S.lastClose=now;S.total=j.total_coins!=null?+j.total_coins/1e6:S.total;
+ const L={seq:j.ledger_index,hash:j.ledger_hash,txs:j.txn_count,at:now};S.ledgers.unshift(L);S.ledgers=S.ledgers.slice(0,60);S.txPerLedger.push(j.txn_count);S.txPerLedger=S.txPerLedger.slice(-40);burst(j.txn_count);if((S.seq5=(S.seq5||0)+1)%5===0)loadPools();paint()}
+function tally(t,ok,ledger){tokTrack(t,ok);S.seen++;S.fees+=+(t.Fee||0);if(ok&&ok!=='tesSUCCESS')S.fail++;if(t.Account)S.accts[t.Account]=(S.accts[t.Account]||0)+1;if(t.Destination)S.accts[t.Destination]=(S.accts[t.Destination]||0)+0.0001;if(typeof t.Amount==='string'&&t.TransactionType==='Payment'&&(!ok||ok==='tesSUCCESS')){S.big.push({h:t.hash,f:t.Account,t:t.Destination,a:+t.Amount/1e6});S.big.sort((a,b)=>b.a-a.a);S.big=S.big.slice(0,6)}}
+async function backfill(){const seq=S.info&&S.info.validated_ledger&&+S.info.validated_ledger.seq;if(!seq||seq<3)return;const N=Math.min(40,seq-1),got=[];for(let k=0;k<N;k++){try{const r=await ask({command:'ledger',ledger_index:seq-k,transactions:true,expand:true});got.push(r.ledger)}catch{break}}
+ got.reverse();let prev=null;const have=S.ledgers.length?S.ledgers[S.ledgers.length-1].seq:Infinity;for(let n=0;n<got.length;n++){const l=got[n],ct=+l.close_time,tx=l.transactions||[];if(prev!=null&&ct>=prev&&ct-prev<120)S.closeTimes.push(ct-prev);prev=ct;if(+l.ledger_index>=have)continue;S.txPerLedger.push(tx.length);S.ledgers.push({seq:+l.ledger_index,hash:l.ledger_hash,txs:tx.length,at:Date.now()-(got.length-n)*3000});for(const t of tx){const ty=t.TransactionType;try{logTx(t,t.metaData&&t.metaData.TransactionResult,t.metaData,(ct+946684800)*1000)}catch{}S.types[ty]=(S.types[ty]||0)+1;tally(t,t.metaData&&t.metaData.TransactionResult,l.ledger_index);S.txs.push({type:ty,hash:t.hash,from:t.Account,to:t.Destination,amt:t.Amount,ok:t.metaData&&t.metaData.TransactionResult,at:Date.now(),ledger:+l.ledger_index})}}
+ S.ledgers.sort((a,b)=>b.seq-a.seq);S.txs=S.txs.slice(0,80);S.closeTimes=S.closeTimes.slice(-40);S.txPerLedger=S.txPerLedger.slice(-40);paint()}
+function onTx(j){const t=j.transaction||j.tx_json||{};try{logTx(t,(j.meta&&j.meta.TransactionResult)||j.engine_result,j.meta,Date.now())}catch{}const ty=t.TransactionType||'?';S.types[ty]=(S.types[ty]||0)+1;S.txs.unshift({type:ty,hash:t.hash,from:t.Account,to:t.Destination,amt:t.Amount,ok:(j.meta&&j.meta.TransactionResult)||j.engine_result,at:Date.now(),ledger:j.ledger_index});S.txs=S.txs.slice(0,80);S.sinceTx++;tally(t,(j.meta&&j.meta.TransactionResult)||j.engine_result,j.ledger_index);spark(ty);paintLive()}
+/* ===== helpers ===== */
+const amt=a=>a==null?'':typeof a==='string'?fmt(a/1e6,6)+' LUMA':a.mpt_issuance_id?fmt(a.value)+' MPT':fmt(a.value,6)+' '+(a.currency.length===40?Buffer2(a.currency):a.currency);
+const Buffer2=h=>{try{return h.match(/../g).map(x=>String.fromCharCode(parseInt(x,16))).join('').replace(/\0+$/,'')}catch{return h}};
+const dispL=a=>{try{return a?LumaAddr.toL(a):''}catch(e){return a||''}};const short=a=>{a=dispL(a);return a?a.slice(0,6)+'…'+a.slice(-4):''};
+const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
+const age=s=>s<60?Math.round(s)+'s':s<3600?Math.floor(s/60)+'m':s<86400?Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m':Math.floor(s/86400)+'d '+Math.floor(s%86400/3600)+'h';
+const tcol={Payment:'#00ff8c',OfferCreate:'#00b86b',OfferCancel:'#7dffc4',TrustSet:'#7a5cff',NFTokenMint:'#ff7ae0',NFTokenCreateOffer:'#ff7ae0',MPTokenIssuanceCreate:'#ffb020',EscrowCreate:'#ff9f0a',CheckCreate:'#ffd60a',AccountSet:'#8e8e93',AMMCreate:'#5cffd6',AMMDeposit:'#a6ff00',AMMWithdraw:'#ffd60a',AMMVote:'#ff9f0a',AMMBid:'#ff7ae0'};
+const chipFor=t=>`<span class="chip ${/Offer|AMM/.test(t)?'b':/NFT|MPT/.test(t)?'v':/Escrow|Check/.test(t)?'w':''}">${esc(t)}</span>`;
+const noNode=()=>`<div class="t empty"><div class="k">${S.err?'cannot connect':'not connected'}</div><p style="margin:.6rem 0 1.2rem">${esc(S.err||'Connect to a LUMA node to see the live network. Only real ledger data is ever shown.')}</p><button class="p" onclick="sheetConnect()">Connect to a node</button></div>`;
+/* ===== background + pulse visuals ===== */
+const bg=$('#bg'),bx=bg.getContext('2d');let W,H,PT=[],mx=-1,my=-1,ring=[],spk=[];
+const rs=()=>{W=bg.width=innerWidth*devicePixelRatio;H=bg.height=innerHeight*devicePixelRatio;PT=Array.from({length:Math.min(90,innerWidth/10|0)},()=>({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-.5)*.35*devicePixelRatio,vy:(Math.random()-.5)*.35*devicePixelRatio,r:(Math.random()*1.3+.5)*devicePixelRatio}))};rs();addEventListener('resize',rs);addEventListener('pointermove',e=>{mx=e.clientX*devicePixelRatio;my=e.clientY*devicePixelRatio});
+function burst(n){ring.push({r:0,a:.9,n:Math.min(40,3+n*2)})}function spark(t){spk.push({x:Math.random()*W,y:H*(.4+Math.random()*.4),t:0,c:tcol[t]||'#00ff8c'})}
+(function f(){bx.clearRect(0,0,W,H);const live=S.ok;for(const p of PT){p.x+=p.vx;p.y+=p.vy;if(p.x<0||p.x>W)p.vx*=-1;if(p.y<0||p.y>H)p.vy*=-1;const d=Math.hypot(p.x-mx,p.y-my);if(d<150*devicePixelRatio){p.x+=(p.x-mx)/d*1.4;p.y+=(p.y-my)/d*1.4}}
+for(let i=0;i<PT.length;i++){const a=PT[i];for(let j=i+1;j<PT.length;j++){const b=PT[j],d=Math.hypot(a.x-b.x,a.y-b.y),m=140*devicePixelRatio;if(d<m){bx.strokeStyle=`rgba(0,255,140,${(1-d/m)*(live?.2:.07)})`;bx.lineWidth=devicePixelRatio*.6;bx.beginPath();bx.moveTo(a.x,a.y);bx.lineTo(b.x,b.y);bx.stroke()}}bx.fillStyle=live?'rgba(0,255,140,.65)':'rgba(120,120,120,.4)';bx.beginPath();bx.arc(a.x,a.y,a.r,0,7);bx.fill()}
+for(let i=ring.length-1;i>=0;i--){const r=ring[i];r.r+=7*devicePixelRatio;r.a*=.965;if(r.a<.02){ring.splice(i,1);continue}bx.strokeStyle=`rgba(0,255,140,${r.a*.5})`;bx.lineWidth=2*devicePixelRatio;bx.beginPath();bx.arc(W/2,H*.36,r.r,0,7);bx.stroke()}
+for(let i=spk.length-1;i>=0;i--){const s=spk[i];s.t+=.02;if(s.t>1){spk.splice(i,1);continue}const y=s.y-s.t*H*.3;bx.fillStyle=s.c;bx.globalAlpha=1-s.t;bx.beginPath();bx.arc(s.x,y,3*devicePixelRatio,0,7);bx.fill();bx.globalAlpha=1}
+requestAnimationFrame(f)})();
+/* orbit of recent ledgers */
+function drawOrbit(cv){const c=cv.getContext('2d'),w=cv.width=cv.clientWidth*devicePixelRatio,h=cv.height=cv.clientHeight*devicePixelRatio,cx=w/2,cy=h/2,R=Math.min(w,h)*.38,t=performance.now()/1000;c.clearRect(0,0,w,h);
+ const g=c.createRadialGradient(cx,cy,R*.1,cx,cy,R*1.4);g.addColorStop(0,'rgba(0,255,140,.18)');g.addColorStop(1,'rgba(0,255,140,0)');c.fillStyle=g;c.fillRect(0,0,w,h);
+ for(let k=1;k<=3;k++){c.strokeStyle=`rgba(255,255,255,${.05+k*.02})`;c.lineWidth=devicePixelRatio;c.beginPath();c.arc(cx,cy,R*k/3*1.15,0,7);c.stroke()}
+ const L=S.ledgers.slice(0,24);L.forEach((l,i)=>{const a=-t*.25+i*(Math.PI*2/24),rr=R*(.55+Math.min(1,(l.txs||0)/20)*.6),x=cx+Math.cos(a)*rr,y=cy+Math.sin(a)*rr,age=(Date.now()-l.at)/1000,al=Math.max(.25,1-age/120);c.strokeStyle=`rgba(0,255,140,${al*.25})`;c.beginPath();c.moveTo(cx,cy);c.lineTo(x,y);c.stroke();c.fillStyle=`rgba(0,255,140,${al})`;c.shadowColor='#00ff8c';c.shadowBlur=14*devicePixelRatio;c.beginPath();c.arc(x,y,(3+Math.min(8,(l.txs||0)))*devicePixelRatio,0,7);c.fill();c.shadowBlur=0});
+ c.fillStyle='#fff';c.font=`800 ${R*.34}px -apple-system,system-ui`;c.textAlign='center';c.textBaseline='middle';c.fillText(S.info&&S.info.validated_ledger?'#'+fmt(S.info.validated_ledger.seq):'—',cx,cy-R*.05);c.fillStyle='#8e8e93';c.font=`600 ${R*.1}px -apple-system,system-ui`;c.fillText('VALIDATED LEDGER',cx,cy+R*.28)}
+function donut(cv){const c=cv.getContext('2d'),w=cv.width=cv.clientWidth*devicePixelRatio,h=cv.height=cv.clientHeight*devicePixelRatio,cx=w/2,cy=h/2,R=Math.min(w,h)*.4,ent=Object.entries(S.types).sort((a,b)=>b[1]-a[1]),tot=ent.reduce((a,b)=>a+b[1],0);c.clearRect(0,0,w,h);if(!tot){c.fillStyle='#8e8e93';c.font=`${14*devicePixelRatio}px system-ui`;c.textAlign='center';c.fillText('waiting for transactions…',cx,cy);return}
+ let a0=-Math.PI/2;ent.forEach(([t,n])=>{const a=n/tot*Math.PI*2;c.strokeStyle=tcol[t]||'#6e6e73';c.lineWidth=R*.28;c.shadowColor=tcol[t]||'#6e6e73';c.shadowBlur=12*devicePixelRatio;c.beginPath();c.arc(cx,cy,R,a0,a0+a-.03);c.stroke();a0+=a});c.shadowBlur=0;c.fillStyle='#fff';c.font=`800 ${R*.4}px system-ui`;c.textAlign='center';c.textBaseline='middle';c.fillText(fmt(tot),cx,cy);c.fillStyle='#8e8e93';c.font=`600 ${R*.13}px system-ui`;c.fillText('TX SEEN',cx,cy+R*.38)}
+/* ===== pages ===== */
+function pPulse(){if(!S.ok)return noNode();const i=S.info||{},v=i.validated_ledger||{},ct=avg(S.closeTimes),tps=S.txPerLedger.length&&ct?avg(S.txPerLedger)/ct:0;
+ return `<div class="grid"><div class="t c8" style="padding:.5rem"><canvas class="vis" id="orbit" style="height:21rem"></canvas></div>
+ <div class="t c4"><div class="k">Network</div><div class="big">${esc(i.server_state||'…')}</div><div class="sub">network ID ${i.network_id??'–'} · rippled ${esc(i.build_version||'')}</div></div>
+ <div class="t c4"><div class="k">Close time</div><div class="big">${ct?ct.toFixed(1)+'s':'…'}</div><div class="sub">average of last ${S.closeTimes.length} ledgers</div></div>
+ <div class="t c4"><div class="k">Throughput</div><div class="big">${tps.toFixed(2)}</div><div class="sub">transactions / second</div></div>
+ <div class="t c4"><div class="k">Total LUMA</div><div class="big">${S.total!=null?fmt(S.total):'–'}</div><div class="sub">after burned fees</div></div>
+ <div class="t c4"><div class="k">Fee</div><div class="big">${S.fee&&S.fee.drops?fmt(S.fee.drops.open_ledger_fee||S.fee.drops.base_fee):'–'}<span class="sub"> drops</span></div><div class="sub">${S.fee&&S.fee.drops?fmt((S.fee.drops.open_ledger_fee||S.fee.drops.base_fee)/1e6,6)+' LUMA, burned':''}</div></div>
+ <div class="t c4"><div class="k">Reserve</div><div class="big">${v.reserve_base_xrp??'–'}</div><div class="sub">LUMA base · ${v.reserve_inc_xrp??'–'} per object</div></div>
+ <div class="t c4"><div class="k">Peers</div><div class="big">${i.peers??'–'}</div><div class="sub">connected to this node</div></div>
+ <div class="t c4"><div class="k">Success rate</div><div class="big">${S.seen?(100*(S.seen-S.fail)/S.seen).toFixed(1)+'%':'–'}</div><div class="sub">of ${fmt(S.seen)} transactions seen</div></div>
+ <div class="t c4"><div class="k">Fees burned (seen)</div><div class="big">${fmt(S.fees/1e6,6)}</div><div class="sub">LUMA destroyed by those transactions</div></div>
+ <div class="t c4" onclick="go(3)" style="cursor:pointer"><div class="k">AMM pools</div><div class="big">${S.pools?fmt(S.pools.length):'…'}</div><div class="sub">${S.pools&&S.pools.length?fmt(poolsDepth(),2)+' LUMA total depth · tap to open':'automated market maker pools on this network'}</div></div>
+ <div class="t c4"><div class="k">Active accounts</div><div class="big">${fmt(Object.keys(S.accts).length)}</div><div class="sub">distinct accounts in recent ledgers</div></div>
+ <div class="t c6"><div class="k">Largest payments</div><div class="list">${S.big.length?S.big.map(b=>`<div onclick="showTx('${b.h}')"><span class="a">${short(b.f)}</span><span class="sub">→ ${short(b.t)}</span><span class="m">${fmt(b.a,2)} LUMA</span></div>`).join(''):'<div class="empty" style="display:block">No payments yet.</div>'}</div></div>
+ <div class="t c6"><div class="k">Busiest accounts</div><div class="list">${Object.entries(S.accts).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([a,n])=>`<div onclick="lookup('${a}')"><span class="a">${short(a)}</span><span class="m">${Math.floor(n)} tx</span></div>`).join('')||'<div class="empty" style="display:block">No activity yet.</div>'}</div></div>
+ <div class="t c12"><div class="k">Transactions per ledger</div><div class="bars" id="tpl">${S.txPerLedger.map(n=>`<i style="height:${Math.max(3,n/Math.max(1,...S.txPerLedger)*100)}%"></i>`).join('')}</div></div></div>`}
+function pLedgers(){if(!S.ok)return noNode();return `<h2>Ledgers</h2><div class="t list">${S.ledgers.length?S.ledgers.map(l=>`<div onclick="showLedger(${l.seq})"><span class="a">#${fmt(l.seq)}</span><span>${l.txs} tx</span><span class="m">${esc(l.hash?l.hash.slice(0,10)+'…':'')} · ${new Date(l.at).toLocaleTimeString()}</span></div>`).join(''):'<div class="empty" style="display:block">Waiting for the next ledger…</div>'}</div><p class="sub" style="margin-top:.8rem">Tap a ledger for its transactions.</p>`}
+function pActivity(){if(!S.ok)return noNode();return `<h2>Activity</h2><div class="grid"><div class="t c6"><div class="k">Transaction types</div><canvas class="vis" id="donut" style="height:15rem"></canvas><div style="margin-top:.6rem;display:flex;flex-wrap:wrap;gap:.35rem">${Object.entries(S.types).sort((a,b)=>b[1]-a[1]).map(([t,n])=>`<span class="chip" style="color:${tcol[t]||'#aaa'}">${esc(t)} ${n}</span>`).join('')}</div></div>
+ <div class="t c6"><div class="k">Live feed</div><div class="list" id="feed" style="max-height:19rem;overflow:auto">${feedHtml()}</div></div></div>`}
+function feedHtml(){return S.txs.length?S.txs.slice(0,40).map(t=>`<div onclick="showTx('${t.hash}')">${chipFor(t.type)}<span class="a">${short(t.from)}</span><span class="m">${esc(amt(t.amt))}${t.ok&&t.ok!=='tesSUCCESS'?' · '+esc(t.ok):''}</span></div>`).join(''):'<div class="empty" style="display:block">Waiting for transactions…</div>'}
+function pAccounts(){return `<h2>Accounts</h2><div class="t"><div class="row"><input id="q" placeholder="Address (L… / T…), transaction hash, ledger number or token name" spellcheck="false" autocomplete="off"><button class="p" onclick="search()">Look up</button></div><p class="sub" style="margin-top:.6rem">No wallet or login needed.</p></div><div id="res">${S.acct||''}</div>`}
+function pHealth0(){if(!S.ok)return noNode();const i=S.info||{},v=i.validated_ledger||{},al=[];
+ if(i.server_state&&!['full','proposing','validating'].includes(i.server_state))al.push(['warn',`The node reports "${i.server_state}": it may still be syncing.`]);
+ if(v.age>20)al.push(['crit',`The newest validated ledger is ${v.age}s old. The network may be stalled.`]);
+ if(i.peers!=null&&i.peers<2)al.push(['warn',`Only ${i.peers} peer(s) connected.`]);
+ if(i.validation_quorum===0)al.push(['warn','No validation quorum reported.']);
+ const ct=avg(S.closeTimes);if(ct>8)al.push(['warn',`Ledgers are closing slowly (${ct.toFixed(1)}s average).`]);
+ if(!al.length)al.push(['ok','All clear: ledgers are validating on time and the node is well connected.']);
+ const score=al.some(a=>a[0]==='crit')?35:al.some(a=>a[0]==='warn')?70:100;
+ return `<h2>Health</h2><div class="grid"><div class="t c4"><div class="k">Score</div><div class="big" style="font-size:4rem">${score}</div><div class="sub">${score>=90?'excellent':score>=60?'degraded':'critical'}</div></div><div class="t c8"><div class="k">Checks</div>${al.map(([c,t])=>`<div class="al ${c}">${esc(t)}</div>`).join('')}</div>
+ <div class="t c6"><div class="k">Node</div>${[['State',i.server_state],['Uptime',i.uptime!=null?age(i.uptime):'–'],['Validated ledger',v.seq?'#'+fmt(v.seq):'–'],['Ledger age',v.age!=null?v.age+'s':'–'],['Ledgers held',i.complete_ledgers],['Load factor',i.load_factor],['Quorum',i.validation_quorum],['Peers',i.peers],['I/O latency',i.io_latency_ms!=null?i.io_latency_ms+' ms':'–'],['Network ID',i.network_id],['Build',i.build_version]].map(([a,b])=>`<div class="kv"><span>${a}</span><b>${esc(b??'–')}</b></div>`).join('')}</div>
+ <div class="t c6"><div class="k">Close time (s)</div><div class="bars">${S.closeTimes.map(n=>`<i style="height:${Math.min(100,n/Math.max(5,...S.closeTimes)*100)}%"></i>`).join('')}</div><div class="k" style="margin-top:1rem">Supply</div><div class="kv"><span>Total LUMA</span><b>${S.total!=null?fmt(S.total,2):'–'}</b></div><div class="kv"><span>Burned since genesis</span><b>${S.total!=null?fmt(10000000000-S.total,6):'–'}</b></div><div class="sub" style="margin-top:.4rem">Burned = 10,000,000,000 genesis supply minus current total (every fee is destroyed).</div></div></div>`}
+function pHealth(){const h=pHealth0();return S.ok?h+valHtml():h}
+
+/* ===== AMM pools: discovered from the ledger (ledger_data type amm), read with amm_info. Nothing is generated. ===== */
+const nat=x=>!x||(x.currency==='XRP'||x.currency==='LUMA')&&!x.issuer;
+const asName=x=>nat(x)?'LUMA':(x.currency.length===40&&!/^03/.test(x.currency)?Buffer2(x.currency):x.currency);
+const amtN=x=>x==null?0:typeof x==='string'?+x/1e6:+x.value;
+const poolsDepth=()=>(S.pools||[]).reduce((s,p)=>s+(p.a.n?p.ra*2:p.b.n?p.rb*2:0),0);
+async function loadPools(){if(!S.ok)return;if(S.poolsBusy){S.poolsAgain=1;return}S.poolsBusy=1;try{let objs=[],marker;for(let i=0;i<6;i++){const r=await ask({command:'ledger_data',type:'amm',ledger_index:'validated',limit:400,...(marker?{marker}:{})});objs=objs.concat((r.state||[]).filter(o=>o.LedgerEntryType==='AMM'||o.Asset));marker=r.marker;if(!marker)break}
+  const out=[];for(const o of objs){try{const r=await ask({command:'amm_info',asset:o.Asset,asset2:o.Asset2});const m=r.amm;if(!m)continue;const a=typeof m.amount==='string'?{n:1,c:'LUMA'}:{c:m.amount.currency,i:m.amount.issuer},b=typeof m.amount2==='string'?{n:1,c:'LUMA'}:{c:m.amount2.currency,i:m.amount2.issuer};
+   out.push({m,a,b,ra:amtN(m.amount),rb:amtN(m.amount2),fee:(m.trading_fee||0)/1000,lp:+(m.lp_token&&m.lp_token.value||0),acct:m.account,an:a.n?'LUMA':asName({currency:a.c}),bn:b.n?'LUMA':asName({currency:b.c})})}catch{}}
+  S.pools=out;S.poolsErr=''}catch(e){S.pools=S.pools||[];S.poolsErr=/unknownCmd|notSupported|notImpl/i.test(e.message)?'This node does not list pools (ledger_data is not available).':''}S.poolsBusy=0;if(S.poolsAgain){S.poolsAgain=0;setTimeout(loadPools,300)}if(S.tab===3||S.tab===0)paint()}
+function pPools(){if(!S.ok)return noNode();const L=S.pools;if(!L)return `<h2>Pools</h2><div class="t empty">loading pools…</div>`;
+ const dep=poolsDepth(),top=L.slice().sort((a,b)=>(b.a.n?b.ra:b.b.n?b.rb:0)-(a.a.n?a.ra:a.b.n?a.rb:0))[0];
+ return `<h2>Pools</h2><div class="grid"><div class="t c4"><div class="k">Pools</div><div class="big">${fmt(L.length)}</div><div class="sub">automated market makers (XLS-30)</div></div>
+ <div class="t c4"><div class="k">Total depth</div><div class="big">${L.length?fmt(dep,2):'–'}</div><div class="sub">LUMA, counting the LUMA side twice (pools with a LUMA leg)</div></div>
+ <div class="t c4"><div class="k">Deepest pool</div><div class="big" style="font-size:1.6rem">${top?esc(top.an)+'/'+esc(top.bn):'–'}</div><div class="sub">${top?fmt(top.a.n?top.ra*2:top.b.n?top.rb*2:0,2)+' LUMA depth':'no pools yet'}</div></div>
+ <div class="t c12"><div class="k">All pools</div>${L.length?`<div class="list">${L.map((p,i)=>`<div onclick="showPool(${i})"><span class="a">${esc(p.an)}/${esc(p.bn)}</span><span class="sub">${fmt(p.ra,2)} / ${fmt(p.rb,2)} · fee ${p.fee}%</span><span class="m">${p.ra>0?fmt(p.rb/p.ra,6):'–'} ${esc(p.bn)} per ${esc(p.an)}</span></div>`).join('')}</div>`:`<div class="empty" style="display:block">${esc(S.poolsErr||'No pools have been created on this network yet.')}</div>`}</div>
+ <div class="t c12"><div class="sub">A pool holds two assets and prices them by x × y = k. Swaps pay a fee to the pool, which liquidity providers earn through LP tokens, and DEX orders use pool liquidity next to the order book. Creating a pool burns one owner reserve (${(S.info&&S.info.validated_ledger&&S.info.validated_ledger.reserve_inc_xrp)??'–'} LUMA).</div></div></div>`}
+async function showPool(i){const p=S.pools[i];if(!p)return;const s=sheet(`<h2 style="margin-top:0">${esc(p.an)}/${esc(p.bn)} pool</h2><div id="pb" class="sub">loading…</div>`);
+ const px=p.ra>0?p.rb/p.ra:null,m=p.m,dep=p.a.n?p.ra*2:p.b.n?p.rb*2:null;let acts='';try{const r=await ask({command:'account_tx',account:m.account,limit:15});acts=(r.transactions||[]).map(x=>{const t=x.tx_json||x.tx||{};return `<div onclick="showTx('${t.hash||x.hash||''}')">${chipFor(t.TransactionType)}<span class="a">${short(t.Account)}</span><span class="m">${esc(amt(t.Amount||t.Amount2||t.TakerGets))}</span></div>`}).join('')}catch{}
+ s.querySelector('#pb').outerHTML=`<div class="kv"><span>${esc(p.an)} reserve</span><b>${fmt(p.ra,6)}</b></div><div class="kv"><span>${esc(p.bn)} reserve</span><b>${fmt(p.rb,6)}</b></div>
+ <div class="kv"><span>Price</span><b>${px==null?'–':fmt(px,6)+' '+esc(p.bn)+' per '+esc(p.an)}</b></div><div class="kv"><span>Inverse</span><b>${px?fmt(1/px,6)+' '+esc(p.an)+' per '+esc(p.bn):'–'}</b></div>
+ <div class="kv"><span>Depth</span><b>${dep==null?'–':fmt(dep,2)+' LUMA'}</b></div><div class="kv"><span>Trading fee</span><b>${p.fee}%</b></div><div class="kv"><span>LP tokens outstanding</span><b>${fmt(p.lp,6)}</b></div>
+ <div class="kv"><span>Fee votes</span><b>${(m.vote_slots||[]).length}</b></div>${(m.vote_slots||[]).slice(0,5).map(v=>`<div class="kv"><span class="sub mono" onclick="lookup('${v.account}')" style="cursor:pointer">${esc(short(v.account))}</span><b>${(v.trading_fee||0)/1000}% · weight ${fmt((v.vote_weight||0)/1000,1)}%</b></div>`).join('')}
+ <div class="kv"><span>Auction slot</span><b>${m.auction_slot?esc(short(m.auction_slot.account)):'none'}</b></div><div class="kv"><span>Pool account</span><b class="mono" style="word-break:break-all;cursor:pointer" onclick="lookup('${m.account}')">${esc(dispL(m.account))}</b></div>
+ ${acts?`<div class="k" style="margin-top:1rem">Recent pool activity</div><div class="list">${acts}</div>`:''}`}
+const FN=[pPulse,pLedgers,pActivity,pPools,pAccounts,pHealth,pLog,pTokens,pNodes];
+/* ===== Nodes: network monitor fed by the operator's read-only /api/public/status ===== */
+S.mon=null;S.monErr='';
+const panelUrl=()=>{const c=(window.LUMA_SCAN_CONFIG||{})[S.net]||{};return String(c.panel||store.get('luma.scan.panel.'+S.net)||'').replace(/\/$/,'')};
+async function loadMon(){const b=panelUrl();if(!b){S.mon=null;S.monErr='';return}try{const r=await fetch(b+'/api/public/status',{cache:'no-store'});const j=await r.json();if(!j.ok)throw new Error(j.error||'bad answer');S.mon=j;S.monErr=''}catch(e){S.monErr='Cannot reach the network feed ('+b+'). '+(e.message||e)}if(S.tab===8){const el=$('#p8');if(el){el.__h=null;paint()}}}
+setInterval(()=>{if(S.tab===8||!S.mon)loadMon()},5000);
+function monSet(){const v=prompt('Operator address (the LUMA control panel, for example https://panel.example.com)',panelUrl());if(v===null)return;store.set('luma.scan.panel.'+S.net,v.trim());loadMon()}
+function pNodes(){const m=S.mon;if(!panelUrl())return`<div class="t"><div class="k">Network monitor</div><div class="sub" style="margin:.5rem 0">Connect the operator's feed to see every node (validators, API and history) and their health.</div><button onclick="monSet()">Set operator address</button></div>`;
+ if(!m)return`<div class="t"><div class="k">Network monitor</div><div class="sub">${esc(S.monErr||'loading…')}</div><button onclick="monSet()">Change address</button></div>`;
+ const up=m.nodes.filter(n=>n.up),vals=m.nodes.filter(n=>n.role==='validator'),top=Math.max(0,...up.map(n=>n.seq)),sm=m.samples||[],rate=m.rate!=null?m.rate:(sm.length>1?(sm[sm.length-1]-sm[0])/Math.max(1,(sm.length-1))*12:null);
+ const ok=!m.alerts.length,st=ok?'All checks passing':m.alerts.map(a=>esc(a.msg)).join(' · ');
+ return`<div class="t"><div class="k">${esc(m.label)} · network ID ${esc(m.networkId)}</div><div class="sub" style="color:var(--${ok?'ok':'warn'},${ok?'#4ade80':'#fbbf24'})">${st}</div></div>
+ <div class="t"><div class="k">Validated ledger</div><div class="big">${fmt(top)}</div></div>
+ <div class="t"><div class="k">Nodes up</div><div class="big">${up.length}/${m.nodes.length}</div><div class="sub">Validators ${vals.filter(n=>n.up).length}/${vals.length}${m.supply!=null?' · supply '+fmt(m.supply)+' LUMA':''}</div></div>
+ <div class="t"><div class="k">Nodes</div>${m.nodes.map(n=>`<div style="display:flex;gap:.6rem;padding:.45rem 0;border-top:1px solid rgba(255,255,255,.07);align-items:center"><i style="width:.55rem;height:.55rem;border-radius:50%;background:${n.up?'#4ade80':'#f87171'}"></i><b style="min-width:4rem">${esc(n.name)}</b><span class="sub" style="min-width:4.6rem">${esc(n.role)}</span><span class="sub" style="flex:1">${n.up?esc(n.state):'down'}</span><span style="font-variant-numeric:tabular-nums">${n.up?fmt(n.seq):'–'}</span><span class="sub" style="min-width:2rem;text-align:right">${n.peers??''}</span></div>`).join('')}<div class="sub" style="margin-top:.5rem">updated ${m.updated?new Date(m.updated).toLocaleTimeString():'–'} · <a href="#" onclick="monSet();return false">operator address</a></div></div>`}
+setTimeout(loadMon,1500);
+function paint(){const i=S.tab,el=$('#p'+i);if(i===4&&el.dataset.done){return}if((i===6||i===7)&&el.dataset.done&&document.activeElement&&document.activeElement.matches('input')){return}if(i===4)el.dataset.done=1;if(i===3)loadPools();const h=FN[i]();if(el.__h!==h){el.__h=h;el.innerHTML=h}el.dataset.seen=1;draw()}
+function draw(){const o=$('#orbit');if(o)drawOrbit(o);const d=$('#donut');if(d)donut(d)}
+function paintLive(){if(S.tab===6)paintLog();if(S.tab===7)paintTok();if(S.tab===2){const f=$('#feed');if(f)f.innerHTML=feedHtml();const d=$('#donut');if(d)donut(d)}}
+setInterval(()=>{const o=$('#orbit');if(o)drawOrbit(o)},50);
+/* ===== lookups ===== */
+function sheet(h){const s=document.createElement('div');s.className='sheet';s.innerHTML=`<div><div class="grab"></div>${h}</div>`;s.onclick=e=>{if(e.target===s)s.remove()};document.body.appendChild(s);return s}
+function sheetConnect(){const s=sheet(`<h2 style="margin-top:0">Connect to a node</h2><p class="sub" style="margin-bottom:.8rem">A ws:// or wss:// address, or paste a pairing code / link from the LUMA panel to set Mainnet and Testnet at once.</p><input id="u" value="${esc(S.url)}" placeholder="wss://host or STARSKY1… code"><div class="row" style="margin-top:.8rem"><button class="p" id="uc">Connect</button><button class="pill" id="um">Mainnet</button><button class="pill" id="ut">Testnet</button></div><div class="sub" id="ue" style="margin-top:.6rem"></div>`);
+ const go1=u=>{S.url=fixWs(u);store.set('luma.scan.url',S.url);s.remove();connect()};
+ s.querySelector('#uc').onclick=()=>{const v=s.querySelector('#u').value.trim();try{if(/^wss?:\/\/\S+$/.test(v)&&!/pair=|STARSKY1/.test(v))return go1(v);const o=parseNets(v);savePair(o);firstOpen(o.main||o.test).then(go1)}catch(e){s.querySelector('#ue').textContent=e.message}};
+ s.querySelector('#um').onclick=()=>{s.querySelector('#u').value=[].concat(PAIR.main||'ws://127.0.0.1:6006')[0]};
+ s.querySelector('#ut').onclick=()=>{s.querySelector('#u').value=[].concat(PAIR.test||'ws://127.0.0.1:6106')[0]}}
+async function showLedger(n){const s=sheet(`<h2 style="margin-top:0">Ledger #${fmt(n)}</h2><div id="lb" class="sub">loading…</div>`);try{const r=await ask({command:'ledger',ledger_index:n,transactions:true,expand:true});const l=r.ledger;s.querySelector('#lb').outerHTML=`<div class="kv"><span>Hash</span><b>${esc(l.ledger_hash)}</b></div><div class="kv"><span>Closed</span><b>${esc(l.close_time_human||'')}</b></div><div class="kv"><span>Total LUMA</span><b>${fmt(l.total_coins/1e6,6)}</b></div><div class="kv"><span>Transactions</span><b>${(l.transactions||[]).length}</b></div><div class="list">${(l.transactions||[]).map(t=>`<div onclick="showTx('${t.hash}')">${chipFor(t.TransactionType)}<span class="a">${short(t.Account)}</span><span class="m">${esc(amt(t.Amount))}</span></div>`).join('')}</div>`}catch(e){s.querySelector('#lb').textContent=e.message}}
+async function showTx(h){if(!h)return;const s=sheet(`<h2 style="margin-top:0">Transaction</h2><div id="tb" class="sub">loading…</div>`);try{const r=await ask({command:'tx',transaction:h});const t=r.tx_json||r;s.querySelector('#tb').outerHTML=`<div class="kv"><span>Type</span><b>${esc(t.TransactionType)}</b></div><div class="kv"><span>Result</span><b>${esc((r.meta&&r.meta.TransactionResult)||'')}</b></div><div class="kv"><span>From</span><b>${esc(dispL(t.Account))}</b></div>${t.Destination?`<div class="kv"><span>To</span><b>${esc(dispL(t.Destination))}</b></div>`:''}<div class="kv"><span>Amount</span><b>${esc(amt(t.Amount))}</b></div><div class="kv"><span>Fee</span><b>${fmt(t.Fee/1e6,6)} LUMA (burned)</b></div><div class="kv"><span>Ledger</span><b>${esc(r.ledger_index||'')}</b></div><pre>${esc(JSON.stringify(LumaAddr.deepToL(r),null,2))}</pre>`}catch(e){s.querySelector('#tb').textContent=e.message}}
+function lookup(a){go(4);setTimeout(()=>{const q=$('#q');if(q){q.value=dispL(a);search()}},300)}
+async function search(){const q=$('#q').value.trim(),o=$('#res');if(!q)return;if(!S.ok){o.innerHTML=noNode();return}
+ if(/^[0-9A-Fa-f]{64}$/.test(q)){showTx(q.toUpperCase());return}
+ if(/^\d{1,10}$/.test(q)){showLedger(+q);return}
+ { let isA=false;try{LumaAddr.normalize(q);isA=true}catch{} if(!isA){S.tq=q;go(7);return} }
+ o.innerHTML='<div class="t empty">loading…</div>';try{
+  let a;try{a=LumaAddr.normalize(q)}catch(er){S.acct='';o.innerHTML=`<div class="t"><div class="al warn">${esc(er.message)}</div></div>`;return}const [info,lines,tx,nfts,gw]=await Promise.all([ask({command:'account_info',account:a,ledger_index:'validated'}),ask({command:'account_lines',account:a,ledger_index:'validated'}).catch(()=>({lines:[]})),ask({command:'account_tx',account:a,limit:15}).catch(()=>({transactions:[]})),ask({command:'account_nfts',account:a,ledger_index:'validated'}).catch(()=>({account_nfts:[]})),ask({command:'gateway_balances',account:a,ledger_index:'validated'}).catch(()=>({}))]);const obl=Object.entries(gw.obligations||{});
+  const d=info.account_data;S.acct=`<div class="grid" style="margin-top:.8rem"><div class="t c6"><div class="k">Balance</div><div class="big">${fmt(d.Balance/1e6,6)}</div><div class="sub mono" style="word-break:break-all">${esc(dispL(d.Account))}</div></div><div class="t c6"><div class="k">Account</div><div class="kv"><span>Sequence</span><b>${d.Sequence}</b></div><div class="kv"><span>Owned objects</span><b>${d.OwnerCount}</b></div><div class="kv"><span>NFTs</span><b>${(nfts.account_nfts||[]).length}</b></div><div class="kv"><span>Trust lines</span><b>${(lines.lines||[]).length}</b></div></div>
+  ${(lines.lines||[]).length?`<div class="t"><div class="k">Tokens</div>${lines.lines.map(l=>`<div class="kv"><span>${esc(l.currency.length===40?Buffer2(l.currency):l.currency)} <span class="sub">${esc(short(l.account))}</span></span><b>${esc(l.balance)}</b></div>`).join('')}</div>`:''}
+  ${obl.length?`<div class="t"><div class="k">Issued by this account (total owed to holders)</div>${obl.map(([c,v])=>`<div class="kv"><span>${esc(c.length===40?Buffer2(c):c)}</span><b>${esc(fmt(v,6))}</b></div>`).join('')}</div>`:''}
+  <div class="t"><div class="k">Recent activity</div><div class="list">${(tx.transactions||[]).map(x=>{const t=x.tx_json||x.tx||{};return `<div onclick="showTx('${t.hash||x.hash||''}')">${chipFor(t.TransactionType)}<span class="a">${short(t.Account===d.Account?t.Destination:t.Account)}</span><span class="m">${t.Account===d.Account?'−':'+'}${esc(amt(t.Amount))}</span></div>`}).join('')||'<div class="empty" style="display:block">No transactions.</div>'}</div></div></div>`;o.innerHTML=S.acct}
+ catch(e){S.acct='';o.innerHTML=`<div class="t"><div class="al warn">${esc(/actNotFound|not found/i.test(e.message)?'That account does not exist on this network (it has never been funded).':e.message)}</div></div>`}}
+$('#p4').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='q')search()});
+const pm=new URLSearchParams(location.search);if(pm.get('node')){S.url=pm.get('node')}
+try{if(/pair=|main=|test=/.test(location.hash)){const o=parseNets(location.hash);savePair(o);S.url=[].concat(o.main||o.test)[0];store.set('luma.scan.url',S.url);firstOpen(o.main||o.test).then(u=>{if(u!==S.url){S.url=u;store.set('luma.scan.url',u);connect()}});history.replaceState(null,'',location.pathname+location.search)}}catch{}
+
+/* ===== explorer: network switch, activity log, token directory, validators (all read from the node; nothing is generated) ===== */
+S.log=[];S.tokens={};S.vals={};S.valHash={};S.tq='';S.lf=JSON.parse(store.get('luma.scan.lf')||'{"ledger":0}');S.whale=+store.get('luma.scan.whale')||1000;
+const LC=window.LUMA_SCAN_CONFIG;{const cw=(LC.main||{}).ws;if(cw&&!/#.*(pair|main|test)=/.test(location.hash)&&(!store.get('luma.scan.url')||store.get('luma.scan.cfg')!==cw)){S.url=cw;store.set('luma.scan.url',cw);store.set('luma.scan.cfg',cw)}}
+const DEFN={main:(LC.main||{}).ws||'ws://127.0.0.1:6006',test:(LC.test||{}).ws||'ws://127.0.0.1:6106'};
+const netUrls=k=>[].concat(PAIR[k]||DEFN[k]);
+function drawSw(){const e=$('#nsw');if(!e)return;e.innerHTML=['main','test'].map(k=>`<button class="${S.net===k?'on':''}" onclick="setNetwork('${k}')">${k==='main'?'Mainnet':'Testnet'}</button>`).join('')}
+function resetData(){Object.assign(S,{info:null,fee:null,ledgers:[],txs:[],types:{},closeTimes:[],tps:[],total:null,acct:null,peers:null,sinceTx:0,txPerLedger:[],valAge:null,lastClose:0,accts:{},fees:0,fail:0,seen:0,big:[],pools:null,tokens:{},vals:{},valHash:{},log:[]});const el=$('#p4');if(el){delete el.dataset.done;el.__h=null}for(let i=0;i<8;i++){const p=$('#p'+i);if(p)p.__h=null}}
+async function setNetwork(k){if(S.net===k&&S.ok)return;S.net=k;store.set('luma.scan.net',k);drawSw();resetData();setConn('connecting…','');S.url=await firstOpen(netUrls(k));store.set('luma.scan.url',S.url);connect()}
+const LOGK={whale:'Large payment',token:'Token',dex:'DEX',amm:'AMM',nft:'NFT',acct:'New account',fail:'Failed tx',health:'Network',ledger:'Ledger',other:'Other'};
+function logAdd(kind,msg,h,at){S.log.unshift({at:at||Date.now(),kind,msg,h});if(S.log.length>600)S.log.length=600;if(S.tab===6)paintLog()}
+const tname=(c)=>c&&c.length===40&&!/^03/.test(c)?Buffer2(c):c;
+function logTx(t,ok,meta,at){const ty=t.TransactionType||'?',h=t.hash,who=short(t.Account);
+ if(ok&&ok!=='tesSUCCESS'){logAdd('fail',`${ty} from ${who} failed: ${ok}`,h,at);return}
+ const created=((meta&&meta.AffectedNodes)||[]).filter(n=>n.CreatedNode).map(n=>n.CreatedNode);
+ for(const c of created)if(c.LedgerEntryType==='AccountRoot'&&c.NewFields&&c.NewFields.Account)logAdd('acct',`New account ${short(c.NewFields.Account)}`,h,at);
+ if(ty==='Payment'&&typeof t.Amount==='string'&&+t.Amount/1e6>=S.whale)logAdd('whale',`${who} sent ${fmt(+t.Amount/1e6,2)} LUMA to ${short(t.Destination)}`,h,at);
+ else if(ty==='Payment'&&t.Amount&&t.Amount.value&&+t.Amount.value>=S.whale*1)logAdd('token',`${who} sent ${fmt(+t.Amount.value,2)} ${tname(t.Amount.currency)} to ${short(t.Destination)}`,h,at);
+ else if(ty==='TrustSet'&&t.LimitAmount)logAdd('token',`${who} ${+t.LimitAmount.value?'trusts':'removed trust in'} ${tname(t.LimitAmount.currency)} (${short(t.LimitAmount.issuer)})`,h,at);
+ else if(/^AMM/.test(ty))logAdd('amm',`${ty} by ${who}`,h,at);
+ else if(/^Offer/.test(ty))logAdd('dex',`${ty} by ${who}`,h,at);
+ else if(/NFT/.test(ty))logAdd('nft',`${ty} by ${who}`,h,at);
+ else if(/^MPT/.test(ty))logAdd('token',`${ty} by ${who}`,h,at);
+ else if(ty!=='Payment')logAdd('other',`${ty} by ${who}`,h,at)}
+function healthNote(i){if(!i)return;if(S.pState!=null&&i.server_state!==S.pState)logAdd('health',`Node state changed: ${S.pState} → ${i.server_state}`);S.pState=i.server_state;if(S.pPeers!=null&&i.peers!==S.pPeers)logAdd('health',`Peers ${S.pPeers} → ${i.peers}`);S.pPeers=i.peers;if(S.pQ!=null&&i.validation_quorum!==S.pQ)logAdd('health',`Validation quorum ${S.pQ} → ${i.validation_quorum}`);S.pQ=i.validation_quorum}
+function watch(){const v=S.info&&S.info.validated_ledger;if(v&&v.age>20){if(!S.stall){S.stall=1;logAdd('health',`Network stalled: newest validated ledger is ${v.age}s old`)}}else if(S.stall){S.stall=0;logAdd('health','Network recovered: ledgers are validating again')}
+ const now=Date.now();for(const [k,x] of Object.entries(S.vals)){const act=now-x.lastAt<20000;if(x.act&&!act){logAdd('health',`Validator ${short2(k)} went silent`)}if(!x.act&&act&&x.seen>1)logAdd('health',`Validator ${short2(k)} is validating again`);x.act=act}}
+const short2=k=>k.length>14?k.slice(0,7)+'…'+k.slice(-5):k;
+function onVal(j){const k=j.validation_public_key||j.master_key;if(!k)return;const x=S.vals[k]||(S.vals[k]={seen:0,first:Date.now(),agree:0,act:true});x.seen++;x.last=+j.ledger_index;x.lastAt=Date.now();x.hash=j.ledger_hash;const h=S.valHash[x.last];if(h&&h===j.ledger_hash)x.agree++;else if(h)x.dis=(x.dis||0)+1;if(S.tab===5&&!S.vt){S.vt=setTimeout(()=>{S.vt=0;if(S.tab===5)paint()},1500)}}
+function paintLog(){const e=$('#logl');if(e)e.innerHTML=logHtml()}
+function logHtml(){const q=($('#lgq')&&$('#lgq').value||'').toLowerCase();const L=S.log.filter(x=>!S.lf[x.kind]&&(!q||(x.msg+x.kind).toLowerCase().includes(q))).slice(0,200);return L.length?L.map(x=>`<div ${x.h?`onclick="showTx('${x.h}')"`:''}><span class="chip ${/fail|health/.test(x.kind)?'w':/token|amm|dex/.test(x.kind)?'b':'v'}">${esc(LOGK[x.kind]||x.kind)}</span><span style="flex:1;word-break:break-word">${esc(x.msg)}</span><span class="m">${new Date(x.at).toLocaleTimeString()}</span></div>`).join(''):'<div class="empty" style="display:block">No events yet. They appear as the network does things.</div>'}
+function togLog(k){S.lf[k]=S.lf[k]?0:1;store.set('luma.scan.lf',JSON.stringify(S.lf));S.log=S.log;const f=$('#logf');if(f)f.innerHTML=logChips();paintLog()}
+const logChips=()=>Object.entries(LOGK).map(([k,n])=>`<span class="chip ${S.lf[k]?'':'on'}" onclick="togLog('${k}')">${esc(n)}</span>`).join('');
+function setWhale(v){S.whale=Math.max(1,+v||1000);store.set('luma.scan.whale',S.whale)}
+function exportLog(){const rows=[['time','kind','event','tx']].concat(S.log.map(x=>[new Date(x.at).toISOString(),x.kind,x.msg,x.h||'']));const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='luma-'+S.net+'-activity-log.csv';a.click()}
+function pLog(){if(!S.ok)return noNode();return `<h2>Activity log</h2><div class="t"><div class="row" style="flex-wrap:wrap"><input id="lgq" placeholder="Filter the log…" oninput="paintLog()" class="grow" style="min-width:10rem"><button class="pill" onclick="exportLog()">Export CSV</button></div><div class="fl" id="logf">${logChips()}</div><div class="row sub" style="margin-bottom:.4rem">Large payment threshold <input type="number" min="1" value="${S.whale}" style="width:7rem" onchange="setWhale(this.value)"> LUMA</div><div class="list lg" id="logl">${logHtml()}</div></div>`}
+/* tokens seen on this network (from real transactions) */
+const natv=a=>!a||a.currency==='XRP'||a.currency==='LUMA'&&!a.issuer;
+function tokSee(a,t,ok,kind){if(!a||typeof a!=='object'||!a.currency||!a.issuer||natv(a))return;if(/^03/.test(a.currency)&&a.currency.length===40)return;const k=a.currency+'|'+a.issuer,x=S.tokens[k]||(S.tokens[k]={cur:a.currency,iss:a.issuer,tx:0,vol:0,holders:new Set(),first:Date.now(),last:0});x.tx++;x.last=Date.now();if(kind==='pay'&&a.value&&(!ok||ok==='tesSUCCESS'))x.vol+=+a.value;if(kind==='trust'&&+a.value&&t.Account)x.holders.add(t.Account)}
+function tokTrack(t,ok){try{const ty=t.TransactionType;if(ty==='TrustSet')tokSee(t.LimitAmount,t,ok,'trust');else if(ty==='Payment'){tokSee(t.Amount,t,ok,'pay');tokSee(t.SendMax,t,ok,'x')}else if(ty==='OfferCreate'){tokSee(t.TakerGets,t,ok,'x');tokSee(t.TakerPays,t,ok,'x')}else if(ty==='AMMCreate'){tokSee(t.Amount,t,ok,'x');tokSee(t.Amount2,t,ok,'x')}}catch{}}
+function tokHtml(){const q=(S.tq||'').trim().toLowerCase();const L=Object.entries(S.tokens).filter(([k,x])=>!q||(tname(x.cur)+' '+x.cur+' '+x.iss+' '+dispL(x.iss)).toLowerCase().includes(q)).sort((a,b)=>b[1].tx-a[1].tx).slice(0,150);return L.length?L.map(([k,x])=>`<div onclick="showToken('${esc(k)}')"><span class="chip v">${esc(tname(x.cur))}</span><span class="a">${esc(short(x.iss))}</span><span class="m">${x.tx} tx · ${x.holders.size} lines${x.vol?' · vol '+esc(fmt(x.vol,2)):''}</span></div>`).join(''):`<div class="empty" style="display:block">${q?'No token matching “'+esc(S.tq)+'” seen yet. Try scanning older ledgers, or paste the issuer address.':'No tokens seen yet. They appear when someone trades, trusts or pays a token.'}</div>`}
+function paintTok(){const e=$('#tkl');if(e)e.innerHTML=tokHtml();const c=$('#tkc');if(c)c.textContent=Object.keys(S.tokens).length}
+function tokQ(v){S.tq=v;paintTok()}
+async function scanOlder(btn){if(!S.ok)return;btn.disabled=true;const top=S.ledgers.length?S.ledgers[S.ledgers.length-1].seq:0;let n=0;for(let k=1;k<=200&&top-k>1;k++){try{const r=await ask({command:'ledger',ledger_index:top-k,transactions:true,expand:true});for(const t of (r.ledger.transactions||[]))tokTrack(t,t.metaData&&t.metaData.TransactionResult);n++;if(k%20===0){btn.textContent='Scanned '+n+' ledgers…';paintTok()}}catch{break}}btn.textContent='Scanned '+n+' older ledgers';paintTok();btn.disabled=false}
+function pTokens(){if(!S.ok)return noNode();return `<h2>Tokens</h2><div class="t"><div class="row" style="flex-wrap:wrap"><input id="tkq" value="${esc(S.tq)}" placeholder="Search a token name or issuer address" oninput="tokQ(this.value)" class="grow" style="min-width:10rem"><button class="pill" onclick="scanOlder(this)">Scan 200 older ledgers</button><button class="pill" onclick="tokOpen()">Open issuer</button></div><div class="sub" style="margin:.6rem 0"><b id="tkc">${Object.keys(S.tokens).length}</b> tokens seen on ${S.net==='main'?'Mainnet':'Testnet'} · discovered from real transactions</div><div class="list lg" id="tkl">${tokHtml()}</div></div>`}
+function tokOpen(){const q=(S.tq||'').trim();try{const a=LumaAddr.normalize(q);showToken('|'+a)}catch{alert('Paste an issuer address (L… / T…) in the box first')}}
+async function showToken(key){const [cur,iss]=key.split('|');const s=sheet(`<h2 style="margin-top:0">${esc(cur?tname(cur):'Issuer')} <span class="sub mono">${esc(short(iss))}</span></h2><div id="tkb" class="sub">loading…</div>`);
+ try{const [ai,gw,ln]=await Promise.all([ask({command:'account_info',account:iss,ledger_index:'validated'}),ask({command:'gateway_balances',account:iss,ledger_index:'validated'}).catch(()=>({})),ask({command:'account_lines',account:iss,ledger_index:'validated',limit:400}).catch(()=>({lines:[]}))]);
+  const obl=gw.obligations||{},mine=Object.entries(obl).filter(([c])=>!cur||c===cur),lines=(ln.lines||[]).filter(l=>!cur||l.currency===cur);const holders=lines.filter(l=>+l.balance<0).map(l=>({a:l.account,b:-l.balance})).sort((a,b)=>b.b-a.b);
+  let price='–',pool='–';if(cur){try{const bo=await ask({command:'book_offers',taker_gets:{currency:cur,issuer:iss},taker_pays:{currency:'XRP'},limit:3});const o=(bo.offers||[])[0];if(o){const g=+o.TakerGets.value,p=+o.TakerPays/1e6;price=fmt(p/g,6)+' LUMA per '+tname(cur)}}catch{}try{const am=await ask({command:'amm_info',asset:{currency:'XRP'},asset2:{currency:cur,issuer:iss}});if(am.amm)pool='Pool '+fmt(+am.amm.amount/1e6,2)+' LUMA / '+fmt(+am.amm.amount2.value,2)+' '+tname(cur)}catch{}}
+  const d=ai.account_data,t=S.tokens[key];
+  s.querySelector('#tkb').outerHTML=`<div class="kv"><span>Issuer</span><b class="mono" style="word-break:break-all">${esc(dispL(iss))}</b></div><div class="kv"><span>Issuer LUMA balance</span><b>${fmt(d.Balance/1e6,4)}</b></div>${mine.map(([c,v])=>`<div class="kv"><span>Total issued (${esc(tname(c))})</span><b>${esc(fmt(v,6))}</b></div>`).join('')}<div class="kv"><span>Holders (trust lines)</span><b>${holders.length||lines.length}${(ln.marker?'+':'')}</b></div><div class="kv"><span>Best price</span><b>${esc(price)}</b></div><div class="kv"><span>AMM</span><b>${esc(pool)}</b></div>${t?`<div class="kv"><span>Seen in</span><b>${t.tx} tx · volume ${esc(fmt(t.vol,2))}</b></div>`:''}<div class="kv"><span>Flags</span><b>${(d.Flags&0x00800000)?'DefaultRipple ':''}${(d.Flags&0x00100000)?'Freeze ':''}${(d.Flags&0x00020000)?'RequireAuth ':''}${d.Domain?'domain '+esc(Buffer2(d.Domain)):''}</b></div>${holders.length?`<div class="k" style="margin-top:1rem">Top holders</div><div class="list">${holders.slice(0,10).map(h=>`<div onclick="document.querySelector('.sheet').remove();lookup('${h.a}')"><span class="a">${esc(short(h.a))}</span><span class="m">${esc(fmt(h.b,4))}</span></div>`).join('')}</div>`:''}<div class="row" style="margin-top:1rem"><button class="p" onclick="document.querySelector('.sheet').remove();lookup('${iss}')">Open issuer account</button></div>`}
+ catch(e){s.querySelector('#tkb').textContent=/actNotFound/i.test(e.message)?'That account does not exist on this network.':e.message}}
+function valHtml(){const now=Date.now(),L=Object.entries(S.vals).sort((a,b)=>b[1].lastAt-a[1].lastAt),act=L.filter(([k,x])=>now-x.lastAt<20000).length;const q=S.info&&S.info.validation_quorum;return `<div class="t"><div class="k">Validators</div><div class="sub" style="margin-bottom:.5rem"><b>${act}</b> active${q?' · quorum '+q:''} · seen from the live validation stream</div>${L.length?`<div class="list">${L.map(([k,x])=>{const a=now-x.lastAt<20000;return `<div><span class="chip ${a?'':'w'}">${a?'active':'silent'}</span><span class="a" title="${esc(k)}">${esc(short2(k))}</span><span class="m">ledger #${fmt(x.last)} · ${x.seen} votes · ${x.agree}${x.dis?'/'+x.dis+' off':' agree'}</span></div>`}).join('')}</div>`:'<div class="sub">Waiting for validations… (the node must forward its validation stream)</div>'}</div>`}
+S.net=store.get('luma.scan.net')||LC.default||(/6106|test/i.test(S.url)?'test':'main');drawSw();go(0);connect();
+</script>
+<script></script></body></html>
