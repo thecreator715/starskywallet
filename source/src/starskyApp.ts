@@ -46,6 +46,7 @@ export interface AccountData {
   address: string; // classic r-address or L-address
   type: 'luma' | 'xrpl';
   xrplLinkedAddress?: string; // Linked XRPL classic address if any
+  feeLock?: boolean; // generated here: 1 LUMA is kept for fees and cannot be sent, swapped or sold
 }
 
 export interface VaultState {
@@ -1010,6 +1011,20 @@ export async function submitTx(tx: any, seed?: string) {
       const nid = (await cl.request({ command: 'server_info' })).result.info.network_id;
       if (nid && nid > 1024) p.NetworkID = nid;
     } catch {}
+  }
+  const lockAcct = VAULT?.data.accounts.find(x => x.address === w.classicAddress && x.feeLock);
+  if (lockAcct) {
+    const nat = (v: any) => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : 0);
+    const out = nat(p.Amount) + nat(p.Amount2) + nat(p.TakerGets) + nat(p.SendMax);
+    if (out > 0) {
+      try {
+        const ai: any = await cl.request({ command: 'account_info', account: w.classicAddress, ledger_index: 'current' });
+        const bal = Number(ai.result.account_data.Balance), own = Number(ai.result.account_data.OwnerCount || 0);
+        if (bal - out < 1e6 + own * reserveInc() * 1e6) throw new Error('LOCK');
+      } catch (e: any) {
+        if (e.message === 'LOCK') return { ok: false, msg: 'Wallets created here keep 1 LUMA for network fees. That 1 LUMA cannot be sent, swapped or sold; add more LUMA to spend.' };
+      }
+    }
   }
   const s = w.sign(p);
   const r = await cl.submitAndWait(s.tx_blob);
@@ -2844,6 +2859,22 @@ export function initWindowBindings() {
     `);
   };
 
+  async function autoFund(address: string) {
+    const c = (window as any).STARSKY_CONFIG || {};
+    const t = getNet().id === 'test' ? 'test' : 'main';
+    let u = String((c[t] || c.main || {}).url || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
+    if (!u) return;
+    try {
+      toast('Activating your wallet from the genesis wallet…');
+      const r = await fetch(u + '/panel/' + t + '/api/fund-new', { method: 'POST', headers: { 'content-type': 'application/json', 'ngrok-skip-browser-warning': '1' }, body: JSON.stringify({ address }) });
+      const j: any = await r.json().catch(() => ({}));
+      if (!r.ok || j.error) throw new Error(j.error || 'status ' + r.status);
+      toast('✓ Wallet activated with ' + (j.amount ?? 1) + ' LUMA for fees');
+      setTimeout(refreshAccount, 4000);
+    } catch (e: any) {
+      toast('Could not auto-activate: ' + e.message, true);
+    }
+  }
   (window as any).confirmAddAcct = async (label: string, seed: string, mode: 'luma' | 'xrpl') => {
     const chk = document.getElementById('savedSeed') as HTMLInputElement | null;
     if (!chk?.checked) {
@@ -2852,13 +2883,14 @@ export function initWindowBindings() {
     }
     const w = xrpl.Wallet.fromSeed(seed);
     const id = Math.random().toString(36).slice(2, 10);
-    VAULT!.data.accounts.push({ id, label, seed: w.seed!, address: w.classicAddress, type: mode });
+    VAULT!.data.accounts.push({ id, label, seed: w.seed!, address: w.classicAddress, type: mode, feeLock: mode === 'luma' ? true : undefined });
     VAULT!.data.active = id;
     await persistVault();
     closeModal();
     renderApp();
     refreshAccount();
     toast('✓ Account added');
+    if (mode === 'luma') autoFund(w.classicAddress);
   };
 
   (window as any).revealWalletSecret = (id: string) => {
