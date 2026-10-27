@@ -13,9 +13,9 @@
     <!-- Site config: the LUMA nodes every visitor connects to. Edit here, commit, and the site redeploys. -->
     <script>
       window.STARSKY_CONFIG = {
-        // Mainnet node, reached through an ngrok tunnel from the node's computer (keep `ngrok http --url=boaster-lapdog-jelly.ngrok-free.dev 6006` running there).
+        // Mainnet public node on Vultr (ws.lumanetwork.org); the ngrok address is only a fallback.
         default: 'main',
-        main: { url: 'wss://boaster-lapdog-jelly.ngrok-free.dev' },
+        main: { url: 'wss://ws.lumanetwork.org', fallbacks: ['wss://boaster-lapdog-jelly.ngrok-free.dev'] },
       };
     </script>
   </head>
