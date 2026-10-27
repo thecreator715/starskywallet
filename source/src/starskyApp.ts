@@ -598,6 +598,14 @@ export function copyText(t: string) {
 let connectGen = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshing = false;
+let retryN = 0;
+function backoff(): number { retryN++; return Math.min(15000, 600 * Math.pow(1.6, retryN - 1)); }
+function nudge() {
+  if (document.hidden) return;
+  if (st.status !== 'online') { retryN = 0; connectNodes(); }
+}
+document.addEventListener('visibilitychange', nudge);
+addEventListener('online', nudge);
 
 export function getCandidates(): string[] {
   const n = getNet();
@@ -612,7 +620,7 @@ export function getCandidates(): string[] {
 }
 
 async function tryNode(url: string, gen: number): Promise<{ client: xrpl.Client; info: any }> {
-  const client = new xrpl.Client(url, { connectionTimeout: 7000 });
+  const client = new xrpl.Client(url, { connectionTimeout: 15000 });
   client.on('disconnected', () => {
     if (connectGen !== gen || st.client !== client) return;
     st.status = 'offline';
@@ -620,7 +628,7 @@ async function tryNode(url: string, gen: number): Promise<{ client: xrpl.Client;
     if (!(st as any).offSince) (st as any).offSince = Date.now();
     renderTop();
     renderBanner();
-    reconnectTimer = setTimeout(connectNodes, 400); // reconnect straight away; the banner only appears if it stays down
+    reconnectTimer = setTimeout(connectNodes, backoff()); // reconnect quickly, slowing down if it keeps failing; the banner only appears if it stays down
   });
   client.on('ledgerClosed', l => {
     if (connectGen !== gen) return;
@@ -744,7 +752,7 @@ export async function connectNodes() {
     st.client = won.client;
     st.url = won.url;
     st.info = won.info;
-    st.status = 'online';
+    st.status = 'online'; retryN = 0;
     (st as any).offSince = 0;
     (st as any).lastLedgerAt = Date.now();
     st.err = '';
@@ -770,7 +778,7 @@ export async function connectNodes() {
   st.err = `Could not connect to any ${getNet().name} WSS nodes.`;
   renderTop();
   renderBanner();
-  reconnectTimer = setTimeout(connectNodes, 5000);
+  reconnectTimer = setTimeout(connectNodes, backoff());
 }
 
 let lastSig = '';
