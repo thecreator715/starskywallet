@@ -49,8 +49,8 @@ export function marketsMount() {
   clearInterval(MK.timer);
   MK.timer = setInterval(() => {
     if (!$('mk')) return clearInterval(MK.timer);
-    if (ctx.online() && !(document.activeElement && (document.activeElement as any).tagName === 'INPUT')) marketsLoad();
-  }, 20000);
+    if (ctx.online() && !(document.activeElement && (document.activeElement as any).tagName === 'INPUT') && !document.hidden) marketsLoad();
+  }, 60000);
   if (keep.mk && $('mk')) ($('mk') as HTMLElement).innerHTML = keep.mk;
   marketsLoad();
 }

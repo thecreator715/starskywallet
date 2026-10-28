@@ -20,7 +20,7 @@ const sameAsset = (x: Asset, y: Asset) => akey(x) === akey(y);
 /** every AMM pool on the ledger */
 /** every token that exists on the ledger (found from the trust lines), with or without a pool: MAGIC, MINT and anything created later */
 export async function discoverTokens(): Promise<Asset[]> {
-  return cached('discover', 60000, async () => {
+  return cached('discover', 600000, async () => {
     const seen = new Map<string, Asset>();
     let marker: any;
     for (let p = 0; p < 30; p++) {

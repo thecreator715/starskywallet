@@ -647,7 +647,7 @@ export function marketShell() {
 export function marketMount() {
   clearInterval(NF.timer);
   clearInterval(NF.rot);
-  NF.timer = setInterval(() => ($('nm') || $('mn') ? refresh(false) : clearInterval(NF.timer)), 12000);
+  NF.timer = setInterval(() => ($('nm') || $('mn') ? (document.hidden || refresh(false)) : clearInterval(NF.timer)), 60000);
   NF.rot = setInterval(() => { if (!$('nm')) return clearInterval(NF.rot); rotateFeat(); }, 60000);
   refresh(false);
 }

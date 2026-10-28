@@ -187,8 +187,8 @@ export function mount() {
   setTimeout(fit, 0);
   DX.timer = setInterval(() => {
     if (!document.getElementById('dx')) return clearInterval(DX.timer);
-    if (ctx.online()) tick();
-  }, 5000);
+    if (ctx.online() && !document.hidden) tick();
+  }, 8000);
   renderAll();
   load();
 }

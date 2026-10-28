@@ -142,8 +142,8 @@ export function networkMount() {
   clearInterval(NW.timer);
   NW.timer = setInterval(() => {
     if (!$('nw')) return clearInterval(NW.timer);
-    if (ctx.online()) networkLoad(true);
-  }, 6000);
+    if (ctx.online() && !document.hidden) networkLoad(true);
+  }, 15000);
   const e = $('nw') as any;
   if (e && NW.keepHtml) {
     e.innerHTML = NW.keepHtml;
