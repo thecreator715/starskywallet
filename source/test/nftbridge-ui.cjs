@@ -54,7 +54,7 @@ async function userSend(rp, wallet, tx, netId) { const i = await rp('account_inf
   check('the activity list shows an Accept button', /Accept the copy/.test(await txt('br_nft')));
   await pg.evaluate(o => window.br.nbAccept(o), item.lumaOffer); await pg.waitForTimeout(6000); console.log('ACCEPT MSG:', await txt('nb_msg'), '| offer', item.lumaOffer);
   check('Alice holds the wrapped NFT after accepting in the browser', ((await lr('account_nfts', { account: aliceR })).account_nfts || []).some(n => n.NFTokenID === item.lumaId));
-  await pg.evaluate(() => window.goTab('nfts')); await pg.waitForTimeout(7000);
+  await pg.evaluate(() => window.goTab('nfts')); for (let i = 0; i < 20; i++) { await pg.waitForTimeout(2000); if (await pg.evaluate(() => !!document.querySelector('#mn_owned .nfcard'))) break; } await pg.waitForTimeout(1500);
   const bar = await pg.evaluate(() => (document.getElementById('xnw_bar') || { innerText: '' }).innerText); check('My NFTs shows the worth line and tag controls from the NFT toolkit', /Worth about/.test(bar), bar.slice(0, 200));
   const tagLink = await pg.evaluate(() => !!document.querySelector('#mn_owned .xnw_b'));  check('each NFT card has its toolkit badges row with a tag link', tagLink, (await pg.evaluate(() => (document.getElementById('mn_owned') || { innerHTML: 'none' }).innerHTML)).slice(0, 500));
   await pg.evaluate(() => { const c = document.querySelector('#mn_owned .nfcard'); if (c) c.click(); }); await pg.waitForTimeout(4000);
