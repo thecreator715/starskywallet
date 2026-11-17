@@ -56,9 +56,10 @@ async function userSend(rp, wallet, tx, netId) { const i = await rp('account_inf
   check('Alice holds the wrapped NFT after accepting in the browser', ((await lr('account_nfts', { account: aliceR })).account_nfts || []).some(n => n.NFTokenID === item.lumaId));
   await pg.evaluate(() => window.goTab('nfts')); await pg.waitForTimeout(7000);
   const bar = await pg.evaluate(() => (document.getElementById('xnw_bar') || { innerText: '' }).innerText); check('My NFTs shows the worth line and tag controls from the NFT toolkit', /Worth about/.test(bar), bar.slice(0, 200));
-  const tagLink = await pg.evaluate(() => !!document.querySelector('#mn_owned .xnw_b'));  check('each NFT card has its toolkit badges row with a tag link', tagLink);
+  const tagLink = await pg.evaluate(() => !!document.querySelector('#mn_owned .xnw_b'));  check('each NFT card has its toolkit badges row with a tag link', tagLink, (await pg.evaluate(() => (document.getElementById('mn_owned') || { innerHTML: 'none' }).innerHTML)).slice(0, 500));
   await pg.evaluate(() => { const c = document.querySelector('#mn_owned .nfcard'); if (c) c.click(); }); await pg.waitForTimeout(4000);
   const more = await pg.evaluate(() => (document.getElementById('xnd') || { innerText: '' }).innerText); check('the NFT page shows More about this NFT with history', /More about this NFT/.test(more) && /History/.test(more), more.slice(0, 300));
+  await pg.evaluate(() => window.goTab('bridge')); await pg.waitForTimeout(4000); await pg.evaluate(() => window.br.nbLoad()); await pg.waitForTimeout(3000);
   await pg.evaluate(() => window.br.nbLoad()); await pg.waitForTimeout(3500); const lt = await txt('br_nft'); check('wrapped NFT shows in the LUMA → XRPL list with its name', /browser star/i.test(lt) && /Send back to XRPL/.test(lt), lt.slice(0, 400));
   await pg.evaluate(id => window.br.nbSend('out', id), item.lumaId); await pg.waitForTimeout(3000);
   let back = null; for (let i = 0; i < 40 && !(back && back.state === 'done'); i++) { await sleep(1500); back = ((await call('/api/nftbridge/overview')).items || []).find(x => x.dir === 'out'); if (back && back.state === 'failed') break; }
