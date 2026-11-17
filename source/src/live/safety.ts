@@ -212,6 +212,7 @@ export async function card() {
   dev: (v: boolean) => SV('starsky.x.dev', v),
 };
 let payShown = false;
+export const resetPay = () => { payShown = false; };
 function showPayRequest() {
   if (payShown) return; const r = pendingPay(); if (!r || !ctx.account()) return; payShown = true; history.replaceState(null, '', location.pathname + location.search);
   const dest = ctx.toClassic(r.to), amt = r.amount ? `${esc(r.amount)} ${esc(r.cur || ctx.native())}` : '';

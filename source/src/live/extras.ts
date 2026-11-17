@@ -5,6 +5,7 @@ import { esc, fmt, short, hexName } from './util.ts';
 import * as M from './market.ts';
 import * as NL from './nodelink.ts';
 import * as SF from './safety.ts';
+import * as More from './more.ts';
 
 const PK = 'starsky.x.prefs';
 export interface Prefs {
@@ -245,6 +246,7 @@ export function afterRender(tab: string, h: HomeCtx) {
   notice();
   try { NL.onRender(tab); } catch {}
   try { SF.onRender(tab); } catch {}
+  try { More.onRender(tab); } catch {}
   if (tab === 'markets') { const v = $('view'); if (v && !$('xalerts')) { const c = document.createElement('div'); c.id = 'xalerts'; c.className = 'card'; c.style.marginTop = '1rem'; v.appendChild(c); } alertsPaint(); startAlerts(); }
   if (tab === 'network') { nodeHealth(); healthT = setInterval(() => { if (!$('xhealth')) { clearInterval(healthT); healthT = 0; return; } nodeHealth(); }, 10000); }
 }

@@ -24,6 +24,7 @@ import { xclient } from './live/bridge.ts';
 import * as Extras from './live/extras.ts';
 import * as NL from './live/nodelink.ts';
 import * as SF from './live/safety.ts';
+import * as More from './live/more.ts';
 
 // Types
 export interface NetworkDef {
@@ -1007,6 +1008,7 @@ export async function submitTx(tx: any, seed?: string) {
   const a = activeAccount();
   if (!st.client || (!a && !seed)) throw new Error('No active account or connection');
 
+  { const big = await More.largeGuard({ ...tx, Account: tx.Account || (seed ? '' : a?.address) }); if (big) return { ok: false, msg: big }; }
   { const stop = await SF.preflight({ ...tx, Account: tx.Account || (seed ? '' : a?.address) }); if (stop) return { ok: false, msg: stop }; }
   const dup = NL.guard({ ...tx, Account: tx.Account || (seed ? '' : a?.address) });
   if (dup) return { ok: false, msg: dup };
@@ -2369,6 +2371,7 @@ export function initWindowBindings() {
     closeModal: () => closeModal(),
     showL: (r: string) => { try { return LumaAddr.toL(r); } catch { return r; } },
   });
+  (window as any).xmImport = (rows: Array<{ name: string; addr: string }>) => { let n = 0; for (const r of rows) if (!CFG.book.some(b => b.addr === r.addr)) { CFG.book.push(r); n++; } if (n) { saveCfg(); renderApp(); } };
   (window as any).goTab = (t: AppState['tab']) => {
     st.tab = t;
     renderApp();
