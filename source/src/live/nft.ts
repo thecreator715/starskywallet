@@ -831,7 +831,7 @@ export function myShell() {
       <div class="row" style="gap:.5rem"><button class="pri acc" onclick="window.nm.mint()">+ Mint NFT / collection</button><button onclick="window.goTab('nftmarket')">Open marketplace</button><button class="ghost" onclick="window.nm.refresh()">Refresh</button></div></div></div>
     <div id="mn_stats" class="pgrid nwk"></div>
     <div class="nwh">Claims &amp; offers for you</div><div class="card nwscroll" id="mn_claims" style="max-height:20rem"></div>
-    <div class="nwh">Owned</div><div id="mn_owned" class="nf4 many"></div>
+    <div class="nwh">Owned</div><div id="mn_bulk"></div><div id="mn_owned" class="nf4 many"></div>
     <div class="nwh">Your listings and offers</div><div class="card nwscroll" id="mn_offers" style="max-height:20rem"></div>
     <div class="nwh">History</div><div class="card nwscroll" id="mn_hist" style="max-height:26rem"></div></div>`;
 }
@@ -860,7 +860,7 @@ function paintMine() {
       ? `<table class="dxt"><thead><tr><th>Type</th><th>NFT</th><th class="r">Amount</th><th>From</th><th></th></tr></thead><tbody>${claims.map(o => { const it = item(o.nft); return `<tr><td><span class="chip ${o.sell ? '' : 'b'}">${o.sell ? (o.amt.v === 0 ? 'Transfer to you' : 'Sale offer for you') : 'Buy offer on yours'}</span></td><td>${it ? `<a class="who" href="#" onclick="window.nm.open('${it.id}');return false">${esc(nameOf(it))}</a>` : esc(short(o.nft, 6, 4))}</td><td class="r">${esc(priceTxt(o.amt))}</td><td class="mono mut">${esc(sh(o.owner))}</td><td class="r"><button class="sm pri acc" onclick="window.nm.accept('${o.id}',${o.sell},this)">${o.sell ? (o.amt.v === 0 ? 'Claim' : 'Buy') : 'Accept offer'}</button></td></tr>`; }).join('')}</tbody></table>`
       : '<div class="mut" style="padding:.8rem">Nothing waiting for you.</div>'
   );
-  setHtml('mn_owned', mine.length ? mine.map(i => { const o = listingOf(i.id); const mo = myOffers.find(x => x.sell && x.nft === i.id); return `<div class="nfcard" onclick="window.nm.open('${i.id}')">${img(i)}<div class="nfb"><b>${esc(nameOf(i))}</b><small class="mut">${esc(collName(NF.items.filter((x: Item) => collKey(x) === collKey(i))))}</small><div class="nfp">${priceCell(mo || o)}</div><div class="row" style="gap:.3rem;margin-top:.4rem" onclick="event.stopPropagation()">${mo ? `<button class="sm" onclick="window.nm.cancel('${mo.id}',this)">Unlist</button>` : `<button class="sm pri" onclick="window.nm.list('${i.id}')">List</button>`}<button class="sm" onclick="window.nm.send('${i.id}')">Send</button></div></div></div>`; }).join('') : '<div class="card mut" style="grid-column:1/-1;padding:1rem">You do not own any NFTs yet. Mint one, or buy from the marketplace.</div>');
+  setHtml('mn_owned', mine.length ? mine.map(i => { const o = listingOf(i.id); const mo = myOffers.find(x => x.sell && x.nft === i.id); return `<div class="nfcard" onclick="window.nm.${NF.selMode ? 'pick' : 'open'}('${i.id}')" style="${NF.sel && NF.sel.has(i.id) ? 'outline:2px solid #00ff8c;outline-offset:2px;' : ''}">${img(i)}<div class="nfb"><b>${esc(nameOf(i))}</b><small class="mut">${esc(collName(NF.items.filter((x: Item) => collKey(x) === collKey(i))))}</small><div class="nfp">${priceCell(mo || o)}</div><div class="row" style="gap:.3rem;margin-top:.4rem" onclick="event.stopPropagation()">${mo ? `<button class="sm" onclick="window.nm.cancel('${mo.id}',this)">Unlist</button>` : `<button class="sm pri" onclick="window.nm.list('${i.id}')">List</button>`}<button class="sm" onclick="window.nm.send('${i.id}')">Send</button></div></div></div>`; }).join('') : '<div class="card mut" style="grid-column:1/-1;padding:1rem">You do not own any NFTs yet. Mint one, or buy from the marketplace.</div>');
   setHtml(
     'mn_offers',
     myOffers.length
@@ -868,6 +868,10 @@ function paintMine() {
       : '<div class="mut" style="padding:.8rem">No open listings or offers.</div>'
   );
   setHtml('mn_hist', actTable(NF.hist.slice(0, 250)));
+  const sel: Set<string> = NF.sel || (NF.sel = new Set()); for (const id of [...sel]) if (!mineIds.has(id)) sel.delete(id);
+  setHtml('mn_bulk', mine.length < 1 ? '' : NF.selMode
+    ? `<div class="card row" style="gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.6rem"><b>${sel.size} selected</b><button class="sm" onclick="window.nm.pickAll()">Select all ${mine.length}</button><button class="sm ghost" onclick="window.nm.pickNone()">Clear</button><span class="grow"></span><button class="sm pri" ${sel.size ? '' : 'disabled'} onclick="window.nm.bulk('list')">List selected</button><button class="sm" ${sel.size ? '' : 'disabled'} onclick="window.nm.bulk('send')">Send selected</button><button class="sm dng" ${sel.size ? '' : 'disabled'} onclick="window.nm.bulk('burn')">Burn selected</button><button class="sm ghost" onclick="window.nm.selMode(false)">Done</button></div>`
+    : `<div class="row" style="justify-content:flex-end;margin-bottom:.4rem"><button class="sm" onclick="window.nm.selMode(true)">Select several</button></div>`);
 }
 
 /* ------------------------------ detail + actions ------------------------------ */
@@ -1278,6 +1282,34 @@ export const nmApi = {
   items(k: string) { NF.coll = k; NF.tab = 'items'; NF.page = 0; paintMarket(); },
   refresh() { NF.histAt = 0; refresh(true); },
   open: (id: string) => detail(id),
+  selMode(on: boolean) { NF.selMode = on; if (!on) NF.sel = new Set(); paintMine(); },
+  pick(id: string) { const s: Set<string> = NF.sel || (NF.sel = new Set()); s.has(id) ? s.delete(id) : s.add(id); paintMine(); },
+  pickAll() { NF.sel = new Set((NF.items as Item[]).filter(i => i.owner === me()).map(i => i.id)); paintMine(); },
+  pickNone() { NF.sel = new Set(); paintMine(); },
+  bulk(kind: string) {
+    const n = (NF.sel as Set<string>)?.size || 0; if (!n) return;
+    if (kind === 'list') ctx.modal(`<h2>List ${n} NFTs</h2><p class="mut">Every selected NFT is listed at the same price. Creator royalties are taken automatically on each sale.</p>${priceInput('bl_p')}<div class="row" style="margin-top:1rem"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" onclick="window.nm.doBulk('list',this)">List ${n}</button></div>`);
+    else if (kind === 'send') ctx.modal(`<h2>Send ${n} NFTs</h2><p class="mut">Creates a free transfer offer for each one that only the receiver can accept.</p><input id="bl_to" placeholder="Receiver address (L… / T… / r…)"><div class="row" style="margin-top:1rem"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri grow" onclick="window.nm.doBulk('send',this)">Send ${n}</button></div>`);
+    else if (confirm(`Burn ${n} NFTs forever? This cannot be undone.`) && confirm(`Really burn ${n} NFTs? Last chance.`)) this.doBulk('burn', null as any);
+  },
+  async doBulk(kind: string, btn: HTMLButtonElement | null) {
+    const ids = [...((NF.sel as Set<string>) || [])]; if (!ids.length) return;
+    let base: any = {}, to = '';
+    try {
+      if (kind === 'list') base = { Amount: readAmt('bl_p') };
+      if (kind === 'send') { to = ctx.toClassic((($('bl_to') as HTMLInputElement).value || '').trim()); }
+    } catch (e: any) { return ctx.toast(e.message || 'Check the inputs', true); }
+    if (btn) btn.disabled = true;
+    let ok = 0, fail = '';
+    for (const id of ids) {
+      const t: any = kind === 'burn' ? { TransactionType: 'NFTokenBurn', NFTokenID: id } : kind === 'list' ? { TransactionType: 'NFTokenCreateOffer', NFTokenID: id, Amount: base.Amount, Flags: 1 } : { TransactionType: 'NFTokenCreateOffer', NFTokenID: id, Amount: '0', Destination: to, Flags: 1 };
+      const r = await ctx.submit({ ...t, Account: me() });
+      if (r.ok) ok++; else { fail = r.msg || 'rejected'; break; }
+      ctx.toast(`${ok} of ${ids.length} done…`);
+    }
+    ctx.closeModal(); ctx.toast(fail ? `${ok} done, stopped: ${fail}` : `✓ ${ok} NFTs ${kind === 'list' ? 'listed' : kind === 'send' ? 'offered for transfer' : 'burned'}`, !!fail);
+    NF.sel = new Set(); NF.loadedAt = 0; NF.histAt = 0; await refresh(true);
+  },
   async buy(offerId: string, btn: HTMLButtonElement) {
     const o = (NF.offers as Offer[]).find(x => x.id === offerId);
     if (!o) return ctx.toast('That listing is gone.', true);

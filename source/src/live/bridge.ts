@@ -378,6 +378,7 @@ async function estimateNow() {
   if (amt > 0) {
     const p = price(ln.asset, amt);
     row('Fee', `${fmt(p.fee, 6)} ${esc(from)}${withUsd(ln.asset, p.fee)}`);
+    row('Network cost', `<span class="mut">about ${out ? '0.00001 ' + esc(ctx.native()) + ' on LUMA' : '0.00001 XRP on XRPL'} for the transaction itself; the bridge fee above covers the other side</span>`);
     row('You send', `${fmt(amt, 6)} ${esc(from)}${withUsd(ln.asset, amt)}`); row('You receive about', `<b>${fmt(p.net, 6)} ${esc(to)}</b>${withUsd(ln.asset, p.net)}`); if (pxOf(ln.asset) == null) row('Dollar value', '<span class="mut">no market price yet for ' + esc(ln.asset === 'USD' ? 'USD' : ln.xrpl) + ': it moves 1:1 minus the fee, same amount on both sides</span>'); else row('Value kept', `<span class="mut">${fUsd(usdOf(ln.asset, p.net))} of ${fUsd(usdOf(ln.asset, amt))} (the fee is the difference)</span>`);
     row('Left in your wallet', `${fmt(Math.max(0, have - amt), 6)} ${esc(from)}${withUsd(ln.asset, Math.max(0, have - amt))}`);
     if (amt > have) problems.push(`You only have ${fmt(have, 6)} ${from}.`);

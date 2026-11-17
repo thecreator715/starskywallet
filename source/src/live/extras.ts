@@ -1,7 +1,8 @@
 // Starsky extras: preferences, send-safety checks, home attention strip + checklist, theme/large text, hide balances,
 // keyboard shortcuts, installable-app manifest, node health card, pending-transfer memory. Everything is local to this browser.
 import { ctx } from './ctx.ts';
-import { esc, fmt, short } from './util.ts';
+import { esc, fmt, short, hexName } from './util.ts';
+import * as M from './market.ts';
 
 const PK = 'starsky.x.prefs';
 export interface Prefs {
@@ -176,11 +177,71 @@ export interface Pending { srcId: string; destNet: 'xrpl' | 'luma'; dest: string
 export const pendingGet = (): Pending | null => { try { const p = JSON.parse(localStorage.getItem(PB) || 'null'); return p && Date.now() - p.t < 30 * 60000 ? p : null; } catch { return null; } };
 export const pendingSet = (p: Pending | null) => { try { p ? localStorage.setItem(PB, JSON.stringify(p)) : localStorage.removeItem(PB); } catch {} };
 
+// ---------- price alerts (Markets page) ----------
+interface Alert { key: string; label: string; dir: 'above' | 'below'; price: number; unit: 'native' | 'usd'; at: number; }
+const AK = () => 'starsky.x.alerts.' + ctx.netKey();
+const alerts = (): Alert[] => { try { return JSON.parse(localStorage.getItem(AK()) || '[]'); } catch { return []; } };
+const saveAlerts = (a: Alert[]) => { try { localStorage.setItem(AK(), JSON.stringify(a)); } catch {} };
+let alertT: any = 0, lastSnap: M.Snap | null = null;
+const priceOf = (s: M.Snap, a: Alert): number | null => { const n = a.key === 'native' ? 1 : s.px.get(a.key); if (n == null) return null; return a.unit === 'usd' ? (s.usdPerNative == null ? null : n * s.usdPerNative) : n; };
+async function checkAlerts() {
+  const list = alerts(); if (!list.length || !ctx.online()) return;
+  try {
+    const s = await M.snapshot(); lastSnap = s; const keep: Alert[] = [];
+    for (const a of list) {
+      const p = priceOf(s, a);
+      if (p != null && (a.dir === 'above' ? p >= a.price : p <= a.price)) { const t = `${a.label} is ${a.dir === 'above' ? 'above' : 'below'} ${fmt(a.price, 6)} ${a.unit === 'usd' ? 'USD' : ctx.native()} (now ${fmt(p, 6)})`; ctx.toast('🔔 ' + t); notifyArrival('Price alert', t); }
+      else keep.push(a);
+    }
+    if (keep.length !== list.length) { saveAlerts(keep); if ($('xalerts')) alertsPaint(); }
+  } catch {}
+}
+async function alertsPaint() {
+  const e = $('xalerts'); if (!e) return;
+  const list = alerts();
+  if (!lastSnap) { try { lastSnap = await M.snapshot(); } catch {} }
+  const opts: { k: string; l: string }[] = [{ k: 'native', l: ctx.native() }];
+  if (lastSnap) for (const k of lastSnap.px.keys()) { if (k === 'native') continue; const [c] = k.split('|'); opts.push({ k, l: hexName(c) }); }
+  e.innerHTML = `<div class="k">Price alerts</div>
+    <div class="row" style="gap:.5rem;flex-wrap:wrap;align-items:center"><select id="xa_k">${opts.map(o => `<option value="${esc(o.k)}">${esc(o.l)}</option>`).join('')}</select>
+    <select id="xa_d"><option value="above">goes above</option><option value="below">falls below</option></select>
+    <input id="xa_p" inputmode="decimal" placeholder="price" style="width:9rem"><select id="xa_u"><option value="native">${esc(ctx.native())}</option><option value="usd">USD</option></select>
+    <button class="sm pri" onclick="window.xt.addAlert()">Add alert</button></div>
+    ${list.length ? `<table class="dxt" style="margin-top:.6rem"><tbody>${list.map((a, i) => { const p = lastSnap ? priceOf(lastSnap, a) : null; return `<tr><td><b>${esc(a.label)}</b> ${a.dir === 'above' ? '≥' : '≤'} ${fmt(a.price, 6)} ${a.unit === 'usd' ? 'USD' : esc(ctx.native())}</td><td class="mut">now ${p != null ? fmt(p, 6) : '–'}</td><td class="r"><button class="sm ghost" onclick="window.xt.delAlert(${i})">✕</button></td></tr>`; }).join('')}</tbody></table>` : '<div class="mut" style="margin-top:.5rem;font-size:.84rem">No alerts. Starsky checks the pool prices once a minute while this page is open and tells you when a price crosses.</div>'}`;
+}
+(xt as any).addAlert = () => {
+  const k = ($('xa_k') as HTMLSelectElement).value, d = ($('xa_d') as HTMLSelectElement).value as any, p = parseFloat(($('xa_p') as HTMLInputElement).value), u = ($('xa_u') as HTMLSelectElement).value as any;
+  if (!(p > 0)) return ctx.toast('Enter a price above 0', true);
+  const label = k === 'native' ? ctx.native() : hexName(k.split('|')[0]);
+  saveAlerts([...alerts(), { key: k, label, dir: d, price: p, unit: u, at: Date.now() }]); alertsPaint(); startAlerts();
+  const cur = lastSnap ? priceOf(lastSnap, { key: k, label, dir: d, price: p, unit: u, at: 0 }) : null;
+  if (cur != null && (d === 'above' ? cur >= p : cur <= p)) ctx.toast('That price is already crossed: the alert fires on the next check');
+};
+(xt as any).delAlert = (i: number) => { const l = alerts(); l.splice(i, 1); saveAlerts(l); alertsPaint(); };
+function startAlerts() { if (alertT) return; alertT = setInterval(checkAlerts, 60000); }
+
+// ---------- operator notice banner (notice.json beside the app) ----------
+async function notice() {
+  try {
+    const r = await fetch('./notice.json?t=' + Math.floor(Date.now() / 60000), { cache: 'no-store' }); if (!r.ok) return;
+    const j = await r.json(); if (!j || !j.text || (j.until && Date.parse(j.until) < Date.now())) { $('xnotice')?.remove(); return; }
+    if (P.dismissed['n:' + (j.id || j.text)]) return;
+    let b = $('xnotice');
+    const view = $('view'); if (!view) return;
+    if (!b) { b = document.createElement('div'); b.id = 'xnotice'; view.insertBefore(b, view.firstChild); }
+    const col = j.level === 'bad' ? 'var(--crit)' : j.level === 'ok' ? 'var(--ok)' : 'var(--warn)';
+    b.innerHTML = `<div class="card" style="border-color:${col};margin-bottom:.8rem"><div class="row" style="align-items:center;gap:.6rem"><span style="color:${col};font-size:1.1rem">●</span><span class="grow">${esc(String(j.text))}</span><button class="sm ghost" onclick="window.xt.dismissNotice('${esc(String(j.id || j.text)).replace(/'/g, '')}')">✕</button></div></div>`;
+  } catch {}
+}
+(xt as any).dismissNotice = (id: string) => { P.dismissed['n:' + id] = Date.now(); save(); $('xnotice')?.remove(); };
+
 // ---------- per-render hook ----------
 export function afterRender(tab: string, h: HomeCtx) {
   applyPrefs();
   clearInterval(healthT); healthT = 0;
   if (tab === 'home') homeStrip(h);
+  notice();
+  if (tab === 'markets') { const v = $('view'); if (v && !$('xalerts')) { const c = document.createElement('div'); c.id = 'xalerts'; c.className = 'card'; c.style.marginTop = '1rem'; v.appendChild(c); } alertsPaint(); startAlerts(); }
   if (tab === 'network') { nodeHealth(); healthT = setInterval(() => { if (!$('xhealth')) { clearInterval(healthT); healthT = 0; return; } nodeHealth(); }, 10000); }
 }
-export function boot() { applyPrefs(); installManifest(); shortcuts(); (window as any).xt = xt; }
+export function boot() { applyPrefs(); installManifest(); shortcuts(); (window as any).xt = xt; if (alerts().length) startAlerts(); }

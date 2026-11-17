@@ -117,6 +117,8 @@ function listHtml(allRows: Row[], un: number | null) {
     ${tile('Your pool value', un != null ? usd(mineN * un) : fmt(mineN, 2) + ' ' + esc(nat), fmt(mineN, 2) + ' ' + esc(nat))}</div>
   <div class="tile c12"><div style="overflow-x:auto"><table class="dxt"><thead><tr><th>Pool</th><th class="r">Reserve 1</th><th class="r">Reserve 2</th><th class="r">Price</th><th class="r">Reverse price</th><th class="r">Value (24h)</th><th class="r">Fee</th><th class="r">Your share</th><th class="r">Actions</th></tr></thead><tbody>${body || '<tr><td colspan="9" class="mut" style="padding:1rem">No pools match.</td></tr>'}</tbody></table></div><div class="mut" style="font-size:.74rem;margin-top:.4rem">Percentages are changes over the last 24 hours. Click a pool for everything about it.</div></div>`;
 }
+const ilOf = (fwdPct: number | null) => { if (fwdPct == null) return null; const k = 1 + fwdPct / 100; return k > 0 ? (2 * Math.sqrt(k)) / (1 + k) - 1 : null; };
+const ilTxt = (c: { fwd: number | null } | undefined) => { const v = ilOf(c ? c.fwd : null); return v == null ? '–' : `<span class="${v < -0.0005 ? 'dn' : ''}">${(v * 100).toFixed(2)}%</span>`; };
 const pctTxt = (v: number | null) => (v == null ? '–' : `<span class="${v >= 0 ? 'up' : 'dn'}">${v >= 0 ? '▲' : '▼'} ${Math.abs(v).toFixed(2)}%</span>`);
 function detailHtml(r: Row, un: number | null) {
   const nat = ctx.native(), A = nm(r.p.a1), B = nm(r.p.a2), a = r.p.a1, b = r.p.a2;
@@ -137,6 +139,7 @@ function detailHtml(r: Row, un: number | null) {
     ${tile(esc(A) + ' reserve', fmt(r.p.r1, 4), (r.ua != null ? usd(r.p.r1 * r.ua) : '') + ' · 24h price ' + pctTxt(c24.a))}
     ${tile(esc(B) + ' reserve', fmt(r.p.r2, 4), (r.ub != null ? usd(r.p.r2 * r.ub) : '') + ' · 24h price ' + pctTxt(c24.b))}
     ${tile('LP supply', fmt(r.lp, 2), 'total LP tokens issued')}
+    ${tile('Impermanent loss', ilTxt(r.ch['24h']), '24h · 7d ' + ilTxt(r.ch['7d']).replace(/<[^>]+>/g, '') + '<br>vs. just holding both assets (before fees earned)')}
     ${tile('Your position', pos ? (un != null ? usd(pos.v * un) : fmt(pos.v, 2) + ' ' + esc(nat)) : 'None', pos ? `${(r.share * 100).toFixed(r.share < 0.0001 ? 6 : 4)}% · ${fmt(r.bal, 4)} LP<br>${fmt(r.p.r1 * r.share, 4)} ${esc(A)} + ${fmt(r.p.r2 * r.share, 4)} ${esc(B)}<br><span class="${dcol(pos.d)}">24h ${pos.d == null ? '–' : un != null ? dsg(pos.d * un, n => usd(n)) + ' / ' + dsg(pos.d, n => fmt(n, 2) + ' ' + nat) : dsg(pos.d, n => fmt(n, 2) + ' ' + nat)}</span>` : 'You hold no LP tokens of this pool')}
   </div>
   <div class="tile c12" style="margin-top:.7rem"><div class="k">Changes</div><div style="overflow-x:auto"><table class="dxt"><thead><tr><th>Window</th><th class="r">${esc(B)} per ${esc(A)}</th><th class="r">${esc(A)} per ${esc(B)}</th><th class="r">${esc(A)} price</th><th class="r">${esc(B)} price</th><th class="r">Pool value</th><th class="r">Value change</th></tr></thead><tbody>${wr}</tbody></table></div><div class="mut" style="font-size:.72rem;margin-top:.3rem">Token price changes are in dollars when a dollar token exists, otherwise in ${esc(nat)}. Your 24h profit or loss is your share of the pool value change at today's LP balance.</div></div>

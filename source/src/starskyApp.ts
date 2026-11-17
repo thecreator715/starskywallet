@@ -47,6 +47,7 @@ export interface AccountData {
   address: string; // classic r-address or L-address
   type: 'luma' | 'xrpl';
   xrplLinkedAddress?: string; // Linked XRPL classic address if any
+  color?: string; // optional colour tag shown next to the name
   feeLock?: boolean; // generated here: 1 LUMA is kept for fees and cannot be sent, swapped or sold
 }
 
@@ -1689,12 +1690,14 @@ export function renderApp() {
                 x => `
               <div class="row">
                 <div class="grow">
-                  <b>${esc(x.label)}</b>
+                  ${x.color ? `<span style="display:inline-block;width:.7rem;height:.7rem;border-radius:50%;background:${esc(x.color)};margin-right:.3rem"></span>` : ''}<b>${esc(x.label)}</b>
                   ${a && x.id === a.id ? ' <span class="ok" style="font-size:.75rem">● Active</span>' : ''}
                   <div class="mono mut" style="font-size:.72rem;word-break:break-all">${esc(showAddr(x.address))}</div>
                   ${x.xrplLinkedAddress ? `<div class="mut" style="font-size:.7rem">Linked XRPL: ${esc(x.xrplLinkedAddress)}</div>` : ''}
                 </div>
                 <button class="sm" onclick="window.switchAcct('${x.id}')">Use</button>
+                <button class="sm ghost" onclick="window.renameAcct('${x.id}')" title="Rename">✎</button>
+                <button class="sm ghost" onclick="window.colorAcct('${x.id}')" title="Colour tag">●</button>
                 <button class="sm ghost" onclick="window.revealSeed('${x.id}')">Seed</button>
                 <button class="sm ghost" onclick="window.removeAcct('${x.id}')">✕</button>
               </div>
@@ -3079,6 +3082,18 @@ export function initWindowBindings() {
     VAULT!.data.accounts.push({ id, label: `XRPL ${w.classicAddress.slice(0, 5)}…`, seed: w.seed!, address: w.classicAddress, type: 'xrpl' });
     await persistVault(); renderApp();
     return w.classicAddress;
+  };
+
+  (window as any).renameAcct = async (id: string) => {
+    const ac = VAULT?.data.accounts.find(x => x.id === id); if (!ac) return;
+    const v = (prompt('Name for this wallet', ac.label) || '').trim().slice(0, 40);
+    if (!v || v === ac.label) return;
+    ac.label = v; await persistVault(); renderApp(); toast('Renamed');
+  };
+  (window as any).colorAcct = async (id: string) => {
+    const ac = VAULT?.data.accounts.find(x => x.id === id); if (!ac) return;
+    const pal = ['', '#00ff8c', '#4f7cff', '#9b5cff', '#ffb020', '#ff453a', '#ff6bd6'];
+    ac.color = pal[(pal.indexOf(ac.color || '') + 1) % pal.length] || undefined; await persistVault(); renderApp();
   };
 
   (window as any).revealSeed = (id: string) => {

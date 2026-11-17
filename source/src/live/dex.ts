@@ -599,6 +599,13 @@ function renderBook(m: M.Market) {
   const A = cum(asks),
     B = cum(bids);
   const mx = Math.max(1e-18, A.length ? A[A.length - 1].cum : 0, B.length ? B[B.length - 1].cum : 0);
+  const depth = (() => {
+    if (!A.length && !B.length) return '';
+    const W = 400, H = 70, px = [...A.map(r => r.price), ...B.map(r => r.price)], lo = Math.min(...px), hi = Math.max(...px), span = hi - lo || 1;
+    const X = (v: number) => ((v - lo) / span) * W, Y = (c: number) => H - (c / mx) * (H - 4);
+    const path = (rows: any[]) => rows.length ? `M${X(rows[0].price).toFixed(1)},${H} ` + rows.map(r => `L${X(r.price).toFixed(1)},${Y(r.cum).toFixed(1)}`).join(' ') + ` L${X(rows[rows.length - 1].price).toFixed(1)},${H} Z` : '';
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:4.2rem;margin:.2rem 0 .5rem;display:block"><path d="${path(B)}" fill="rgba(0,255,140,.18)" stroke="#00e07e" stroke-width="1" vector-effect="non-scaling-stroke"/><path d="${path(A)}" fill="rgba(255,69,58,.18)" stroke="#ff453a" stroke-width="1" vector-effect="non-scaling-stroke"/></svg>`;
+  })();
   const row = (r: any, cls: string, col: string) => `<tr class="clk" onclick="window.dx.bookPx(${r.price})"><td class="mono ${cls}">${fmt(r.price)}</td><td class="r">${fmt(r.base)}</td><td class="r">${fmt(r.quote)}</td><td class="r mut">${fmt(r.cum)}</td><td class="bkbar"><i style="width:${Math.min(100, (r.cum / mx) * 100)}%;background:${col}"></i></td></tr>`;
   const head = `<thead><tr><th>Price (${esc(q)})</th><th class="r">${esc(bn)}</th><th class="r">${esc(q)}</th><th class="r">Total ${esc(bn)}</th><th style="width:22%">Depth</th></tr></thead>`;
   const lp = livePrice();
@@ -612,6 +619,7 @@ function renderBook(m: M.Market) {
   setHtml(
     'dx_table',
     `<div class="row bktools" style="gap:.4rem;flex-wrap:wrap;align-items:center;margin:.2rem 0 .5rem"><span class="mut">View</span>${[['both', 'Buy + sell'], ['bids', 'Buy only'], ['asks', 'Sell only']].map(([k, l]) => `<button class="sm ${DX.bview === k ? 'pri' : 'ghost'}" onclick="window.dx.bview('${k}')">${l}</button>`).join('')}<span class="mut" style="margin-left:.8rem">Scale</span>${GRP.map((x, i) => `<button class="sm ${DX.bgrp === i ? 'pri' : 'ghost'}" onclick="window.dx.bgrp(${i})">${x ? x + '%' : 'Exact'}</button>`).join('')}<span class="mut" style="margin-left:auto;font-size:.78rem">${b.bids.length} bids · ${b.asks.length} asks · click a row to use its price</span></div>
+    ${depth}
     <div class="dxratio" title="Share of resting buy volume"><span class="up">${imb.toFixed(0)}% bids</span><div class="dxrb"><i style="width:${imb}%"></i></div><span class="dn">${(100 - imb).toFixed(0)}% asks</span></div>
     <table class="dxt bk">${head}<tbody>${showA ? A.slice().reverse().map(r => row(r, 'dn', 'rgba(255,69,58,.22)')).join('') || '<tr><td colspan="5" class="mut">No sell orders.</td></tr>' : ''}
       <tr class="bkmid"><td colspan="5"><b class="mono" style="font-size:1.05rem">${lp != null ? fmt(lp) : mid0 ? fmt(mid0) : '–'}</b> <span class="mut">${esc(q)} · market${m.pool ? ' (AMM pool)' : ''}</span>${sp != null ? ` <span class="mut" style="margin-left:1rem">spread ${fmt(spread)} (${sp.toFixed(2)}%)</span>` : ''}</td></tr>
@@ -639,7 +647,7 @@ function renderOrders(m: M.Market) {
         const price = sell ? p / g : g / p;
         return `<tr><td class="mut">${x.seq}</td><td>${sell ? '<b class="dn">SELL</b>' : '<b class="up">BUY</b>'}</td><td>${fmt(g)} ${esc(nameOfA(x.taker_gets))}</td><td>${fmt(p)} ${esc(nameOfA(x.taker_pays))}</td><td class="r mono">${isFinite(price) ? fmt(price) : '–'}</td><td class="mut">${x.expiration ? new Date((x.expiration + 946684800) * 1000).toLocaleString() : 'never'}</td><td class="r"><button class="sm dng" onclick="window.dx.cancel(${x.seq})">Cancel</button></td></tr>`;
       }).join('') || '<tr><td colspan="7" class="mut" style="padding:1rem">No open orders.</td></tr>'
-    }</tbody></table>`;
+    }</tbody></table>${o.length > 1 ? `<div class="row" style="margin-top:.6rem;justify-content:flex-end"><button class="sm dng" onclick="window.dx.cancelAll(this)">Cancel all ${o.length} orders</button></div>` : ''}`;
   } else if (!H) body = '<div class="mut" style="padding:1rem">Reading your transaction history…</div>';
   else {
     const creates = H.rows.filter(r => r.type === 'OfferCreate' && !r.local);
@@ -1068,6 +1076,14 @@ export const api: any = {
     await loadOrders();
     renderTable();
   },
+  async cancelAll(btn: HTMLButtonElement) {
+    const list = (DX.orders || []) as any[];
+    if (!list.length || !confirm(`Cancel all ${list.length} open orders on this account?`)) return;
+    btn.disabled = true; let ok = 0;
+    for (const x of list) { const r = await ctx.submit({ TransactionType: 'OfferCancel', Account: ctx.account(), OfferSequence: x.seq }); if (r.ok) ok++; else { ctx.toast('Stopped: ' + r.msg, true); break; } }
+    ctx.toast(`✓ ${ok} of ${list.length} orders cancelled`, ok < list.length);
+    await loadOrders(); renderTable();
+  },
   async go(btn: HTMLButtonElement) {
     const m = mkt();
     const msg = $('dx_msg');
@@ -1096,11 +1112,20 @@ export const api: any = {
         const q = await M.quote(m, DX.side, x);
         if (!q) throw new Error('No liquidity for this size.');
         const min = q.out * (1 - DX.slip / 100);
+        if (q.impact > 0.05 && !confirm(`Price impact warning: this ${buy ? 'buy' : 'sell'} moves the price by ${(q.impact * 100).toFixed(1)}%. You will get noticeably less than the quoted market rate. Continue?`)) throw new Error('Cancelled: price impact too high.');
+        else if (q.impact > 0.02 && q.impact <= 0.05) say(`Heads up: price impact ${(q.impact * 100).toFixed(1)}%.`, false);
         tx = { TransactionType: 'OfferCreate', Account: acc, TakerGets: amtTx(pay, x), TakerPays: amtTx(get, min), Flags: 0x00080000 | 0x00020000 };
       } else {
         const p = parseFloat(DX.price);
         if (!(p > 0)) throw new Error('Enter a limit price.');
         const rec = buy ? x / p : x * p;
+        const mk = livePrice();
+        if (mk && mk > 0) {
+          const dev = (p - mk) / mk;
+          if (buy && dev > 0.1 && !DX.post && !confirm(`This BUY limit is ${(dev * 100).toFixed(0)}% ABOVE the market price (${fmt(mk, 8)}), so it fills immediately at a worse price than the market. Continue?`)) throw new Error('Cancelled: limit price above market.');
+          if (!buy && dev < -0.1 && !DX.post && !confirm(`This SELL limit is ${(-dev * 100).toFixed(0)}% BELOW the market price (${fmt(mk, 8)}), so it fills immediately at a worse price than the market. Continue?`)) throw new Error('Cancelled: limit price below market.');
+          if (Math.abs(dev) > 0.5 && !confirm(`The limit price is ${(dev * 100).toFixed(0)}% away from the market price. Is that a typo?`)) throw new Error('Cancelled: check the limit price.');
+        }
         tx = { TransactionType: 'OfferCreate', Account: acc, TakerGets: amtTx(pay, x), TakerPays: amtTx(get, rec), Flags: DX.post ? 0x00010000 : 0 };
       }
       const r = await ctx.submit(tx);
