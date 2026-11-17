@@ -31,6 +31,7 @@ async function userSend(rp, wallet, tx, netId) { const i = await rp('account_inf
   await pg.addInitScript(([v, cfg, bc]) => { if (!localStorage.getItem('starsky.vault')) { localStorage.setItem('starsky.vault', v); localStorage.setItem('starsky.cfg', cfg); localStorage.setItem('starsky.bridge.main', bc); } }, [vault, JSON.stringify({ net: 'main', urls: { main: LWS, test: LWS } }), JSON.stringify(bcfg)]);
   await pg.goto('http://127.0.0.1:4173/'); await pg.fill('#pw', 'testpass123'); await pg.press('#pw', 'Enter'); await pg.waitForTimeout(3500);
   await pg.evaluate(() => window.switchAcct('a1')); await pg.waitForTimeout(1500); await pg.evaluate(() => window.goTab('bridge')); await pg.waitForTimeout(6000);
+  console.log('TOP:', (await pg.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ').slice(0, 500));
   const txt = id => pg.evaluate(i => (document.getElementById(i) || { innerText: '' }).innerText, id);
   const val = await txt('br_val'); check('validator card shows the linked relayer', /LINKED/.test(val), val.slice(0, 900));
   { await pg.evaluate(() => window.brw.start()); await pg.waitForTimeout(400); const w0 = await txt('brwiz');
@@ -51,7 +52,7 @@ async function userSend(rp, wallet, tx, netId) { const i = await rp('account_inf
   check('the browser made the offer and the validator copied + minted it', item && item.state === 'offered', JSON.stringify(item && { s: item.state, e: item.err, ev: item.events.slice(-2) }));
   await pg.evaluate(() => window.br.nbLoad()); await pg.waitForTimeout(3000); await pg.screenshot({ path: __dirname + '/s_nftbridge_offered.png', fullPage: true });
   check('the activity list shows an Accept button', /Accept the copy/.test(await txt('br_nft')));
-  await pg.evaluate(o => window.br.nbAccept(o), item.lumaOffer); await pg.waitForTimeout(4000);
+  await pg.evaluate(o => window.br.nbAccept(o), item.lumaOffer); await pg.waitForTimeout(6000); console.log('ACCEPT MSG:', await txt('nb_msg'), '| offer', item.lumaOffer);
   check('Alice holds the wrapped NFT after accepting in the browser', ((await lr('account_nfts', { account: aliceR })).account_nfts || []).some(n => n.NFTokenID === item.lumaId));
   await pg.evaluate(() => window.br.nbLoad()); await pg.waitForTimeout(3500); const lt = await txt('br_nft'); check('wrapped NFT shows in the LUMA → XRPL list with its name', /browser star/i.test(lt) && /Send back to XRPL/.test(lt), lt.slice(0, 400));
   await pg.evaluate(id => window.br.nbSend('out', id), item.lumaId); await pg.waitForTimeout(3000);
