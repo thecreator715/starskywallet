@@ -5,7 +5,7 @@ import { esc, hexName, NATIVE, amtTx, akey, type Asset } from './util.ts';
 import * as M from './market.ts';
 import * as More from './more.ts';
 
-export interface Hold { key: string; name: string; bal: number; a: Asset }
+export interface Hold { key: string; name: string; bal: number; a: Asset; lp?: boolean }
 export interface Q { out: number; impact: number; src: string }
 export type RowState = 'ok' | 'impact' | 'none' | 'dust';
 export interface Row { key: string; name: string; bal: number; out: number; impact: number; src: string; state: RowState; reason: string; run: boolean }
@@ -17,6 +17,7 @@ export function planConvert(holds: Hold[], quotes: Record<string, Q | null>, imp
     const q = quotes[h.key];
     const base = { key: h.key, name: h.name, bal: h.bal, out: 0, impact: 0, src: '', run: false };
     if (!(h.bal > 0)) return { ...base, state: 'dust' as RowState, reason: 'Nothing to convert.' };
+    if (h.lp) return { ...base, state: 'none' as RowState, reason: 'This is a pool share. Withdraw it from the Pools page instead.' };
     if (!q || !(q.out > 0)) return { ...base, state: 'none' as RowState, reason: 'No route to LUMA or not enough liquidity.' };
     const imp = q.impact * 100, over = imp > impactLimit;
     const st: RowState = over && !override.has(h.key) ? 'impact' : 'ok';
@@ -38,11 +39,12 @@ const num = (n: number, d = 4) => Number(n).toLocaleString('en', { maximumFracti
 
 async function holdings(): Promise<Hold[]> {
   const r: any = await ctx.req('account_lines', { account: ctx.account(), limit: 400 });
-  return ((r && r.lines) || []).filter((l: any) => Number(l.balance) > 0).map((l: any) => ({ key: akey({ c: l.currency, i: l.account }), name: hexName(l.currency), bal: Number(l.balance), a: { c: l.currency, i: l.account } }));
+  return ((r && r.lines) || []).filter((l: any) => Number(l.balance) > 0).map((l: any) => ({ key: akey({ c: l.currency, i: l.account }), name: hexName(l.currency), bal: Number(l.balance), a: { c: l.currency, i: l.account }, lp: !!M.lpPoolOf({ c: l.currency, i: l.account }) }));
 }
 async function quoteAll() {
   CV.quotes = {};
   await Promise.all(CV.holds.map(async (h: Hold) => {
+    if (h.lp) { CV.quotes[h.key] = null; return; }
     try { const q = await M.quote({ id: h.key + '/native', base: h.a, quote: NATIVE, label: h.name, pool: null } as any, 'sell', h.bal); CV.quotes[h.key] = q ? { out: q.out, impact: q.impact, src: q.src } : null; } catch { CV.quotes[h.key] = null; }
   }));
 }

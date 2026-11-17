@@ -13,4 +13,5 @@ await t('unticked tokens are left out of the total', () => { const p = C.planCon
 await t('zero balance is dust, nothing to convert', () => { const p = C.planConvert([h('A', 0)], { A: q(1, 0) }); assert.strictEqual(p.rows[0].state, 'dust'); assert.strictEqual(p.count, 0); });
 await t('minOut applies the slippage and never reaches zero', () => { assert.strictEqual(C.minOut(100, 1), 99); assert(C.minOut(0, 1) > 0); });
 await t('fees count swaps plus removals; typing is required only at or over the threshold', () => { assert.strictEqual(C.feeTotal(3, 0.00001, 3), 0.00006); assert(C.needsTyping(500, 500)); assert(!C.needsTyping(499, 500)); assert(!C.needsTyping(1e9, 0)); });
+await t('pool shares are never converted and say where to go', () => { const p = C.planConvert([{ ...h('LP', 5), lp: true }], { LP: q(9, 0) }); assert.strictEqual(p.count, 0); assert(/Pools page/.test(p.rows[0].reason)); });
 console.log(n + ' passed');
