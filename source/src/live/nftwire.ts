@@ -57,14 +57,15 @@ function enhanceDetail() {
   d.appendChild(el);
 }
 export const xnw = {
+  run() { enhanceMine(); enhanceDetail(); },
   spam(on: boolean) { wr(KS, on); enhanceMine(); }, tag(t: string) { (window as any).__xnwTag = t; enhanceMine(); },
   addTag(id: string) { const t = prompt('Tag for this NFT (for example: keep, sell, art). Leave empty to remove tags.'); if (t == null) return; const m = tagsOf(); wr(KT, t.trim() ? N.tagMap(m, id, t.trim().slice(0, 20), true) : { ...m, [id]: [] }); enhanceMine(); },
   share(id: string) { const it = (NF.items as any[]).find(i => i.id === id), nmx = NF.meta.get(id)?.name || 'NFT'; const o = (NF.offers as any[]).find(x => x.nft === id && x.sell && !x.dest); const t = N.shareText(nmx, o?.amt?.native ? `${o.amt.v} ${ctx.native()}` : null, location.href.split('#')[0] + '#nft=' + id); try { navigator.clipboard.writeText(t); ctx.toast('Copied'); } catch { ctx.toast(t); } void it; },
 };
 let ob: MutationObserver | null = null;
 export function onRender(tab: string) {
-  if (tab !== 'nfts' && tab !== 'nftmarket') return; (window as any).xnw = xnw;
-  if (ob) return; const root = $('view') || document.body;
+  if (tab !== 'nfts' && tab !== 'nftmarket') return; (window as any).xnw = xnw; (window as any).__nftState = NF; (window as any).__nftAcct = () => ctx.account();
+  if (ob) return; const root = document.body;
   ob = new MutationObserver(() => { if (busy) return; try { enhanceMine(); enhanceDetail(); } catch {} });
   ob.observe(root, { childList: true, subtree: true }); try { enhanceMine(); enhanceDetail(); } catch {}
 }

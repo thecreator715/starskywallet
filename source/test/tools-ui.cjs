@@ -24,6 +24,24 @@ let pass = 0; const t = async (n, f) => { try { await f(); pass++; console.log('
   await t('NFT tools card shows the proceeds breakdown, suggested price and a loan limit', async () => { await pg.evaluate(() => goTab('nfts')); await pg.waitForSelector('#xnft', { timeout: 8000 }); await pg.evaluate(() => { document.getElementById('xnft').open = true; }); await pg.waitForTimeout(300); const x = await pg.innerText('#nt_out'); assert(/you receive 95/.test(x), x); assert(/Suggested price/.test(x), x); assert(/most you can borrow is 40/.test(x), x); assert(/nothing can be borrowed yet/.test(x)); });
   await t('NFT tools card also on the marketplace page, no duplicate card', async () => { await pg.evaluate(() => goTab('nftmarket')); await pg.waitForSelector('#xnft', { timeout: 8000 }); assert.strictEqual(await pg.locator('#xnft').count(), 1); });
   await t('Bot page has safety stop fields that save and survive a reload of the page state', async () => { await pg.evaluate(() => goTab('bot')); await pg.waitForSelector('#bt_stoploss', { timeout: 8000 }); await pg.fill('#bt_stoploss', '12'); await pg.dispatchEvent('#bt_stoploss', 'change'); await pg.fill('#bt_stoporders', '5'); await pg.dispatchEvent('#bt_stoporders', 'change'); await pg.waitForTimeout(300); const saved = await pg.evaluate(() => Object.entries(localStorage).filter(([k]) => /^starsky\.bot\./.test(k)).map(([, v]) => v).join('|')); assert(/"stopLoss":12/.test(saved) && /"stopOrders":5/.test(saved), saved); });
+  await t('NFT page wiring: rarity, spam, tags, worth line, More-about section (injected NFTs)', async () => {
+    await pg.evaluate(() => goTab('nfts')); await pg.waitForFunction(() => window.__nftState && document.getElementById('mn_owned'), null, { timeout: 10000 });
+    await pg.evaluate(() => {
+      const NF = window.__nftState, me = window.__nftAcct(), hex = n => n.toString(16).toUpperCase().padStart(64, '0');
+      NF.items = []; NF.meta = new Map(); NF.offers = [];
+      for (let k = 0; k < 6; k++) { const id = hex(k + 1); NF.items.push({ id, owner: me, issuer: 'rIssuer1', taxon: 1, flags: 8, fee: 0, serial: k + 1, uri: '' }); NF.meta.set(id, { name: 'Star ' + k, desc: '', image: '', attrs: [{ k: 'bg', v: k === 0 ? 'gold' : 'blue' }, { k: 'hat', v: k < 2 ? 'cap' : 'none' }], coll: 'Stars', mime: 'image/png' }); }
+      NF.items.push({ id: hex(99), owner: me, issuer: 'rSpam', taxon: 0, flags: 0, fee: 0, serial: 1, uri: '' }); NF.meta.set(hex(99), { name: 'FREE airdrop claim at x.com', desc: '', image: '', attrs: [], coll: 'x', mime: 'image/png' });
+      NF.offers.push({ id: 'O1', nft: hex(2), owner: 'rSeller', sell: true, amt: { native: true, cur: '', issuer: '', v: 12 }, dest: '', exp: 0 });
+      document.getElementById('mn_owned').innerHTML = NF.items.map(i => `<div class="nfcard" onclick="window.nm.open('${i.id}')">${i.id.slice(-2)}</div>`).join('');
+    });
+    await pg.waitForTimeout(800);
+    const o = await pg.evaluate(() => ({ bar: document.getElementById('xnw_bar')?.innerText || '', cards: [...document.querySelectorAll('#mn_owned .nfcard')].map(c => ({ hidden: c.style.display === 'none', t: c.querySelector('.xnw_b')?.innerText || '' })) }));
+    assert(/Worth about 72/.test(o.bar), 'BAR ' + o.bar); assert(/Hide 1 possible spam/.test(o.bar), 'BAR2 ' + o.bar);
+    assert(o.cards.length === 7 && o.cards[6].hidden, 'CARDS ' + JSON.stringify(o.cards)); assert(/Rarity #1/.test(o.cards[0].t), o.cards[0].t); assert(/Rarity #\d/.test(o.cards[3].t) && /\+ tag/.test(o.cards[3].t));
+    await pg.evaluate(() => window.xnw.spam(false)); await pg.waitForTimeout(300); assert(!(await pg.evaluate(() => document.querySelectorAll('#mn_owned .nfcard')[6].style.display === 'none')));
+    await pg.evaluate(() => { document.getElementById('view').insertAdjacentHTML('beforeend', '<div id="ndp">' + '0'.repeat(63) + '2</div>'); }); await pg.waitForTimeout(600);
+    const d = await pg.evaluate(() => document.querySelectorAll('#xnd').length + ' | ' + (document.getElementById('xnd')?.innerHTML || '').slice(0, 700)); assert(/More about this NFT/.test(d) && /Rarity rank/.test(d) && /Collection floor 12/.test(d), d);
+  });
   await t('no uncaught page errors', async () => assert.strictEqual(errs.length, 0, errs.join(' | ')));
   console.log(pass + ' passed'); await br.close(); srv.close(); process.exit(process.exitCode || 0);
 })();
