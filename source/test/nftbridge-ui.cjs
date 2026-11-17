@@ -1,5 +1,5 @@
 // Browser test: Starsky NFT bridge page against the REAL panel (nftbridge-api.js) + simulated chains. usage: node nftbridge-ui.cjs <panelPort> <token> <xrplRpc> <lumaRpc> <xrplWs> <lumaWs> <kuboPort> <webPort>
-const [PORT, TOKEN, XPORT, LPORT, XWS, LWS, KPORT] = process.argv.slice(2); const X = require('xrpl'); const A = require('/tmp/nbui/lumanet/panel/addr'); const { chromium } = require('playwright'); const { webcrypto: C } = require('crypto'); const http = require('http'), crypto = require('crypto');
+const [PORT, TOKEN, XPORT, LPORT, XWS, LWS, KPORT] = process.argv.slice(2); const X = require('xrpl'); const A = require('/tmp/nbui/panel/addr'); const { chromium } = require('playwright'); const { webcrypto: C } = require('crypto'); const http = require('http'), crypto = require('crypto');
 const sleep = ms => new Promise(r => setTimeout(r, ms)), b64 = u => Buffer.from(u).toString('base64');
 let pass = 0, fail = 0; const check = (n, ok, d = '') => { ok ? pass++ : fail++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '  -> ' + String(d).slice(0, 400)}`); };
 const call = async (path, method = 'GET', body) => { const r = await fetch(`http://127.0.0.1:${PORT}${path}`, { method, headers: { 'content-type': 'application/json', 'x-panel-token': TOKEN }, body: body ? JSON.stringify(body) : undefined }); const j = await r.json().catch(() => ({})); return r.ok ? j : { ...j, status: r.status }; };
@@ -26,12 +26,12 @@ async function userSend(rp, wallet, tx, netId) { const i = await rp('account_inf
   const data = { accounts: [{ id: 'a1', label: 'Alice', seed: aliceSeed, address: aliceR, type: 'luma' }, { id: 'x1', label: 'XRPL Main', seed: user.seed, address: user.classicAddress, type: 'xrpl' }] };
   const ct = new Uint8Array(await C.subtle.encrypt({ name: 'AES-GCM', iv }, key, Buffer.from(JSON.stringify(data)))); const vault = JSON.stringify({ v: 1, iter: 250000, salt: b64(salt), iv: b64(iv), ct: b64(ct) });
   const bcfg = { lumaVault: su.cfg.lumaVault ? A.toR(su.cfg.lumaVault) : '', xrplVault: su.cfg.xrplVault, xrplUrl: XWS, xrplIssuer: su.cfg.xrplIssuer, opUrl: `http://127.0.0.1:${PORT}` };
-  const br = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] }); const pg = await br.newPage({ viewport: { width: 1500, height: 1100 } }); const errs = []; pg.on('pageerror', e => errs.push(String(e).slice(0, 300))); pg.on('dialog', d => d.accept());
+  const br = await chromium.launch({ executablePath: process.env.CHROME || undefined, args: ['--no-sandbox'] }); const pg = await br.newPage({ viewport: { width: 1500, height: 1100 } }); const errs = []; pg.on('pageerror', e => errs.push(String(e).slice(0, 300))); pg.on('dialog', d => d.accept());
   await pg.addInitScript(([v, cfg, bc]) => { if (!localStorage.getItem('starsky.vault')) { localStorage.setItem('starsky.vault', v); localStorage.setItem('starsky.cfg', cfg); localStorage.setItem('starsky.bridge.main', bc); } }, [vault, JSON.stringify({ net: 'main', urls: { main: LWS, test: LWS } }), JSON.stringify(bcfg)]);
   await pg.goto('http://127.0.0.1:4173/'); await pg.fill('#pw', 'testpass123'); await pg.press('#pw', 'Enter'); await pg.waitForTimeout(3500);
   await pg.evaluate(() => window.switchAcct('a1')); await pg.waitForTimeout(1500); await pg.evaluate(() => window.goTab('bridge')); await pg.waitForTimeout(6000);
   const txt = id => pg.evaluate(i => (document.getElementById(i) || { innerText: '' }).innerText, id);
-  const val = await txt('br_val'); check('validator card shows the linked relayer', /LINKED/.test(val), val.slice(0, 200));
+  const val = await txt('br_val'); check('validator card shows the linked relayer', /LINKED/.test(val), val.slice(0, 900));
   { await pg.evaluate(() => window.brw.start()); await pg.waitForTimeout(400); const w0 = await txt('brwiz');
     await pg.evaluate(() => { window.brw.set('dir', 'out'); }); await pg.evaluate(() => window.brw.next()); await pg.waitForTimeout(300); const w1 = await txt('brwiz');
     await pg.evaluate(() => { window.brw.amt('5'); }); await pg.evaluate(() => window.brw.next()); await pg.waitForTimeout(300); const w2 = await txt('brwiz');

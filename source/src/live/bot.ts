@@ -2,6 +2,7 @@
 // It runs inside Starsky (while the app is open and unlocked) and signs with the active wallet. Nothing is simulated.
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
+import * as BP from './botplus.ts';
 import { Asset, akey, amtNum, amtTx, esc, fmt, hexName, isNative, pctHtml, short, usd } from './util.ts';
 import { tryReq } from './chain.ts';
 import { fromKey } from './util.ts';
@@ -31,8 +32,11 @@ interface Cfg {
   maxQuote: number;
   lo: number; // only trade while the price is inside [lo, hi] (0 = off)
   hi: number;
+  stopLoss: number; // safety stop: total loss % since start (0 = off, single market only)
+  stopDraw: number; // safety stop: fall % from the best value reached (0 = off)
+  stopOrders: number; // safety stop: most orders/swaps in one run (0 = off)
 }
-const DEF: Cfg = { market: '', mode: 'maker', spread: 0.6, every: 20, minPct: 2, maxPct: 8, bias: 0, ttl: 180, maxOpen: 6, slip: 1, minBase: 0, maxBase: 0, minQuote: 0, maxQuote: 0, lo: 0, hi: 0 };
+const DEF: Cfg = { market: '', mode: 'maker', spread: 0.6, every: 20, minPct: 2, maxPct: 8, bias: 0, ttl: 180, maxOpen: 6, slip: 1, minBase: 0, maxBase: 0, minQuote: 0, maxQuote: 0, lo: 0, hi: 0, stopLoss: 0, stopDraw: 0, stopOrders: 0 };
 export const BT: any = {
   cfg: { ...DEF } as Cfg,
   running: false,
@@ -125,6 +129,13 @@ async function tick() {
     if ((c.lo > 0 && px < c.lo) || (c.hi > 0 && px > c.hi)) {
       blog(`${m.label} at ${fmt(px)} is outside your range ${c.lo || 0} to ${c.hi || '∞'}: waiting`);
       return;
+    }
+    // safety stops (single market only: values in different markets cannot be compared)
+    if (c.market !== ALL && BT.start0 && (c.stopLoss > 0 || c.stopDraw > 0 || c.stopOrders > 0)) {
+      const eq = b.base * px + b.quote;
+      BT.peak = Math.max(BT.peak || 0, eq, BT.start0.v);
+      const why = BP.killReasons({ startEquity: BT.start0.v, equity: eq, peak: BT.peak, fails: BT.stats.fails, orders: BT.stats.orders + BT.stats.swaps, lossToday: 0, price: px }, { maxLossPct: c.stopLoss || undefined, maxDrawdownPct: c.stopDraw || undefined, maxOrders: c.stopOrders || undefined });
+      if (why.length) { stop('Safety stop: ' + why.join(' ')); return; }
     }
     // tidy: keep at most maxOpen offers
     const mine = b.offers.slice().sort((x: any, y: any) => x.seq - y.seq);
@@ -310,6 +321,9 @@ export function botShell() {
           ${num('bt_maxq', 'Max amount, quote token', c.maxQuote, 'any', 'per order, 0 = off')}
           ${num('bt_lo', 'Trade only above price', c.lo, 'any', 'range low, 0 = off')}
           ${num('bt_hi', 'Trade only below price', c.hi, 'any', 'range high, 0 = off')}
+          ${num('bt_stoploss', 'Stop if total loss reaches %', c.stopLoss, 'any', 'safety stop, 0 = off')}
+          ${num('bt_stopdraw', 'Stop if it falls % from its best', c.stopDraw, 'any', 'safety stop, 0 = off')}
+          ${num('bt_stoporders', 'Stop after this many orders', c.stopOrders, 'any', 'safety stop, 0 = off')}
         </div>
         <div id="bt_msg" class="mut" style="font-size:.8rem;margin-top:.5rem"></div></div>
       <div class="card"><div class="k">Open offers <button class="sm ghost" style="float:right" onclick="window.bt.cancelAll(this)">Cancel all</button></div><div id="bt_offers" class="nwscroll"></div></div>
@@ -364,6 +378,9 @@ export const btApi = {
     else if (id === 'bt_maxq') c.maxQuote = Math.max(0, n);
     else if (id === 'bt_lo') c.lo = Math.max(0, n);
     else if (id === 'bt_hi') c.hi = Math.max(0, n);
+    else if (id === 'bt_stoploss') c.stopLoss = Math.max(0, Math.min(100, n));
+    else if (id === 'bt_stopdraw') c.stopDraw = Math.max(0, Math.min(100, n));
+    else if (id === 'bt_stoporders') c.stopOrders = Math.max(0, Math.floor(n));
     if (c.minPct > c.maxPct) c.maxPct = c.minPct;
     if (c.minBase && c.maxBase && c.minBase > c.maxBase) c.maxBase = c.minBase;
     if (c.minQuote && c.maxQuote && c.minQuote > c.maxQuote) c.maxQuote = c.minQuote;
@@ -389,6 +406,7 @@ export const btApi = {
     const w = ctx.wallets().find(x => x.address === ctx.account());
     if (!w || w.type !== 'luma') return void (msg && (msg.textContent = 'The bot works with a LUMA wallet. Switch to LUMA mode.'));
     BT.running = true;
+    BT.peak = 0;
     BT.stats = { orders: 0, swaps: 0, failed: 0, cancelled: 0, started: Date.now(), fails: 0 };
     const b = await balances(m).catch(() => null);
     if (b) BT.info = b;
