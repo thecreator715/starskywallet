@@ -51,7 +51,7 @@ export const xtry = async (command: string, params: any = {}) => { try { return 
 /* ---------------------------------- state ---------------------------------- */
 interface Lane { id: 'xrp' | 'luma' | 'usd' | 'mint' | 'magic'; asset: 'XRP' | 'LUMA' | 'USD' | 'MINT' | 'MAGIC'; pri: number; title: string; luma: string; xrpl: string; xiss?: string }
 const OP: any = { snap: null, err: '', at: 0 };            // operator's public feed
-const ST: any = { dir: 'out', lane: 'mint', bal: { L: null, X: {} }, check: [], rep: null, chk: null, busy: false, setup: null };
+const ST: any = { dir: 'out', lane: 'mint', bal: { L: null, X: {} }, check: [], rep: null, chk: null, busy: false, setup: null, tab: 'activity', dstFor: '', trustAct: [] };
 let gen = 0;
 const TOKEN_ISSUER = 'rwCsCz93A1svS6Yv8hFqUeKLdTLhBpvqGD';   // XRPL issuer of MINT and MAGIC (used until the operator feed says otherwise)
 // MINT and MAGIC on XRPL mainnet have one real issuer: never trust an older, different one from a stale operator feed.
@@ -216,10 +216,27 @@ async function reserves() {
 
 /* ---------------------------------- rendering ---------------------------------- */
 const lvl = (l: string) => (l === 'ok' ? '<b class="up">✓</b>' : l === 'warn' ? '<b style="color:#ffc400">!</b>' : '<b class="dn">✗</b>');
+// Quick bridge: ONE card does the whole transfer (swap direction, pick asset, amount or %, Bridge). Everything else lives in tabs underneath.
+const UIK = BK + 'ui.';
+const loadUi = () => { try { const j = JSON.parse(localStorage.getItem(UIK + ctx.netKey()) || '{}'); if (j.dir === 'in' || j.dir === 'out') ST.dir = j.dir; if (j.lane && lanes().some(l => l.id === j.lane)) ST.lane = j.lane; if (j.tab) ST.tab = j.tab; } catch {} };
+const saveUi = () => { try { localStorage.setItem(UIK + ctx.netKey(), JSON.stringify({ dir: ST.dir, lane: ST.lane, tab: ST.tab })); } catch {} };
 export function bridgeShell() {
-  return `<div id="br" class="brpage"><div id="br_head"></div><div id="br_val"></div><div id="br_nft" class="card" style="margin-top:1rem"></div><div id="br_setup"></div><div class="grid" style="margin-top:1rem"><div class="card c7" id="br_chk"><div class="k">Bridge checklist</div><div class="mut" style="padding:.6rem">Checking both ledgers…</div></div><div class="card c5" id="br_rep"><div class="k">Reserves, checked independently</div><div class="mut" style="padding:.6rem">Reading vault balances…</div></div></div>
-  <div class="grid" style="margin-top:1rem"><div class="card c7" id="br_xfer"></div><div class="card c5" id="br_claim"></div></div>
-  <div class="card" style="margin-top:1rem"><div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Your bridge activity (read from both ledgers)</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div><div id="br_hist" style="overflow:auto"><div class="mut" style="padding:1rem">Reading…</div></div></div></div>`;
+  return `<div id="br" class="brpage"><div id="br_head"></div>
+  <div class="card" id="br_xfer" style="margin-top:.6rem"></div>
+  <div id="br_tabs" class="seg" style="margin:1rem 0 .6rem;flex-wrap:wrap"></div>
+  <div id="brp_activity" class="brpane"><div class="card"><div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Your bridge activity (read from both ledgers)</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div><div id="br_hist" style="overflow:auto"><div class="mut" style="padding:1rem">Reading…</div></div></div></div>
+  <div id="brp_nft" class="brpane" style="display:none"><div id="br_nft" class="card"></div></div>
+  <div id="brp_reserves" class="brpane" style="display:none"><div class="grid"><div class="card c7" id="br_chk"><div class="k">Bridge checklist</div><div class="mut" style="padding:.6rem">Checking both ledgers…</div></div><div class="card c5" id="br_rep"><div class="k">Reserves, checked independently</div><div class="mut" style="padding:.6rem">Reading vault balances…</div></div></div></div>
+  <div id="brp_how" class="brpane" style="display:none"><div class="card" id="br_claim"></div></div>
+  <div id="brp_operator" class="brpane" style="display:none"><div id="br_val"></div></div>
+  <div id="brp_settings" class="brpane" style="display:none"><div id="br_setup"></div></div></div>`;
+}
+function paintTabs() {
+  const c = bcfg(), bad = (ST.chk || []).filter((x: Chk) => x.level === 'bad').length, setupBad = !c.lumaVault || !c.xrplVault;
+  const T: [string, string, string][] = [['activity', 'Activity', ''], ['nft', 'NFTs', ''], ['reserves', 'Reserves & checks', bad ? ' <b class="dn">●</b>' : ''], ['how', 'How it works', ''], ['operator', 'Operator', ''], ['settings', 'Settings', setupBad ? ' <b class="dn">●</b>' : '']];
+  if (!T.some(t => t[0] === ST.tab)) ST.tab = 'activity';
+  setHtml('br_tabs', T.map(([k, l, b]) => `<button class="${ST.tab === k ? 'on' : ''}" onclick="window.br.tab('${k}')">${l}${b}</button>`).join(''));
+  for (const [k] of T) { const e = $('brp_' + k); if (e) e.style.display = ST.tab === k ? '' : 'none'; }
 }
 
 function paintVal() {
@@ -237,11 +254,15 @@ function paintVal() {
     ${(o.log || []).length ? `<details style="margin-top:.5rem"><summary class="mut" style="cursor:pointer;font-size:.78rem">Relayer log (${o.log.length})</summary><div class="mono mut" style="font-size:.7rem;line-height:1.5;margin-top:.3rem">${o.log.slice(0, 20).map((l: any) => esc(new Date(l.t).toLocaleTimeString()) + ' ' + esc(l.m)).join('<br>')}</div></details>` : ''}</div>`);
 }
 function paintHead() {
-  const o = OP.snap;
-  let st = '<span class="mut">Operator not linked: relayer status unknown</span>';
-  if (o && o.set) st = !o.enabled ? '<b class="dn">Bridge not enabled by the operator</b>' : o.paused ? '<b class="dn">Paused</b>' : o.alive ? `<b class="up">Relayer running</b> <span class="mut">· heartbeat ${o.heartbeatSec}s ago · ${o.backed === false ? 'backing problem' : 'both vaults backed'}</span>` : `<b class="dn">Relayer silent</b> <span class="mut">· last heartbeat ${o.heartbeatSec == null ? 'never' : o.heartbeatSec + 's ago'}</span>`;
-  setHtml('br_head', `<div class="card"><div class="row" style="justify-content:space-between;gap:.6rem;flex-wrap:wrap"><div><div class="k" style="margin:0">XRPL bridge</div><div style="margin-top:.3rem">${st}</div></div><div class="mut" style="font-size:.8rem;max-width:34rem">Lock and mint. RLUSD, MINT and MAGIC come first; XRP and ${esc(ctx.native())} (LUMAX) come later. Values are shown in dollars where a market price exists. A relayer run by the operator pays out on the other ledger a minute or so after your payment confirms.</div></div></div>`);
-  paintVal();
+  const o = OP.snap; let dot = 'mut', txt = 'Looking for the bridge operator…', more = '';
+  if (o && o.set) {
+    if (!o.enabled) { dot = 'dn'; txt = 'Bridge switched off by the operator'; }
+    else if (o.paused) { dot = 'dn'; txt = 'Bridge paused by the operator: transfers wait'; }
+    else if (o.alive) { dot = o.backed === false ? 'dn' : 'up'; txt = o.backed === false ? 'Bridge online · backing problem' : 'Bridge online · both vaults backed'; more = `usually 1 to 2 minutes · checked every ${o.everySec || 15}s`; }
+    else { dot = 'dn'; txt = 'Relayer silent: transfers wait until it is back'; }
+  } else if (OP.err) { txt = 'Operator not reachable: set it up in Settings'; dot = 'dn'; }
+  setHtml('br_head', `<div class="row" style="justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap"><span class="${dot}" style="font-weight:700">● ${esc(txt)}</span><span class="mut" style="font-size:.78rem">${esc(more)} <button class="sm ghost" onclick="window.br.refresh()" title="Refresh">↻</button></span></div>`);
+  paintVal(); paintTabs();
 }
 function paintSetup() {
   const c = bcfg();
@@ -276,22 +297,33 @@ function walletOptions(kind: 'luma' | 'xrpl') {
   return xw.map(w => `<option value="${esc(w.address)}">${esc(w.label)} · ${esc(short(w.address, 6, 5))}</option>`).join('') || '<option value="">No XRPL wallet (Wallets → XRPL → import seed)</option>';
 }
 function paintXfer() {
-  const L = lanes(), ln = laneOf(), out = ST.dir === 'out';
-  const from = out ? ln.luma : ln.xrpl, to = out ? ln.xrpl : ln.luma;
+  const L = lanes().slice().sort(byPri), ln = laneOf(), out = ST.dir === 'out', nat = ctx.native();
   const xw = xrplWallets();
   const prev = { amt: (($('br_amt') as HTMLInputElement) || { value: '' }).value, dst: (($('br_dst') as HTMLInputElement) || { value: '' }).value, xw: (($('br_xw') as HTMLSelectElement) || { value: '' }).value };
   const e = $('br_xfer');
   if (!e) return;
-  e.innerHTML = `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:.5rem"><div class="row" style="gap:.6rem;align-items:center"><div class="k" style="margin:0">Transfer</div><button class="sm pri acc" onclick="window.brw.start()">✨ Bridge wizard</button></div><div class="seg"><button class="${out ? 'on' : ''}" onclick="window.br.dir('out')">${esc(ctx.native())} → XRPL</button><button class="${out ? '' : 'on'}" onclick="window.br.dir('in')">XRPL → ${esc(ctx.native())}</button></div></div>
-    <div class="row" style="gap:.4rem;margin:.6rem 0;flex-wrap:wrap">${L.slice().sort(byPri).map(l => `<button class="${l.id === ln.id ? 'pri acc' : 'ghost'}" onclick="window.br.lane('${l.id}')">${esc(out ? `${l.luma} → ${l.xrpl}` : `${l.xrpl} → ${l.luma}`)}${l.pri > 1 ? ' <small>later</small>' : ''}</button>`).join('')}</div>
-    <div class="mut" style="font-size:.8rem;margin-bottom:.4rem">${esc(from)} on ${out ? 'LUMA' : 'XRPL'} becomes <b>${esc(to)}</b> on ${out ? 'XRPL' : 'LUMA'}.</div>
-    <div class="row" style="gap:.5rem"><select id="br_xw" class="grow" onchange="window.br.est()" ${out ? 'disabled' : ''}>${out ? walletOptions('luma') : walletOptions('xrpl')}</select></div>
-    <div class="row" style="gap:.5rem;margin-top:.4rem"><input id="br_amt" class="grow" placeholder="Amount of ${esc(from)}" inputmode="decimal" oninput="window.br.est()"><button class="ghost" onclick="window.br.max()">Max</button></div>
-    <div class="row" style="gap:.5rem;margin-top:.4rem">${out && xw.length ? `<select class="grow" onchange="document.getElementById('br_dst').value=this.value;window.br.est()"><option value="">Pick my XRPL wallet…</option>${xw.map(w => `<option value="${esc(w.address)}">${esc(w.label)} · ${esc(short(w.address, 6, 5))}</option>`).join('')}</select>` : ''}</div>
-    <div class="row" style="gap:.5rem;margin-top:.4rem"><input id="br_dst" class="grow" placeholder="${out ? 'Destination on XRPL (r…, optional :tag)' : 'Destination on LUMA (L… / T…)'}" value="${esc(prev.dst || (out ? (xw[0] ? xw[0].address : '') : ctx.account() ? ctx.showL(ctx.account() as string) : ''))}" oninput="window.br.est()"></div>
-    <div id="br_est" class="brest" style="margin-top:.7rem"></div>
-    <button id="br_go" class="pri acc" style="width:100%;margin-top:.6rem" onclick="window.br.send(this)">Send to the bridge</button><div id="br_msg" class="mut" style="font-size:.78rem;margin-top:.4rem"></div>`;
-  if (prev.xw && !out) { const s = $('br_xw') as HTMLSelectElement; if (s && [...s.options].some(o => o.value === prev.xw)) s.value = prev.xw; }
+  const from = out ? ln.luma : ln.xrpl, to = out ? ln.xrpl : ln.luma, fromNet = out ? 'LUMA' : 'XRPL', toNet = out ? 'XRPL' : 'LUMA';
+  const srcX = prev.xw && xw.some(w => w.address === prev.xw) ? prev.xw : (xw[0] ? xw[0].address : '');
+  const keep = ST.dstFor === ST.dir && prev.dst;          // a destination typed for the other direction is never reused
+  const dflt = out ? (xw[0] ? xw[0].address : '') : (ctx.account() ? ctx.showL(ctx.account() as string) : '');
+  const dst = keep ? prev.dst : dflt; ST.dstFor = ST.dir;
+  const mine = out ? xw.find(w => w.address === dst.split(':')[0]) : (dst && ctx.account() && dst === ctx.showL(ctx.account() as string) ? { label: 'your selected wallet' } : null);
+  const chipBal = (l: Lane) => { if (!ST.bal.L) return ''; const b = out ? lumaBal(l.luma) : (srcX ? xrplBal(srcX, l.xrpl) : 0); return b > 0 ? `<small class="mut"> ${fmt(b, b >= 100 ? 0 : 2)}</small>` : ''; };
+  const needXw = !out && !xw.length;
+  e.innerHTML = `<div class="row" style="align-items:center;justify-content:center;gap:.7rem;margin-bottom:.8rem"><div style="flex:1;text-align:center"><div class="mut" style="font-size:.72rem">FROM</div><div style="font-weight:800;font-size:1.15rem">${fromNet}</div></div><button class="pri acc" style="border-radius:50%;width:2.6rem;height:2.6rem;padding:0;font-size:1.2rem" title="Swap direction" onclick="window.br.dir('${out ? 'in' : 'out'}')">⇄</button><div style="flex:1;text-align:center"><div class="mut" style="font-size:.72rem">TO</div><div style="font-weight:800;font-size:1.15rem">${toNet}</div></div></div>
+    <div class="row" style="gap:.4rem;flex-wrap:wrap;justify-content:center">${L.map(l => `<button class="${l.id === ln.id ? 'pri acc' : 'ghost'}" onclick="window.br.lane('${l.id}')">${esc(out ? l.luma : l.xrpl)}${chipBal(l)}${l.pri > 1 ? ' <small>later</small>' : ''}</button>`).join('')}</div>
+    ${needXw ? `<div class="al" style="margin:.8rem 0;padding:.7rem;border:1px solid rgba(255,196,0,.4);border-radius:.6rem">To bridge from XRPL, add an XRPL wallet first. <button class="sm pri" onclick="window.goTab&&window.goTab('wallets')">Open Wallets</button></div>` : ''}
+    <select id="br_xw" ${out || xw.length < 2 ? 'style="display:none"' : 'class="grow" style="margin-top:.7rem;width:100%"'} onchange="window.br.est()">${out ? walletOptions('luma') : walletOptions('xrpl')}</select>
+    <div class="row" style="gap:.5rem;margin-top:.8rem"><input id="br_amt" class="grow" style="font-size:1.4rem;padding:.7rem" placeholder="0.00 ${esc(from)}" inputmode="decimal" oninput="window.br.est()"></div>
+    <div class="row" style="gap:.4rem;margin-top:.4rem;justify-content:flex-end"><button class="sm ghost" onclick="window.br.pct(.25)">25%</button><button class="sm ghost" onclick="window.br.pct(.5)">50%</button><button class="sm ghost" onclick="window.br.pct(.75)">75%</button><button class="sm ghost" onclick="window.br.pct(1)">Max</button></div>
+    <div id="br_recv" style="margin-top:.7rem;min-height:1.3rem"></div>
+    <div class="row" style="justify-content:space-between;align-items:center;gap:.5rem;margin-top:.5rem;font-size:.84rem;flex-wrap:wrap"><span class="mut">To: ${mine ? `<b>${esc((mine as any).label || 'your wallet')}</b> ${esc(short(dst, 8, 6))}` : dst ? esc(short(dst, 8, 6)) : '<span class="dn">no destination yet</span>'}</span><button class="sm ghost" onclick="window.br.chg()">${mine ? 'Send to a different address' : 'Edit address'}</button></div>
+    <input id="br_dst" class="grow" style="${mine || !out && dst ? 'display:none;' : ''}width:100%;margin-top:.4rem" placeholder="${out ? 'Destination on XRPL (r…, optional :tag)' : 'Destination on LUMA (L… / T…)'}" value="${esc(dst)}" oninput="window.br.est()">
+    <div id="br_warn" style="margin-top:.5rem"></div>
+    <button id="br_go" class="pri acc" style="width:100%;margin-top:.7rem;font-size:1.05rem;padding:.8rem" onclick="window.br.send(this)">Bridge</button>
+    <div id="br_msg" class="mut" style="font-size:.78rem;margin-top:.4rem"></div>
+    <details style="margin-top:.6rem"><summary class="mut" style="cursor:pointer;font-size:.8rem">Details, fees and checks</summary><div id="br_est" class="brest" style="margin-top:.5rem"></div></details>`;
+  if (prev.xw && !out) { const sl = $('br_xw') as HTMLSelectElement; if (sl && [...sl.options].some(o => o.value === prev.xw)) sl.value = prev.xw; }
   const a = $('br_amt') as HTMLInputElement; if (a && prev.amt) a.value = prev.amt;
   estimate();
 }
@@ -334,7 +366,7 @@ async function estimateNow() {
   if (!el) return;
   const c = bcfg(), ln = laneOf(), out = ST.dir === 'out', r = rules(ln.asset), amt = parseFloat((($('br_amt') as HTMLInputElement) || { value: '' }).value), from = out ? ln.luma : ln.xrpl, to = out ? ln.xrpl : ln.luma;
   const dst = (($('br_dst') as HTMLInputElement) || { value: '' }).value.trim(), srcX = (($('br_xw') as HTMLSelectElement) || { value: '' }).value;
-  const rows: string[] = [], problems: string[] = [], act: string[] = [];
+  const rows: string[] = [], problems: string[] = [], act: string[] = []; ST.trustAct = [];
   const row = (k: string, v: string) => rows.push(`<div class="row" style="justify-content:space-between;font-size:.84rem"><span class="mut">${k}</span><span>${v}</span></div>`);
   const have = out ? lumaBal(from) : xrplBal(srcX, from);
   row('Your balance', `${fmt(have, 6)} ${esc(from)}${withUsd(ln.asset, have)}`);
@@ -362,7 +394,7 @@ async function estimateNow() {
       if (!ai || !ai.account_data) problems.push(`${short(addr, 6, 5)} is not activated on that XRPL (needs its XRP reserve first${ln.id === 'xrp' ? '; the received XRP must cover it' : ''}).`);
       else if (ln.id !== 'xrp') {
         const issuer = xIss(ln, c);
-        if (issuer) { const al = await xtry('account_lines', { account: addr, peer: issuer, ledger_index: 'validated' }); const ok = ((al && al.lines) || []).some((l: any) => sameCur(l.currency, ln.xrpl) && Number(l.limit) > 0); if (!ok) { problems.push(`${short(addr, 6, 5)} has no ${ln.xrpl} trust line yet: the payout waits until it does.`); if (xrplWallets().some(w => w.address === addr)) act.push(`<button class="sm pri" onclick="window.br.trust('x','${esc(addr)}',this)">Add ${esc(ln.xrpl)} trust line on XRPL</button>`); } else row('Destination', `<span class="up">✓ ready to receive ${esc(ln.xrpl)}</span>`); }
+        if (issuer) { const al = await xtry('account_lines', { account: addr, peer: issuer, ledger_index: 'validated' }); const ok = ((al && al.lines) || []).some((l: any) => sameCur(l.currency, ln.xrpl) && Number(l.limit) > 0); if (!ok) { problems.push(`${short(addr, 6, 5)} has no ${ln.xrpl} trust line yet: the payout waits until it does.`); if (xrplWallets().some(w => w.address === addr)) { act.push(`<button class="sm pri" onclick="window.br.trust('x','${esc(addr)}',this)">Add ${esc(ln.xrpl)} trust line on XRPL</button>`); ST.trustAct.push({ side: 'x', target: addr, label: ln.xrpl + ' trust line on XRPL' }); } } else row('Destination', `<span class="up">✓ ready to receive ${esc(ln.xrpl)}</span>`); }
       } else row('Destination', '<span class="up">✓ activated</span>');
     }
   } else {
@@ -374,7 +406,7 @@ async function estimateNow() {
         const iss = await lumaIss(ln);
         const al = d ? await tryReq('account_lines', { account: d, ledger_index: 'validated', limit: 300 }) : null;
         if (!al) problems.push('That LUMA account is not active on this network yet.');
-        else if (iss && !(al.lines || []).some((l: any) => l.account === iss && hexName(l.currency) === ln.luma)) { problems.push(`That LUMA account has no ${ln.luma} trust line yet: the payout waits until it does.`); if (d === ctx.account()) act.push(`<button class="sm pri" onclick="window.br.trust('l','${esc(iss)}',this)">Add ${esc(ln.luma)} trust line on LUMA</button>`); } else row('Destination', `<span class="up">✓ ready to receive ${esc(ln.luma)}</span>`);
+        else if (iss && !(al.lines || []).some((l: any) => l.account === iss && hexName(l.currency) === ln.luma)) { problems.push(`That LUMA account has no ${ln.luma} trust line yet: the payout waits until it does.`); if (d === ctx.account()) { act.push(`<button class="sm pri" onclick="window.br.trust('l','${esc(iss)}',this)">Add ${esc(ln.luma)} trust line on LUMA</button>`); ST.trustAct.push({ side: 'l', target: iss, label: ln.luma + ' trust line on LUMA' }); } } else row('Destination', `<span class="up">✓ ready to receive ${esc(ln.luma)}</span>`);
       }
     }
     if (srcX && c.xrplVault && srcX === c.xrplVault) row('Heads up', '<span class="mut">This is the bridge vault itself, so your tokens stay in it on XRPL (the balance does not drop) while the same amount is credited on LUMA, backed by what the vault holds. Use a different XRPL wallet as the sender for a normal one-way move.</span>');
@@ -389,6 +421,13 @@ async function estimateNow() {
   if (o && o.set && o.assets && ln.asset && o.assets[ln.asset] && o.assets[ln.asset].on === false) problems.push(ln.asset + ' transfers are switched off on the operator’s bridge.');
   if (o && o.set && (!o.running || !o.alive)) problems.push('The operator’s relayer is not running: you could send, but nothing would be paid out until it is.');
   ST.block = problems.length;
+  { const rc = $('br_recv'), wn = $('br_warn'), go = $('br_go') as HTMLButtonElement | null;
+    const p2 = amt > 0 ? price(ln.asset, amt) : null;
+    const fixable = problems.length > 0 && ST.trustAct.length > 0 && problems.length === ST.trustAct.length;   // the only blockers are trust lines we add for the user
+    if (rc) rc.innerHTML = p2 && p2.net > 0 ? `<span class="mut">You receive about</span> <b style="font-size:1.15rem">${fmt(p2.net, 6)} ${esc(to)}</b>${withUsd(ln.asset, p2.net)} <span class="mut" style="font-size:.78rem">· fee ${fmt(p2.fee, 6)} ${esc(from)} · about 1 to 3 min</span>` : '<span class="mut" style="font-size:.84rem">Enter an amount, or tap a % button.</span>';
+    if (wn) wn.innerHTML = amt > 0 && problems.length && !fixable ? problems.filter(Boolean).slice(0, 2).map(x => `<div style="font-size:.8rem;color:#ffc400">! ${esc(x)}</div>`).join('') : fixable ? `<div class="mut" style="font-size:.8rem">One-time setup: the ${esc(ST.trustAct.map((z: any) => z.label).join(' and '))} will be added automatically when you press Bridge.</div>` : '';
+    if (go) { go.disabled = !!(amt > 0 && problems.length && !fixable); go.textContent = !(amt > 0) ? 'Enter an amount' : fixable ? 'Set up & Bridge' : `Bridge ${fmt(amt, 4)} ${from} → ${to}`; }
+  }
   el.innerHTML = rows.join('') + (problems.length ? `<div style="margin-top:.4rem">${problems.filter(Boolean).map(p => `<div style="font-size:.8rem;color:#ffc400">! ${esc(p)}</div>`).join('')}</div>` : amt > 0 ? '<div style="font-size:.8rem;color:#00ff8c;margin-top:.4rem">✓ Everything needed is in place.</div>' : '') + (act.length ? `<div class="row" style="gap:.4rem;margin-top:.4rem">${act.join('')}</div>` : '');
 }
 async function history(g: number) {
@@ -529,7 +568,7 @@ const nbApi = {
 
 let valTimer: any = 0;
 export function bridgeMount() {
-  bridgeLoad(); setTimeout(() => nbLoad(), 800);
+  loadUi(); bridgeLoad(); setTimeout(() => nbLoad(), 800);
   if (valTimer) clearInterval(valTimer);
   valTimer = setInterval(async () => { if (!$('br')) { clearInterval(valTimer); valTimer = 0; return; } try { await tryOperator(); paintHead(); await nbLoad(true); } catch {} }, 15000);   // keep the validator card live
 }
@@ -546,10 +585,10 @@ export async function bridgeLoad() {
     if (g !== gen || !$('br')) return;
     ST.chk = await runChecks();
     if (g !== gen || !$('br')) return;
-    paintSetup(); paintChecks(); paintXfer();
+    paintSetup(); paintChecks(); paintXfer(); paintTabs();
     await reserves();
     if (g !== gen || !$('br')) return;
-    paintRep(); estimate();
+    paintRep(); paintTabs(); estimate();
     await history(g);
   } catch (e: any) {
     setHtml('br_chk', `<div class="k">Bridge checklist</div><div class="dn" style="padding:.6rem">${esc(e?.message || e)}</div>`);
@@ -559,8 +598,17 @@ const xrplSeedOf = (addr: string) => { const w = xrplWallets().find(x => x.addre
 export const brApi = {
   ...nbApi,
   refresh() { bridgeLoad(); },
-  dir(d: string) { ST.dir = d; paintXfer(); paintClaim(); },
-  lane(l: string) { ST.lane = l; paintXfer(); paintClaim(); },
+  dir(d: string) { ST.dir = d; saveUi(); paintXfer(); paintClaim(); },
+  lane(l: string) { ST.lane = l; saveUi(); paintXfer(); paintClaim(); },
+  tab(t: string) { ST.tab = t; saveUi(); paintTabs(); },
+  chg() { const d = $('br_dst') as HTMLInputElement; if (d) { d.style.display = ''; d.focus(); d.select(); } },
+  pct(f: number) {
+    const ln = laneOf(), out = ST.dir === 'out', from = out ? ln.luma : ln.xrpl, srcX = (($('br_xw') as HTMLSelectElement) || { value: '' }).value;
+    let b = out ? lumaBal(from) : xrplBal(srcX, from);
+    if (f >= 1) { if (out && from === ctx.native()) b = Math.max(0, b - 0.3); if (!out && from === 'XRP') b = Math.max(0, b - 1.5 - 0.2 * ((ST.bal.X[srcX] || {}).owners || 0)); } else b = b * f;
+    const a = $('br_amt') as HTMLInputElement; if (a) a.value = String(Math.floor(b * 1e6) / 1e6);
+    estimate();
+  },
   est() { estimate(); },
   max() {
     const ln = laneOf(), out = ST.dir === 'out', from = out ? ln.luma : ln.xrpl, srcX = (($('br_xw') as HTMLSelectElement) || { value: '' }).value;
@@ -624,6 +672,12 @@ export const brApi = {
     let fl: ReturnType<typeof flowModal> | null = null;
     try {
       await estimateNow();
+      if (ST.trustAct.length) {
+        const dummy: any = { disabled: false };
+        for (const t of ST.trustAct.slice()) { say('Setting up your ' + t.label + '…'); await (brApi as any).trust(t.side, t.target, dummy); }
+        await estimateNow();
+        if (ST.trustAct.length) throw new Error('The trust line is not confirmed yet: wait a few seconds and press Bridge again.');
+      }
       if (ST.block && !confirm('Some checks above are not satisfied. Send anyway? The payout may wait or fail, and nothing is refunded automatically.')) return;
       const amt = parseFloat((($('br_amt') as HTMLInputElement).value || ''));
       if (!(amt > 0)) throw new Error('Enter an amount.');
