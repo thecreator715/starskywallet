@@ -3,6 +3,7 @@
 // (latency, failures, rate limits), checks the network ID, warns when the node is behind or slow, and gives a diagnostics report to copy.
 import { ctx } from './ctx.ts';
 import { esc } from './util.ts';
+import { setScamList } from './safety.ts';
 
 export const APP_VERSION = '1.0.0';
 const NETID: Record<string, number> = { main: 4242, test: 4243 };
@@ -67,6 +68,7 @@ export async function refresh(force = false) {
   if (ctx.xrpl() || !isGateway() || (!force && Date.now() - feedAt < 45000)) return; feedAt = Date.now();
   const b = base(), pre = net() === 'test' ? '/test' : '';
   [feed, gw] = await Promise.all([getJson(`${b}/panel/${net()}/api/public/nodefeed`), getJson(`${b}${pre}/gw/status`)]);
+  if (Array.isArray(feed?.scam)) setScamList(feed.scam);
   if (gw?.now) skew = Math.round((Date.now() - gw.now) / 1000);
 }
 const needsUpdate = () => { const m = feed?.minApp?.starsky; if (!m) return false; const a = APP_VERSION.split('.').map(Number), b = String(m).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); } return false; };

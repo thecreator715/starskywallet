@@ -23,6 +23,7 @@ import { startTopStats, refreshTopStats } from './live/topstats.ts';
 import { xclient } from './live/bridge.ts';
 import * as Extras from './live/extras.ts';
 import * as NL from './live/nodelink.ts';
+import * as SF from './live/safety.ts';
 
 // Types
 export interface NetworkDef {
@@ -1006,6 +1007,7 @@ export async function submitTx(tx: any, seed?: string) {
   const a = activeAccount();
   if (!st.client || (!a && !seed)) throw new Error('No active account or connection');
 
+  { const stop = await SF.preflight({ ...tx, Account: tx.Account || (seed ? '' : a?.address) }); if (stop) return { ok: false, msg: stop }; }
   const dup = NL.guard({ ...tx, Account: tx.Account || (seed ? '' : a?.address) });
   if (dup) return { ok: false, msg: dup };
   let cl: any, w: any, p: any;
@@ -1038,7 +1040,7 @@ export async function submitTx(tx: any, seed?: string) {
   let r: any;
   try { r = await cl.submitAndWait(s.tx_blob); } catch (e: any) { NL.guardClear({ ...tx, Account: tx.Account || (seed ? '' : a?.address) }); throw e; }
   const code = (r.result.meta as any)?.TransactionResult || (r.result as any).engine_result;
-  if (code === 'tesSUCCESS') return { ok: true, hash: s.hash, meta: r.result.meta, ledger: (r.result as any).ledger_index };
+  if (code === 'tesSUCCESS') { try { if (tx.Destination) SF.markSent(tx.Destination); } catch {} return { ok: true, hash: s.hash, meta: r.result.meta, ledger: (r.result as any).ledger_index }; }
   NL.guardClear({ ...tx, Account: tx.Account || (seed ? '' : a?.address) });
   return { ok: false, msg: code };
 }
