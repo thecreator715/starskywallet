@@ -90,6 +90,52 @@ export function riskLabel(t: { holders?: number; gini?: number; mintedRecent?: n
 // ---------- reading the chain (thin wrappers over ctx.req) ----------
 const base = () => ctx.nodeUrl().replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
 const idx = () => base() + (ctx.netKey() === 'test' ? '/test' : '') + '/api/v1';
+
+// ---------- token registry + network health (from the operator's public feed) ----------
+export interface RegistryFeed { seq?: number; tokens?: Array<[string, string, string, string]>; blocked?: Array<[string, string]>; at?: number }
+export interface HealthFeed { state?: string; headline?: string; detail?: string[]; at?: number }
+export type TokenStatus = 'verified' | 'reviewed' | 'suspended' | 'unlisted' | 'unknown';
+/** 'unknown' means the app has no registry to judge by (older operator, or the feed was never loaded), which must never look like a warning. */
+export function tokenStatus(cur: string, iss: string, reg: RegistryFeed | null | undefined): TokenStatus {
+  if (!reg || !(reg.seq || (reg.tokens && reg.tokens.length) || (reg.blocked && reg.blocked.length))) return 'unknown';
+  if ((reg.blocked || []).some(b => b[0] === cur && b[1] === iss)) return 'suspended';
+  const t = (reg.tokens || []).find(x => x[0] === cur && x[1] === iss); if (!t) return 'unlisted';
+  return t[2] === 'verified' ? 'verified' : 'reviewed';
+}
+const tokensOf = (tx: any): Array<{ cur: string; iss: string; kind: 'trust' | 'pay' | 'offer' }> => {
+  const o: Array<{ cur: string; iss: string; kind: 'trust' | 'pay' | 'offer' }> = [], tok = (a: any, kind: 'trust' | 'pay' | 'offer') => { if (a && typeof a === 'object' && a.currency && a.issuer) o.push({ cur: a.currency, iss: a.issuer, kind }); };
+  if (tx?.TransactionType === 'TrustSet') tok(tx.LimitAmount, 'trust'); else if (tx?.TransactionType === 'Payment') tok(tx.Amount, 'pay'); else if (tx?.TransactionType === 'OfferCreate') { tok(tx.TakerGets, 'offer'); tok(tx.TakerPays, 'offer'); }
+  return o;
+};
+export function networkFindings(tx: any, reg: RegistryFeed | null | undefined, health: HealthFeed | null | undefined, now = Date.now()): Finding[] {
+  const out: Finding[] = [];
+  for (const t of tokensOf(tx)) {
+    const st = tokenStatus(t.cur, t.iss, reg);
+    if (st === 'suspended') out.push({ level: 'block', code: 'tokenblocked', msg: 'The network operator has suspended this token. Do not accept, hold or trade it.' });
+    else if (st === 'unlisted' && t.kind !== 'offer') out.push({ level: 'warn', code: 'tokenunlisted', msg: 'This token is not in the network\'s verified registry, so nobody has checked who issues it. Only continue if you trust the issuer.' });
+  }
+  if (health && health.at && now - health.at < 5 * 60e3) {
+    if (health.state === 'outage') out.push({ level: 'warn', code: 'health', msg: `The network is reporting a major problem${health.headline ? ' (' + health.headline + ')' : ''}. Your transaction may not be confirmed.` });
+    else if (health.state === 'degraded') out.push({ level: 'warn', code: 'health', msg: 'The network is running with reduced capacity, so this may be slow or need a retry.' });
+    else if (health.state === 'maintenance') out.push({ level: 'warn', code: 'health', msg: `The network is in maintenance${health.headline ? ': ' + health.headline : ''}. Transactions may be slow.` });
+  }
+  return out;
+}
+const REGK = 'starsky.x.registry', HLTK = 'starsky.x.health';
+export function setRegistry(r: any) { if (!r || typeof r !== 'object') return; SV(REGK, { seq: +r.seq || 0, tokens: (Array.isArray(r.tokens) ? r.tokens : []).filter((x: any) => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string').slice(0, 400).map((x: any) => [x[0], x[1], String(x[2] || ''), String(x[3] || '').slice(0, 60)]), blocked: (Array.isArray(r.blocked) ? r.blocked : []).filter((x: any) => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string').slice(0, 400).map((x: any) => [x[0], x[1]]), at: Date.now() }); }
+export function setHealth(h: any) { if (!h || typeof h !== 'object') return; SV(HLTK, { state: String(h.state || ''), headline: String(h.headline || '').slice(0, 120), detail: (Array.isArray(h.detail) ? h.detail : []).slice(0, 5).map((x: any) => String(x).slice(0, 160)), at: Date.now() }); }
+export const registryNow = (): RegistryFeed | null => LS(REGK, null);
+export const healthNow = (): HealthFeed | null => LS(HLTK, null);
+/** small pill shown next to a token name */
+const curLabel = (c: string) => { if (/^[0-9A-Fa-f]{40}$/.test(c || '')) { try { const t = c.match(/../g)!.map(h => parseInt(h, 16)).filter(n => n > 31 && n < 127).map(n => String.fromCharCode(n)).join('').trim(); return t || c.slice(0, 8); } catch { return c.slice(0, 8); } } return c; };
+export function tokenBadge(cur: string, iss: string, reg: RegistryFeed | null | undefined = registryNow()): string {
+  const st = tokenStatus(cur, iss, reg), pill = (t: string, bg: string, fg: string, tip: string) => `<span title="${tip.replace(/"/g, '&quot;')}" style="font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:${bg};color:${fg};margin-left:.35rem">${t}</span>`;
+  if (st === 'verified') return pill('Verified', 'rgba(0,196,111,.18)', '#00c46f', 'The issuer proved control of its domain and the network operator listed it.');
+  if (st === 'reviewed') return pill('Reviewed', 'rgba(120,160,255,.18)', '#8fb0ff', 'Approved by the network operator without a domain proof.');
+  if (st === 'suspended') return pill('Suspended', 'rgba(248,81,73,.2)', '#f85149', 'The network operator suspended this token.');
+  if (st === 'unlisted') return pill('Not verified', 'rgba(150,150,150,.18)', '#999', 'Not in the operator\'s verified registry. That does not mean it is unsafe, but nobody has checked it.');
+  return '';
+}
 export async function indexerGet(path: string): Promise<any> { const r = await fetch(idx() + path); const j = await r.json().catch(() => null); if (!r.ok || !j || j.ok === false) throw new Error(j?.error?.message || 'indexer ' + r.status); return j; }
 export async function tokenRisk(cur: string, issuer: string) {
   const [t, p] = await Promise.all([indexerGet(`/token/${encodeURIComponent(cur)}/${issuer}`), indexerGet(`/price/${encodeURIComponent(cur)}/${issuer}`).catch(() => null)]);
@@ -110,11 +156,15 @@ export function devMode() { return !!LS('starsky.x.dev', false); }
 /** Called by the send path. Returns an error message to stop, or '' to go ahead. Warnings need a yes from the person. */
 export async function preflight(tx: any, askUser: (msg: string) => boolean = m => window.confirm(m)): Promise<string> {
   try {
-    if (tx?.TransactionType !== 'Payment' || !tx.Destination) return '';
-    const f = await facts(tx), found = preflightCheck({ ...f, tx, native: ctx.native(), known: (ctx.book?.() || []).map(b => { try { return { name: b.name, addr: ctx.toClassic(b.addr) }; } catch { return { name: b.name, addr: String(b.addr || '') }; } }), sent: LS(SENT, []), scam: LS(SCAM, []), self: tx.Account || ctx.account() || '' });
+    let found: Finding[] = networkFindings(tx, registryNow(), healthNow());
+    if (tx?.TransactionType === 'Payment' && tx.Destination) {
+      const f = await facts(tx);
+      found = [...preflightCheck({ ...f, tx, native: ctx.native(), known: (ctx.book?.() || []).map(b => { try { return { name: b.name, addr: ctx.toClassic(b.addr) }; } catch { return { name: b.name, addr: String(b.addr || '') }; } }), sent: LS(SENT, []), scam: LS(SCAM, []), self: tx.Account || ctx.account() || '' }), ...found];
+    }
+    if (!found.length) return '';
     if (devMode()) console.info('[starsky preflight]', JSON.stringify({ tx, found }));
     const b = found.find(x => x.level === 'block'); if (b) return b.msg;
-    const w = found.filter(x => x.level === 'warn'); if (w.length && !askUser('Check before sending:\n\n• ' + w.map(x => x.msg).join('\n• ') + '\n\nSend anyway?')) return 'Cancelled: payment not sent.';
+    const w = found.filter(x => x.level === 'warn'); if (w.length && !askUser('Check before sending:\n\n• ' + w.map(x => x.msg).join('\n• ') + '\n\nSend anyway?')) return 'Cancelled: nothing was sent.';
     return '';
   } catch { return ''; }   // the safety check must never be the reason a payment cannot go out
 }
@@ -140,9 +190,14 @@ export async function card() {
   let res = '';
   try { const s = await ctx.req('server_info'), v = s.info?.validated_ledger || {}, base = Number(v.reserve_base_xrp ?? 10), inc = Number(v.reserve_inc_xrp ?? 2); const ai = (await ctx.req('account_info', { account: me, ledger_index: 'validated' })).account_data, bal = Number(ai.Balance) / 1e6, own = ai.OwnerCount || 0;
     res = `<div class="row" style="gap:1rem;flex-wrap:wrap"><div><div class="mut" style="font-size:.72rem">Balance</div><b>${bal.toLocaleString()} ${ctx.native()}</b></div><div><div class="mut" style="font-size:.72rem">Locked reserve</div><b>${reserveOf(base, inc, own)}</b></div><div><div class="mut" style="font-size:.72rem">You can send</div><b>${spendable(bal, base, inc, own).toFixed(2)}</b></div><div><div class="mut" style="font-size:.72rem">Each trust line, offer or NFT page locks</div><b>${inc}</b></div></div><div class="mut" style="font-size:.78rem;margin-top:.3rem">You have ${own} items on the ledger. Removing unused ones (empty trust lines, old offers) frees ${inc} ${ctx.native()} each.</div>`; } catch { res = '<div class="mut">Reserve details appear when the node answers.</div>'; }
+  let netBox = ''; try {
+    const h = healthNow(), fresh = h && h.at && Date.now() - h.at < 5 * 60e3, reg = registryNow(), col = !fresh ? '#999' : h!.state === 'ok' ? '#00c46f' : h!.state === 'outage' ? '#f85149' : '#d29922', lab = !fresh ? 'Status not available' : h!.state === 'ok' ? 'All systems operational' : (h!.headline || h!.state || '');
+    let tk = ''; if (me) { const al = await ctx.req('account_lines', { account: me, ledger_index: 'validated', limit: 100 }).catch(() => null); const ls = (al && (al.lines || al.result?.lines)) || []; tk = ls.length ? ls.map((x: any) => `<div class="row" style="gap:.5rem;font-size:.82rem"><b>${esc(curLabel(x.currency))}</b>${tokenBadge(x.currency, x.account, reg)}<span class="mut" style="margin-left:auto">${esc(x.balance)}</span></div>`).join('') : '<div class="mut" style="font-size:.82rem">No tokens held.</div>'; }
+    netBox = `<div style="margin-top:.8rem"><div class="k" style="font-size:.74rem">Network and your tokens</div><div class="row" style="gap:.5rem;align-items:center;font-size:.84rem"><span style="width:.6rem;height:.6rem;border-radius:50%;background:${col};display:inline-block"></span><b>${esc(lab)}</b>${fresh && h!.detail && h!.detail.length ? '<span class="mut">' + esc(h!.detail.join(' ')) + '</span>' : ''}</div><div style="margin-top:.4rem">${tk}</div><div class="mut" style="font-size:.74rem;margin-top:.3rem">Verified means the issuer proved it controls its domain and the network operator listed it. Not verified does not mean unsafe, only unchecked.</div></div>`;
+  } catch {}
   const wl = await Promise.all(w.map(async x => { let b = '–'; try { b = (Number((await ctx.req('account_info', { account: x.addr, ledger_index: 'validated' })).account_data.Balance) / 1e6).toLocaleString(); } catch {} return `<div class="row" style="gap:.5rem;font-size:.82rem;margin:.2rem 0"><span class="grow">${esc(x.label)} <span class="mut" style="font-family:monospace">${esc(ctx.show(x.addr).slice(0, 8))}…</span></span><b>${esc(b)}</b><button class="sm ghost" onclick="window.xsafe.unwatch('${esc(x.addr)}')">Remove</button></div>`; }));
   box.innerHTML = `<div class="k" style="margin:0">Safety and tools</div><div style="margin-top:.5rem"><div class="k" style="font-size:.74rem">Reserve planner</div>${res}</div>
-  <div style="margin-top:.8rem"><div class="k" style="font-size:.74rem">Watch-only wallets (no keys, view only)</div>${wl.join('') || '<div class="mut" style="font-size:.82rem">None yet.</div>'}<div class="row" style="gap:.4rem;margin-top:.3rem"><input id="xs_wl" placeholder="label" style="width:7rem"><input id="xs_wa" class="grow" placeholder="address"><button class="sm" onclick="window.xsafe.watch()">Watch</button></div></div>
+  ${netBox}<div style="margin-top:.8rem"><div class="k" style="font-size:.74rem">Watch-only wallets (no keys, view only)</div>${wl.join('') || '<div class="mut" style="font-size:.82rem">None yet.</div>'}<div class="row" style="gap:.4rem;margin-top:.3rem"><input id="xs_wl" placeholder="label" style="width:7rem"><input id="xs_wa" class="grow" placeholder="address"><button class="sm" onclick="window.xsafe.watch()">Watch</button></div></div>
   <div style="margin-top:.8rem"><div class="k" style="font-size:.74rem">Payment request link</div><div class="row" style="gap:.4rem;flex-wrap:wrap"><input id="xs_pa" placeholder="amount" style="width:7rem"><input id="xs_pt" placeholder="tag (optional)" style="width:8rem"><button class="sm" onclick="window.xsafe.link()">Make link</button></div><div id="xs_pl" style="font-family:monospace;font-size:.72rem;word-break:break-all;margin-top:.3rem"></div></div>
   <div style="margin-top:.8rem"><div class="k" style="font-size:.74rem">Display and accessibility</div><div class="row" style="gap:.8rem;flex-wrap:wrap;font-size:.82rem"><label>Text size <select onchange="window.xsafe.scale(this.value)">${[0.9, 1, 1.15, 1.3, 1.5].map(s => `<option value="${s}" ${a.scale === s ? 'selected' : ''}>${Math.round(s * 100)}%</option>`).join('')}</select></label><label><input type="checkbox" ${a.contrast ? 'checked' : ''} onchange="window.xsafe.contrast(this.checked)"> High contrast</label><label><input type="checkbox" ${a.motion ? '' : 'checked'} onchange="window.xsafe.motion(!this.checked)"> Reduce motion</label><label><input type="checkbox" ${devMode() ? 'checked' : ''} onchange="window.xsafe.dev(this.checked)"> Developer mode (log what is checked before each send)</label></div></div>
   <div style="margin-top:.8rem" class="mut"><span style="font-size:.8rem">Before every payment Starsky now checks: enough to spend after the reserve, recipient active, destination tag, trust line, look-alike and first-time recipients.</span></div>`;

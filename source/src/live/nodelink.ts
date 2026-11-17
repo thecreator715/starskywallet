@@ -3,7 +3,7 @@
 // (latency, failures, rate limits), checks the network ID, warns when the node is behind or slow, and gives a diagnostics report to copy.
 import { ctx } from './ctx.ts';
 import { esc } from './util.ts';
-import { setScamList } from './safety.ts';
+import { setScamList, setRegistry, setHealth } from './safety.ts';
 
 export const APP_VERSION = '1.0.0';
 const NETID: Record<string, number> = { main: 4242, test: 4243 };
@@ -69,6 +69,8 @@ export async function refresh(force = false) {
   const b = base(), pre = net() === 'test' ? '/test' : '';
   [feed, gw] = await Promise.all([getJson(`${b}/panel/${net()}/api/public/nodefeed`), getJson(`${b}${pre}/gw/status`)]);
   if (Array.isArray(feed?.scam)) setScamList(feed.scam);
+  if (feed?.registry) setRegistry(feed.registry);
+  if (feed?.health) setHealth(feed.health);
   if (gw?.now) skew = Math.round((Date.now() - gw.now) / 1000);
 }
 const needsUpdate = () => { const m = feed?.minApp?.starsky; if (!m) return false; const a = APP_VERSION.split('.').map(Number), b = String(m).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); } return false; };
@@ -78,6 +80,8 @@ export function banners() {
   const view = $('view'); if (!view) return; $('xnl')?.remove(); const d = dis(), items: { id: string; c: string; h: string }[] = [];
   const col = { info: 'var(--ok)', warn: 'var(--warn)', crit: 'var(--crit)' } as any;
   if (netIdOk === false) items.push({ id: '', c: 'crit', h: `<b>Wrong network.</b> This node reports network ID ${netIdSeen}, but ${ctx.netKey() === 'test' ? 'LUMA Testnet' : 'LUMA Mainnet'} is ${NETID[ctx.netKey()]}. Do not send anything until you pick the right node in Settings.` });
+  if (feed?.health?.state === 'outage') items.push({ id: '', c: 'crit', h: `<b>${esc(feed.health.headline || 'Network problem')}.</b> ${esc((feed.health.detail || []).join(' '))} Transactions may not be confirmed.` });
+  else if (feed?.health?.state === 'degraded') items.push({ id: '', c: 'warn', h: `<b>${esc(feed.health.headline || 'Reduced capacity')}.</b> ${esc((feed.health.detail || []).join(' '))}` });
   if (feed?.maintenance?.on) items.push({ id: '', c: 'warn', h: `<b>Maintenance.</b> ${esc(feed.maintenance.msg || 'The network is being worked on. Transactions may be slow.')}` });
   for (const a of feed?.announcements || []) if (!d['a:' + a.id]) items.push({ id: 'a:' + a.id, c: a.level || 'info', h: `${a.title ? `<b>${esc(a.title)}</b> ` : ''}${esc(a.msg || '')}${/^https:\/\//.test(a.link || '') ? ` <a href="${esc(a.link)}" target="_blank" rel="noopener">More</a>` : ''}` });
   if (needsUpdate()) items.push({ id: 'upd', c: 'warn', h: `<b>Please refresh.</b> The network operator asks for Starsky ${esc(feed.minApp.starsky)} or newer. Reload the page to get it.` });
