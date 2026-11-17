@@ -22,6 +22,7 @@ import { clearCache } from './live/chain.ts';
 import { startTopStats, refreshTopStats } from './live/topstats.ts';
 import { xclient } from './live/bridge.ts';
 import * as Extras from './live/extras.ts';
+import * as NL from './live/nodelink.ts';
 
 // Types
 export interface NetworkDef {
@@ -1005,9 +1006,14 @@ export async function submitTx(tx: any, seed?: string) {
   const a = activeAccount();
   if (!st.client || (!a && !seed)) throw new Error('No active account or connection');
 
-  const cl: any = await chainClient();
-  const w = xrpl.Wallet.fromSeed(seed || a!.seed);
-  const p = await cl.autofill(tx);
+  const dup = NL.guard({ ...tx, Account: tx.Account || (seed ? '' : a?.address) });
+  if (dup) return { ok: false, msg: dup };
+  let cl: any, w: any, p: any;
+  try {
+    cl = await chainClient();
+    w = xrpl.Wallet.fromSeed(seed || a!.seed);
+    p = await cl.autofill(tx);
+  } catch (e: any) { NL.guardClear({ ...tx, Account: tx.Account || (seed ? '' : a?.address) }); if (NL.queueTx(tx, String(e?.message || e))) return { ok: false, msg: 'The node could not be reached. The payment was saved and will wait for you at the top of the page; nothing was sent.' }; throw e; }
   if (p.NetworkID == null) {
     try {
       const nid = (await cl.request({ command: 'server_info' })).result.info.network_id;
@@ -1029,9 +1035,11 @@ export async function submitTx(tx: any, seed?: string) {
     }
   }
   const s = w.sign(p);
-  const r = await cl.submitAndWait(s.tx_blob);
+  let r: any;
+  try { r = await cl.submitAndWait(s.tx_blob); } catch (e: any) { NL.guardClear({ ...tx, Account: tx.Account || (seed ? '' : a?.address) }); throw e; }
   const code = (r.result.meta as any)?.TransactionResult || (r.result as any).engine_result;
   if (code === 'tesSUCCESS') return { ok: true, hash: s.hash, meta: r.result.meta, ledger: (r.result as any).ledger_index };
+  NL.guardClear({ ...tx, Account: tx.Account || (seed ? '' : a?.address) });
   return { ok: false, msg: code };
 }
 
