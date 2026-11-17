@@ -21,6 +21,7 @@ import { xaApi } from './live/xassets.ts';
 import { clearCache } from './live/chain.ts';
 import { startTopStats, refreshTopStats } from './live/topstats.ts';
 import { xclient } from './live/bridge.ts';
+import * as Extras from './live/extras.ts';
 
 // Types
 export interface NetworkDef {
@@ -1444,6 +1445,7 @@ export function drawDonut(cv: HTMLCanvasElement) {
 
 // UI Views
 export function renderApp() {
+  Extras.boot();
   const root = document.getElementById('app');
   if (!root) return;
 
@@ -1593,6 +1595,7 @@ export function renderApp() {
                 ${CFG.book.map(b => `<option value="${esc(b.addr)}">${esc(b.name)}</option>`).join('')}
               </datalist>
             </div>
+            ${Extras.recentRecipients(4).length ? `<div class="row" style="gap:.35rem;flex-wrap:wrap;align-items:center"><small class="mut">Recent:</small>${Extras.recentRecipients(4).map(r => `<button class="sm ghost mono" style="font-size:.72rem" onclick="window.useBook('${esc(showAddr(r))}')">${esc(showAddr(r).slice(0, 7))}…${esc(showAddr(r).slice(-4))}</button>`).join('')}</div>` : ''}
             <div class="row">
               <input id="s_amt" class="grow" placeholder="Amount" inputmode="decimal">
               <button class="sm" onclick="window.sendMax()">Max</button>
@@ -1738,6 +1741,7 @@ export function renderApp() {
               <button class="ghost" onclick="window.lockNow()">Lock Wallet</button>
             </div>
           </div>
+          ${Extras.settingsShell()}
         </div>
       `;
       break;
@@ -1892,6 +1896,7 @@ export function renderApp() {
   else Pages.marketsUnmount();
   if (st.tab === 'bridge') Pages.bridgeMount();
   if (st.tab === 'home') Pages.assetsMount();
+  Extras.afterRender(st.tab, { unfunded: !!(b && b.unfunded), online: st.status === 'online', lockMin: CFG.lockMin });
 }
 
 function renderNavItem(key: AppState['tab'], label: string) {
@@ -2311,6 +2316,7 @@ export function initWindowBindings() {
   (window as any).tk = tkApi;
   (window as any).xa = xaApi;
   setCtx({
+    book: () => CFG.book,
     req: async (command: string, params: any = {}) => {
       if (!st.client) throw new Error('not connected');
       const cl: any = await chainClient();
@@ -2582,6 +2588,9 @@ export function initWindowBindings() {
       }
 
       st.pendingTx = tx;
+      const sIn = { dest, destShown: showAddr(dest), asset: aName(a), amt, avail: availOf(a), tag: tagVal || '', book: CFG.book, native: getNet().native };
+      (st as any).pendingMeta = { dest, asset: aName(a), amt };
+      const local = Extras.sendCheckLocal(sIn);
       modal(`
         <h2>Confirm Payment</h2>
         <table style="margin:.8rem 0">
@@ -2589,12 +2598,23 @@ export function initWindowBindings() {
           <tr><td class="mut">Destination</td><td class="r mono" style="font-size:.78rem;word-break:break-all">${esc(showAddr(dest))}</td></tr>
           ${tagVal ? `<tr><td class="mut">Tag</td><td class="r">${esc(tagVal)}</td></tr>` : ''}
           <tr><td class="mut">Network</td><td class="r">${esc(getNet().name)}</td></tr>
+          ${memoVal ? `<tr><td class="mut">Memo</td><td class="r">${esc(memoVal)} <small class="mut">(public)</small></td></tr>` : ''}
+          <tr><td class="mut">Network fee</td><td class="r">about ${esc(fq(0.00001))} ${esc(getNet().native)}</td></tr>
+          <tr><td class="mut">Balance after</td><td class="r">${fq(Math.max(0, availOf(a) - amt))} ${esc(aName(a))}</td></tr>
         </table>
+        <div id="xchk" style="margin:.4rem 0 .8rem"></div>
         <div class="row">
           <button class="grow" onclick="window.closeModal()">Cancel</button>
-          <button class="pri acc grow" id="cfsend" onclick="window.doSend()">Send Now</button>
+          <button class="pri acc grow" id="cfsend" onclick="window.doSend()" ${local.block.length ? 'disabled' : ''}>Send Now</button>
         </div>
       `);
+      Extras.renderChecks(local, 'xchk');
+      Extras.sendCheckNet(sIn).then(net => {
+        const all = { block: [...local.block, ...net.block], warn: [...local.warn, ...net.warn], info: [...local.info, ...net.info] };
+        Extras.renderChecks(all, 'xchk');
+        const bt = document.getElementById('cfsend') as HTMLButtonElement | null;
+        if (bt && all.block.length) bt.disabled = true;
+      });
     } catch (e: any) {
       toast(e.message, true);
     }
@@ -2604,6 +2624,7 @@ export function initWindowBindings() {
     const btn = document.getElementById('cfsend') as HTMLButtonElement | null;
     const r = await runTx(st.pendingTx, 'Payment executed successfully', btn);
     if (r.ok) {
+      const pm = (st as any).pendingMeta; if (pm) Extras.recordSend(pm.dest, pm.asset, pm.amt);
       closeModal();
       (window as any).goTab('activity');
     }
@@ -3092,6 +3113,7 @@ export function initWindowBindings() {
     a.href = URL.createObjectURL(new Blob([v], { type: 'application/json' }));
     a.download = 'starsky-wallet-backup.json';
     a.click();
+    Extras.markBackedUp();
   };
 
   (window as any).importVaultFile = async (f: File) => {

@@ -1,6 +1,7 @@
 // Bridge page: link to the operator, a checklist of everything the bridge needs, an independent reserve check on both ledgers,
 // transfer forms with estimates and requirement checks, claim directions and your activity. RLUSD, MINT and MAGIC lanes first, XRP and LUMAX later.
 import * as xrpl from 'xrpl';
+import * as X from './extras.ts';
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
 import { Asset, NATIVE, amtTx, esc, fmt, fromKey, hexName, nameToCur, short, ago, rippleToMs } from './util.ts';
@@ -221,7 +222,7 @@ const UIK = BK + 'ui.';
 const loadUi = () => { try { const j = JSON.parse(localStorage.getItem(UIK + ctx.netKey()) || '{}'); if (j.dir === 'in' || j.dir === 'out') ST.dir = j.dir; if (j.lane && lanes().some(l => l.id === j.lane)) ST.lane = j.lane; if (j.tab) ST.tab = j.tab; } catch {} };
 const saveUi = () => { try { localStorage.setItem(UIK + ctx.netKey(), JSON.stringify({ dir: ST.dir, lane: ST.lane, tab: ST.tab })); } catch {} };
 export function bridgeShell() {
-  return `<div id="br" class="brpage"><div id="br_head"></div>
+  return `<div id="br" class="brpage"><div id="br_head"></div><div id="br_pend"></div>
   <div class="card" id="br_xfer" style="margin-top:.6rem"></div>
   <div id="br_tabs" class="seg" style="margin:1rem 0 .6rem;flex-wrap:wrap"></div>
   <div id="brp_activity" class="brpane"><div class="card"><div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Your bridge activity (read from both ledgers)</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div><div id="br_hist" style="overflow:auto"><div class="mut" style="padding:1rem">Reading…</div></div></div></div>
@@ -230,6 +231,10 @@ export function bridgeShell() {
   <div id="brp_how" class="brpane" style="display:none"><div class="card" id="br_claim"></div></div>
   <div id="brp_operator" class="brpane" style="display:none"><div id="br_val"></div></div>
   <div id="brp_settings" class="brpane" style="display:none"><div id="br_setup"></div></div></div>`;
+}
+function paintPending() {
+  const p = X.pendingGet(), e = $('br_pend'); if (!e) return;
+  e.innerHTML = p ? `<div class="card" style="margin-top:.6rem;border-color:rgba(0,255,140,.4)"><div class="row" style="align-items:center;gap:.6rem;justify-content:space-between;flex-wrap:wrap"><span>⏳ A transfer to <b>${esc(short(p.dest, 8, 6))}</b> was started ${esc(ago(Date.now() - p.t))} ago and is not confirmed yet.</span><span><button class="sm pri" onclick="window.br.resume()">Track it</button> <button class="sm ghost" onclick="window.br.forget()">Dismiss</button></span></div></div>` : '';
 }
 function paintTabs() {
   const c = bcfg(), bad = (ST.chk || []).filter((x: Chk) => x.level === 'bad').length, setupBad = !c.lumaVault || !c.xrplVault;
@@ -262,7 +267,7 @@ function paintHead() {
     else { dot = 'dn'; txt = 'Relayer silent: transfers wait until it is back'; }
   } else if (OP.err) { txt = 'Operator not reachable: set it up in Settings'; dot = 'dn'; }
   setHtml('br_head', `<div class="row" style="justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap"><span class="${dot}" style="font-weight:700">● ${esc(txt)}</span><span class="mut" style="font-size:.78rem">${esc(more)} <button class="sm ghost" onclick="window.br.refresh()" title="Refresh">↻</button></span></div>`);
-  paintVal(); paintTabs();
+  paintVal(); paintTabs(); paintPending();
 }
 function paintSetup() {
   const c = bcfg();
@@ -318,7 +323,7 @@ function paintXfer() {
     <div class="row" style="gap:.4rem;margin-top:.4rem;justify-content:flex-end"><button class="sm ghost" onclick="window.br.pct(.25)">25%</button><button class="sm ghost" onclick="window.br.pct(.5)">50%</button><button class="sm ghost" onclick="window.br.pct(.75)">75%</button><button class="sm ghost" onclick="window.br.pct(1)">Max</button></div>
     <div id="br_recv" style="margin-top:.7rem;min-height:1.3rem"></div>
     <div class="row" style="justify-content:space-between;align-items:center;gap:.5rem;margin-top:.5rem;font-size:.84rem;flex-wrap:wrap"><span class="mut">To: ${mine ? `<b>${esc((mine as any).label || 'your wallet')}</b> ${esc(short(dst, 8, 6))}` : dst ? esc(short(dst, 8, 6)) : '<span class="dn">no destination yet</span>'}</span><button class="sm ghost" onclick="window.br.chg()">${mine ? 'Send to a different address' : 'Edit address'}</button></div>
-    <input id="br_dst" class="grow" style="${mine || !out && dst ? 'display:none;' : ''}width:100%;margin-top:.4rem" placeholder="${out ? 'Destination on XRPL (r…, optional :tag)' : 'Destination on LUMA (L… / T…)'}" value="${esc(dst)}" oninput="window.br.est()">
+    <datalist id="br_book">${(ctx.book ? ctx.book() : []).map(b => `<option value="${esc(b.addr)}">${esc(b.name)}</option>`).join('')}</datalist><input id="br_dst" list="br_book" class="grow" style="${mine || !out && dst ? 'display:none;' : ''}width:100%;margin-top:.4rem" placeholder="${out ? 'Destination on XRPL (r…, optional :tag)' : 'Destination on LUMA (L… / T…)'}" value="${esc(dst)}" oninput="window.br.est()">
     <div id="br_warn" style="margin-top:.5rem"></div>
     <button id="br_go" class="pri acc" style="width:100%;margin-top:.7rem;font-size:1.05rem;padding:.8rem" onclick="window.br.send(this)">Bridge</button>
     <div id="br_msg" class="mut" style="font-size:.78rem;margin-top:.4rem"></div>
@@ -600,6 +605,13 @@ export const brApi = {
   refresh() { bridgeLoad(); },
   dir(d: string) { ST.dir = d; saveUi(); paintXfer(); paintClaim(); },
   lane(l: string) { ST.lane = l; saveUi(); paintXfer(); paintClaim(); },
+  resume() {
+    const p = X.pendingGet(); if (!p) return paintPending();
+    const fl = flowModal({ title: 'Bridge transfer in progress', rows: [['To wallet', `<span class="mono">${esc(short(p.dest, 10, 8))}</span> (${p.destNet === 'xrpl' ? 'XRPL' : 'LUMA'})`], ['Started', ago(Date.now() - p.t) + ' ago']], steps: ['Sign and send', 'Validated on the source ledger', 'Bridge confirms and pays out', 'Arrives in your wallet'] });
+    fl.step(0, 'ok'); fl.step(1, 'ok'); fl.step(2, 'run', 'checking for the payout');
+    awaitArrival(fl, p.srcId, p.destNet, p.dest).then(() => paintPending());
+  },
+  forget() { X.pendingSet(null); paintPending(); },
   tab(t: string) { ST.tab = t; saveUi(); paintTabs(); },
   chg() { const d = $('br_dst') as HTMLInputElement; if (d) { d.style.display = ''; d.focus(); d.select(); } },
   pct(f: number) {
@@ -761,13 +773,14 @@ function flowModal(o: { title: string; rows: [string, string][]; steps: string[]
 const memoText = (t: any) => (t.Memos || []).map((mm: any) => { try { return decodeURIComponent(((mm.Memo || {}).MemoData || '').replace(/../g, '%$&')); } catch { return ''; } }).join(' ');
 // poll the destination wallet until the bridge's payout (its memo is the transfer id) shows up
 async function awaitArrival(fl: ReturnType<typeof flowModal>, srcId: string, destNet: 'xrpl' | 'luma', destAddr: string) {
+  X.pendingSet({ srcId, destNet, dest: destAddr, amt: '', label: '', t: Date.now() });   // remembered so a refresh can pick the transfer back up
   const t0 = Date.now();
   while (Date.now() - t0 < 8 * 60 * 1000) {
     await new Promise(r => setTimeout(r, 4500));
     let txs: any[] = [];
     try { const r: any = destNet === 'xrpl' ? await xtry('account_tx', { account: destAddr, limit: 40 }) : await tryReq('account_tx', { account: ctx.toClassic(destAddr), limit: 40 }); txs = (r && r.transactions) || []; } catch {}
     const hit = txs.find((x: any) => { const t = x.tx || x.tx_json || x; return t.TransactionType === 'Payment' && memoText(t).trim() === srcId; });
-    if (hit) { const t = hit.tx || hit.tx_json || hit; fl.step(2, 'ok'); fl.step(3, 'ok', short(t.hash || hit.hash || '', 8, 6)); fl.done(`Done. The payout has arrived on ${destNet === 'xrpl' ? 'the XRP Ledger' : 'LUMA'}.`); setTimeout(() => bridgeLoad(), 500); return; }
+    if (hit) { const t = hit.tx || hit.tx_json || hit; fl.step(2, 'ok'); fl.step(3, 'ok', short(t.hash || hit.hash || '', 8, 6)); X.pendingSet(null); X.notifyArrival('Bridge transfer arrived', `Your payout arrived on ${destNet === 'xrpl' ? 'the XRP Ledger' : 'LUMA'}.`); fl.done(`Done. The payout has arrived on ${destNet === 'xrpl' ? 'the XRP Ledger' : 'LUMA'}.`); setTimeout(() => bridgeLoad(), 500); return; }
     const e = Math.round((Date.now() - t0) / 1000);
     fl.step(2, 'run', e < 60 ? 'waiting for the bridge to confirm (needs a few ledgers)' : 'still waiting: the bridge scans every 15 s; if this takes more than 5 minutes check the operator panel (enabled, not paused)');
     fl.step(3, 'run', 'watching your wallet for the payout');

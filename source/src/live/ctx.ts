@@ -18,6 +18,7 @@ export interface Ctx {
   modal: (html: string) => void;
   closeModal: () => void;
   showL: (r: string) => string; // classic -> L/T address of the active LUMA network
+  book?: () => Array<{ name: string; addr: string }>; // saved contacts
   xrpl: () => boolean; // true while the XRPL wallet tab is active: every read and write goes to the XRPL node
 }
 const nope = () => {

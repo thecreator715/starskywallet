@@ -7,7 +7,7 @@ interface Row {
   hash: string; ms: number; ledger: number; type: string; res: string; ok: boolean; fee: number; seq: number;
   from: string; to: string; cp: string; out: boolean; amt: string; amtN: number; cur: string; sum: string; raw: any; meta: any;
 }
-const HX: any = { rows: [] as Row[], marker: null as any, done: false, busy: false, acct: '', q: '', type: '', sort: 'time', dir: -1, sel: '', err: '' };
+const HX: any = { rows: [] as Row[], marker: null as any, done: false, busy: false, acct: '', q: '', type: '', sort: 'time', dir: -1, sel: '', err: '', flow: '', range: '' };
 const $ = (id: string) => document.getElementById(id);
 const sh = (a: string) => (a ? short(ctx.show(a), 8, 6) : '');
 const cur = (c: string) => (c === 'XRP' || c === 'native' ? ctx.native() : hexName(c));
@@ -17,6 +17,7 @@ function amtOf(a: any): { s: string; n: number; c: string } {
   if (a.currency) return { s: fmt(Number(a.value), 6) + ' ' + cur(a.currency), n: Number(a.value), c: cur(a.currency) };
   return { s: '', n: 0, c: '' };
 }
+const PLAIN: Record<string, string> = { AccountSet: 'Changed account settings', SetRegularKey: 'Set a regular signing key', SignerListSet: 'Changed multi-signature signers', EscrowCreate: 'Locked funds in escrow', EscrowFinish: 'Released an escrow', EscrowCancel: 'Cancelled an escrow', CheckCreate: 'Wrote a check', CheckCash: 'Cashed a check', CheckCancel: 'Cancelled a check', PaymentChannelCreate: 'Opened a payment channel', PaymentChannelFund: 'Funded a payment channel', PaymentChannelClaim: 'Claimed from a payment channel', DepositPreauth: 'Changed who may pay this account', AccountDelete: 'Deleted the account', TicketCreate: 'Reserved sequence tickets', Clawback: 'Clawback', MPTokenIssuanceCreate: 'Created a multi-purpose token', MPTokenAuthorize: 'Opted in to a token', DIDSet: 'Updated identity (DID)', CredentialCreate: 'Issued a credential', OracleSet: 'Published an oracle price', Batch: 'Batch of transactions' };
 function toRow(x: any, me: string): Row | null {
   const t = x.tx_json || x.tx || {};
   const m = x.meta || x.metaData || {};
@@ -33,8 +34,8 @@ function toRow(x: any, me: string): Row | null {
   else if (type === 'OfferCancel') sum = `Cancel offer #${t.OfferSequence}`;
   else if (type === 'TrustSet') sum = `Trust ${cur(t.LimitAmount?.currency || '')} from ${sh(t.LimitAmount?.issuer || '')}`;
   else if (type.startsWith('NFToken')) sum = type.replace('NFToken', 'NFT ');
-  else if (type.startsWith('AMM')) sum = type.replace('AMM', 'Pool ');
-  else sum = type;
+  else if (type.startsWith('AMM')) sum = type.replace('AMM', 'Pool ').replace('Deposit', 'Add liquidity').replace('Withdraw', 'Remove liquidity').replace('Create', 'Create pool').replace('Vote', 'vote on fee');
+  else sum = PLAIN[type] || type.replace(/([a-z])([A-Z])/g, '$1 $2');
   return {
     hash, ms: t.date != null ? rippleToMs(t.date) : 0, ledger: Number(x.ledger_index || t.ledger_index || 0), type, res, ok: res === 'tesSUCCESS',
     fee: Number(t.Fee || 0) / 1e6, seq: Number(t.Sequence || 0), from: t.Account || '', to: t.Destination || '', cp: out ? t.Destination || '' : t.Account || '', out,
@@ -62,7 +63,7 @@ export function mount() { if (HX.acct !== ctx.account()) Object.assign(HX, { row
 const ago = (ms: number) => (ms ? new Date(ms).toLocaleString() : '–');
 function list(): Row[] {
   const q = HX.q.trim().toLowerCase();
-  let l: Row[] = HX.rows.filter((r: Row) => (!HX.type || r.type === HX.type) && (!q || (r.type + ' ' + r.sum + ' ' + r.hash + ' ' + r.cp + ' ' + r.amt + ' ' + ctx.show(r.cp)).toLowerCase().includes(q)));
+  let l: Row[] = HX.rows.filter((r: Row) => (!HX.type || r.type === HX.type) && (!HX.flow || (HX.flow === 'in' ? !r.out && r.ok : HX.flow === 'out' ? r.out && r.ok : !r.ok)) && (!HX.range || (r.ms && r.ms > Date.now() - Number(HX.range) * 86400000)) && (!q || (r.type + ' ' + r.sum + ' ' + r.hash + ' ' + r.cp + ' ' + r.amt + ' ' + ctx.show(r.cp)).toLowerCase().includes(q)));
   const k = HX.sort, d = HX.dir;
   l.sort((a: any, b: any) => { const x = k === 'amt' ? a.amtN : k === 'fee' ? a.fee : k === 'ledger' ? a.ledger : k === 'time' ? a.ms : String(a[k] ?? ''); const y = k === 'amt' ? b.amtN : k === 'fee' ? b.fee : k === 'ledger' ? b.ledger : k === 'time' ? b.ms : String(b[k] ?? ''); return (x < y ? -1 : x > y ? 1 : 0) * d || b.ledger - a.ledger; });
   return l;
@@ -76,7 +77,7 @@ function paint(): void {
   const types = [...new Set(HX.rows.map((x: Row) => x.type))].sort() as string[];
   const fees = HX.rows.reduce((t: number, x: Row) => t + (x.out ? x.fee : 0), 0);
   r.innerHTML = `<div class="card"><div class="row" style="gap:.6rem;flex-wrap:wrap;justify-content:space-between"><div><div class="k" style="margin:0">Transaction history (${ctx.native()})</div><small class="mut">${HX.rows.length} loaded${HX.done ? ', that is everything' : ''} · ${fmt(fees, 6)} ${ctx.native()} paid in fees · click a row for details</small></div>
-    <div class="row" style="gap:.5rem;flex-wrap:wrap"><input placeholder="Search type, address, amount or hash" value="${esc(HX.q)}" oninput="window.hx.search(this.value)" style="width:18rem"><select onchange="window.hx.type(this.value)"><option value="">All types</option>${types.map(t => `<option ${HX.type === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select><button class="sm ghost" onclick="window.hx.reload()">Refresh</button></div></div>
+    <div class="row" style="gap:.5rem;flex-wrap:wrap"><input placeholder="Search type, address, amount or hash" value="${esc(HX.q)}" oninput="window.hx.search(this.value)" style="width:18rem"><select onchange="window.hx.type(this.value)"><option value="">All types</option>${types.map(t => `<option ${HX.type === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select><select onchange="window.hx.flow(this.value)"><option value="">In and out</option><option value="in" ${HX.flow === 'in' ? 'selected' : ''}>Received</option><option value="out" ${HX.flow === 'out' ? 'selected' : ''}>Sent / made by me</option><option value="bad" ${HX.flow === 'bad' ? 'selected' : ''}>Failed</option></select><select onchange="window.hx.range(this.value)"><option value="">All time</option><option value="7" ${HX.range === '7' ? 'selected' : ''}>Last 7 days</option><option value="30" ${HX.range === '30' ? 'selected' : ''}>Last 30 days</option><option value="365" ${HX.range === '365' ? 'selected' : ''}>Last year</option></select><button class="sm ghost" onclick="window.hx.csv()">Export CSV</button><button class="sm ghost" onclick="window.hx.reload()">Refresh</button></div></div>
     ${HX.err ? `<div class="crit" style="margin:.5rem 0">${esc(HX.err)}</div>` : ''}
     <div style="overflow:auto;margin-top:.6rem"><table class="dxt hxt"><thead><tr>${th('time', 'Time')}${th('type', 'Type')}<th>Details</th>${th('cp', 'Counterparty')}${th('amt', 'Amount', 'r')}${th('fee', 'Fee', 'r')}${th('ledger', 'Ledger', 'r')}${th('res', 'Result')}</tr></thead><tbody>${
       l.map(x => `<tr class="clk" onclick="window.hx.open('${esc(x.hash)}')"><td class="mut" style="white-space:nowrap">${esc(ago(x.ms))}</td><td><b>${esc(x.type)}</b></td><td style="max-width:22rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.sum)}</td><td class="mono">${x.cp ? esc(sh(x.cp)) : '–'}</td><td class="r ${x.type === 'Payment' ? (x.out ? 'warn' : 'ok') : ''}">${x.amt ? (x.type === 'Payment' ? (x.out ? '−' : '+') : '') + esc(x.amt) : '–'}</td><td class="r mut">${x.out && x.fee ? fmt(x.fee, 6) : '–'}</td><td class="r mono">${x.ledger || '–'}</td><td class="${x.ok ? 'ok' : 'crit'}">${x.ok ? '✓' : esc(x.res || '?')}</td></tr>`).join('') || `<tr><td colspan="8" class="mut" style="padding:1rem">${HX.busy ? 'Reading transactions…' : 'No transactions match.'}</td></tr>`}</tbody></table></div>
@@ -106,7 +107,7 @@ function detail(r: HTMLElement): void {
   const fields = Object.keys(t).filter(k => !['TxnSignature', 'SigningPubKey', 'hash', 'Signers', 'Account', 'Destination', 'Fee', 'Sequence', 'TransactionType', 'date', 'ledger_index', 'inLedger', 'Flags'].includes(k));
   const show = (v: any): string => (v && typeof v === 'object' ? (v.currency ? esc(amtOf(v).s) + (v.issuer ? ` <small class="mut">issued by ${esc(sh(v.issuer))}</small>` : '') : `<span class="mono" style="font-size:.74rem">${esc(JSON.stringify(v))}</span>`) : /^\d+$/.test(String(v)) && /Amount|Fee|TakerGets|TakerPays|SendMax|DeliverMin/.test('') ? '' : esc(String(v)));
   const memo = (t.Memos || []).map((m: any) => { try { return decodeURIComponent(escape(atob(btoa(String.fromCharCode(...(String(m.Memo?.MemoData || '').match(/../g) || []).map((h: string) => parseInt(h, 16))))))); } catch { return ''; } }).filter(Boolean);
-  r.innerHTML = `<div class="row" style="margin-bottom:.8rem;gap:.5rem"><button class="ghost" onclick="window.hx.back()">← Back to history</button><span style="flex:1"></span><button class="sm ghost" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(x.hash)}')">Copy hash</button></div>
+  r.innerHTML = `<div class="row" style="margin-bottom:.8rem;gap:.5rem"><button class="ghost" onclick="window.hx.back()">← Back to history</button><span style="flex:1"></span><button class="sm ghost" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(x.hash)}')">Copy hash</button><button class="sm pri" onclick="window.hx.receipt('${esc(x.hash)}')">Copy receipt</button></div>
   <div class="card"><div class="row" style="gap:.6rem;align-items:center;flex-wrap:wrap"><h2 style="margin:0">${esc(x.type)}</h2><span class="chip ${x.ok ? '' : 'b'}" style="${x.ok ? 'background:rgba(0,255,140,.2);color:#00ff8c' : 'background:rgba(255,80,80,.2);color:#ff5a5a'}">${x.ok ? 'Validated' : esc(x.res)}</span></div>
   <div class="mut" style="margin:.3rem 0 .8rem">${esc(x.sum)} · ${esc(ago(x.ms))}</div>
   <div class="kvl">${kv('Amount', x.amt ? esc(x.amt) : '–')}${kv('Fee', x.fee ? fmt(x.fee, 6) + ' ' + ctx.native() : '–')}${kv('From', esc(ctx.show(x.from)) + (x.from === me ? ' (you)' : ''), true)}${kv('To', x.to ? esc(ctx.show(x.to)) + (x.to === me ? ' (you)' : '') : '–', true)}${kv('Ledger', String(x.ledger || '–'))}${kv('Sequence', String(x.seq || '–'))}${kv('Result', esc(x.res || '–'))}${kv('Index in ledger', String(x.meta.TransactionIndex ?? '–'))}${kv('Transaction hash', esc(x.hash), true)}</div></div>
@@ -120,6 +121,20 @@ export const hxApi = {
   sort(k: string) { if (HX.sort === k) HX.dir = -HX.dir; else { HX.sort = k; HX.dir = k === 'type' || k === 'cp' || k === 'res' ? 1 : -1; } paint(); },
   search(v: string) { HX.q = v; paint(); const e = document.querySelector('#hx input') as HTMLInputElement; if (e) { e.focus(); e.setSelectionRange(v.length, v.length); } },
   type(v: string) { HX.type = v; paint(); },
+  flow(v: string) { HX.flow = v; paint(); },
+  range(v: string) { HX.range = v; paint(); },
+  csv() {
+    const q = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const head = ['Time (ISO)', 'Hash', 'Ledger', 'Type', 'Result', 'Direction', 'Counterparty', 'Amount', 'Currency', 'Fee', 'Summary'];
+    const lines = [head.join(','), ...list().map((x: Row) => [x.ms ? new Date(x.ms).toISOString() : '', x.hash, x.ledger, x.type, x.res, x.out ? 'out' : 'in', ctx.show(x.cp), x.amtN, x.cur, x.out ? x.fee : 0, x.sum].map(q).join(','))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); a.download = 'starsky-history.csv'; a.click();
+    ctx.toast(`Exported ${lines.length - 1} rows`);
+  },
+  receipt(h: string) {
+    const x: Row | undefined = HX.rows.find((y: Row) => y.hash === h); if (!x) return;
+    const t = [`Transaction receipt`, `Status: ${x.ok ? 'Successful' : 'Failed (' + x.res + ')'}`, `What: ${x.sum}`, x.amt ? `Amount: ${x.amt}` : '', `From: ${ctx.show(x.from)}`, x.to ? `To: ${ctx.show(x.to)}` : '', `Network fee: ${x.fee ? fmt(x.fee, 6) + ' ' + ctx.native() : '–'}`, `Time: ${x.ms ? new Date(x.ms).toLocaleString() : '–'}`, `Ledger: ${x.ledger}`, `Hash: ${x.hash}`].filter(Boolean).join('\n');
+    try { navigator.clipboard.writeText(t); ctx.toast('Receipt copied'); } catch { ctx.toast('Copy failed', true); }
+  },
   open(h: string) { HX.sel = h; paint(); },
   back() { HX.sel = ''; paint(); },
   more() { loadMore(); },
