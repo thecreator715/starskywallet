@@ -375,7 +375,7 @@ function alerts() {
   }
   if (MG.stale) out.push('The node did not answer the last history request. Showing the last saved data; nothing is lost.');
   const waiting = MG.mine.filter((p: Pos) => p.status === 'open' && !p.bad && (p.closeReq || liveList([p])[0].ratio >= 1));
-  if (waiting.length && !MG.op) out.push('No operator is running, so close requests and liquidations are waiting. Open the Leverage page and press Start operator (needs the genesis wallet in this vault), or run the standalone operator (see README).');
+  if (waiting.length && !MG.op) out.push('Close requests, stops and liquidations are settled by the operator that runs inside the LUMA panel (it starts by itself with Start LUMA All). If this stays here for more than a minute, the LUMA panel is not running or is an old version: update the lumanet folder and run Start LUMA All again. You can also press Start operator on the Leverage page if the genesis wallet is in this vault.');
   MG.alerts = out;
 }
 export const mgRecall = recall;
