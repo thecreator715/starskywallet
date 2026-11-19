@@ -7,4 +7,4 @@ Live site: https://thecreator715.github.io/starskywallet/ (`starsky-luma.org` fo
 - The LUMA node addresses visitors connect to are in the `STARSKY_CONFIG` block near the top of `source/index.html` (and baked into the built `index.html`).
 
 ## Admin edition (on the node machine)
-Double-click `Start Starsky Admin.command` (macOS). It opens Starsky at http://127.0.0.1:8096 wired straight to the LUMA nodes and control panels on this computer (Mainnet 6006 / panel 8090, Testnet 6106 / panel 8091), and starts the LUMA kit first if no node is running and the kit sits next to this folder.
+Double-click `Start Starsky Admin.command` (macOS). It opens Starsky at http://127.0.0.1:8095 wired straight to the LUMA nodes and control panels on this computer (Mainnet 6006 / panel 8090, Testnet 6106 / panel 8091), and starts the LUMA kit first if no node is running and the kit sits next to this folder.

@@ -7,6 +7,7 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
 const port = +(process.argv[2] || process.env.PORT || 8095);
 const T = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 // NFT image storage: the browser talks to the same Kubo node the control panel runs (main API 5001, test API 5101) through this server.
+const LOCAL = { default: process.env.STARSKY_NET || 'main', main: { url: 'ws://127.0.0.1:6006', rpc: 'http://127.0.0.1:5006', panel: 'http://127.0.0.1:8090' }, test: { url: 'ws://127.0.0.1:6106', rpc: 'http://127.0.0.1:5106', panel: 'http://127.0.0.1:8091' } };
 const KUBO = { '/kubo/main/': 5001, '/kubo/test/': 5101 };
 http.createServer((q, r) => {
   const kp = Object.keys(KUBO).find(k => q.url.startsWith(k));
@@ -21,5 +22,7 @@ http.createServer((q, r) => {
   let f = path.join(root, p);
   if (!f.startsWith(root) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) f = path.join(root, 'index.html');
   r.writeHead(200, { 'content-type': T[path.extname(f)] || 'application/octet-stream', 'cache-control': 'no-store' });
+  // Run on the node machine: the page talks to the LUMA nodes and control panels on THIS computer, not the public address.
+  if (path.basename(f) === 'index.html') return r.end(fs.readFileSync(f, 'utf8').replace(/window\.STARSKY_CONFIG\s*=\s*\{[\s\S]*?\};/, () => 'window.STARSKY_CONFIG = ' + JSON.stringify(LOCAL) + ';'));
   fs.createReadStream(f).pipe(r);
 }).listen(port, '127.0.0.1', () => console.log('Starsky running at http://127.0.0.1:' + port));

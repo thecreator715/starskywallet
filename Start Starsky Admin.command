@@ -3,7 +3,7 @@
 # (Mainnet 6006 / panel 8090, Testnet 6106 / panel 8091). If the LUMA kit is next to this folder and no node is running, it starts it first.
 DIR="$(cd "$(dirname "$0")" && pwd)"; cd "$DIR" || exit 1
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin"
-PORT=8096
+PORT=8095
 command -v node >/dev/null || { echo "Node.js is needed (nodejs.org). Install it, then run this again."; read -r -p "Press Return." _; exit 1; }
 up() { curl -s -m 2 -X POST http://127.0.0.1:$1 -d '{"method":"server_info"}' 2>/dev/null | grep -q server_state; }
 if ! up 5006 && ! up 5106; then
