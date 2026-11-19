@@ -56,6 +56,7 @@ export interface Pos {
   endMs: number;
   settleHash: string;
   bad: string; // reason an open was rejected
+  legacy?: boolean;
 }
 export interface Live {
   p: Pos;
@@ -231,12 +232,14 @@ export async function derive(evs: Ev[], genesis: string): Promise<Pos[]> {
       if (!(lev >= 1 && lev <= 100)) bad = 'leverage must be 1 to 100';
       else if (!(e.amt >= MIN_COLLATERAL)) bad = `collateral below the minimum of ${MIN_COLLATERAL} LUMA`;
       else if (pe == null && Date.now() - e.ms > 6 * 3600e3) bad = 'no price for this asset';
-      pos.set(e.hash, { id: e.hash, trader: e.from, key, long: d.s === 'L', lev: lev >= 1 ? lev : 1, coll: e.amt, sl: Number(d.sl) || 0, tp: Number(d.tp) || 0, ms: e.ms, seq: e.seq, pe: pe || 0, n: e.amt * (lev >= 1 ? lev : 1), status: 'open', closeReq: false, why: '', px: 0, pay: 0, pnl: 0, endMs: 0, settleHash: '', bad });
+      pos.set(e.hash, { id: e.hash, trader: e.from, key, long: legacyUsd(key, e.ms) ? d.s !== 'L' : d.s === 'L', legacy: legacyUsd(key, e.ms), lev: lev >= 1 ? lev : 1, coll: e.amt, sl: Number(d.sl) || 0, tp: Number(d.tp) || 0, ms: e.ms, seq: e.seq, pe: pe || 0, n: e.amt * (lev >= 1 ? lev : 1), status: 'open', closeReq: false, why: '', px: 0, pay: 0, pnl: 0, endMs: 0, settleHash: '', bad });
+      if (legacyUsd(key, e.ms)) legacyClean(pos.get(e.hash));
     } else if (d.op === 'edit' && e.to === genesis) {
       const p = pos.get(d.id);
       if (p && p.trader === e.from && p.status === 'open') {
         if (d.sl !== undefined) p.sl = Number(d.sl) || 0;
         if (d.tp !== undefined) p.tp = Number(d.tp) || 0;
+        if (p.legacy) legacyClean(p);
       }
     } else if (d.op === 'close' && e.to === genesis) {
       const p = pos.get(d.id);
@@ -275,6 +278,11 @@ export async function genesis(): Promise<string> {
 export const MG: any = { stale: false, mine: [] as Pos[], all: [] as Pos[], px: null as M.Snap | null, at: 0, loading: false, alerts: [] as string[], tvl: new Map<string, number>(), op: false, opTimer: null, opLog: [] as string[], opBusy: false, gbal: 0, lastSettle: 0, warned: new Map<string, number>(), err: '' };
 const nat = () => ctx.native();
 /** The dollar token is shown the way the market quotes it: USD per LUMA (2.04), the same number as the chart. Everything inside is still LUMA per unit; only what is shown and typed is converted. */
+/** Positions on the dollar token opened before 14:30 PST on 19 Nov 2026 were pressed as LONG on the LUMA/USD pair, i.e. long LUMA, but stored as long on the dollar token. They are read the way they were meant. */
+const LEGACY_CUT = Date.parse('2026-11-19T22:30:00Z');
+const legacyUsd = (key: string, ms: number) => isUsdKey(key) && ms < LEGACY_CUT;
+/** stops that only made sense for the old reading (wrong side of the entry) are dropped */
+const legacyClean = (p: any) => { if (p.sl && (p.long ? p.sl >= p.pe : p.sl <= p.pe)) p.sl = 0; if (p.tp && (p.long ? p.tp <= p.pe : p.tp >= p.pe)) p.tp = 0; };
 export const isUsdKey = (key: string) => { try { const a = fromKey(key); return !isNative(a) && hexName(a.c).toUpperCase() === ctx.usdName().toUpperCase(); } catch { return false; } };
 const D = (key: string, v: number) => (isUsdKey(key) && v > 0 && isFinite(v) ? 1 / v : v);
 /** the side as the trader sees it: the dollar token's market is read LUMA/USD, so holding the dollar token long is a SHORT on LUMA */
