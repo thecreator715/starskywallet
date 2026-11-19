@@ -277,6 +277,9 @@ const nat = () => ctx.native();
 /** The dollar token is shown the way the market quotes it: USD per LUMA (2.04), the same number as the chart. Everything inside is still LUMA per unit; only what is shown and typed is converted. */
 export const isUsdKey = (key: string) => { try { const a = fromKey(key); return !isNative(a) && hexName(a.c).toUpperCase() === ctx.usdName().toUpperCase(); } catch { return false; } };
 const D = (key: string, v: number) => (isUsdKey(key) && v > 0 && isFinite(v) ? 1 / v : v);
+/** the side as the trader sees it: the dollar token's market is read LUMA/USD, so holding the dollar token long is a SHORT on LUMA */
+export const nmS = (key: string) => (isUsdKey(key) ? 'LUMA/USD' : nm(key));
+export const sd = (key: string, long: boolean) => (isUsdKey(key) ? !long : long);
 const unitTxt = (key: string) => (isUsdKey(key) ? `USD per ${nat()}` : `${nat()} per unit`);
 const nm = (k: string) => (k === 'native' ? nat() : hexName(fromKey(k).c));
 export const markOf = (key: string): number | null => (MG.px ? MG.px.px.get(key) ?? null : null);
@@ -343,7 +346,7 @@ export const liveList = (ps: Pos[]) => ps.map(p => evalPos(p, markOf(p.key)));
 function alerts() {
   const out: string[] = [];
   for (const l of liveList(MG.mine.filter((p: Pos) => p.status === 'open' && !p.bad))) {
-    const lbl = `${l.p.long ? 'Long' : 'Short'} ${l.p.lev}x ${nm(l.p.key)}`;
+    const lbl = `${sd(l.p.key, l.p.long) ? 'Long' : 'Short'} ${l.p.lev}x ${nmS(l.p.key)}`;
     const lvl = l.ratio >= 0.8 ? 2 : l.ratio >= 0.6 ? 1 : 0;
     if (lvl) out.push(`${lvl === 2 ? 'DANGER' : 'Warning'}: ${lbl} is at ${(l.ratio * 100).toFixed(0)}% of its liquidation margin (liquidation at ${fmt(l.liq)} LUMA, now ${fmt(l.mark ?? 0)}).`);
     const last = MG.warned.get(l.p.id) || 0;
@@ -359,7 +362,7 @@ function alerts() {
   for (const p of MG.mine) {
     if (p.status === 'closed' && p.why === 'liq' && Date.now() - p.endMs < 3600e3 && !MG.warned.has('liq' + p.id)) {
       MG.warned.set('liq' + p.id, 9);
-      ctx.toast(`Liquidated: ${p.long ? 'Long' : 'Short'} ${p.lev}x ${nm(p.key)}`, true);
+      ctx.toast(`Liquidated: ${sd(p.key, p.long) ? 'Long' : 'Short'} ${p.lev}x ${nmS(p.key)}`, true);
     }
   }
   if (MG.stale) out.push('The node did not answer the last history request. Showing the last saved data; nothing is lost.');
@@ -485,7 +488,7 @@ async function operatorTick() {
         continue;
       }
       const r = await ctx.submitAs(op.seed, { TransactionType: 'Payment', Account: op.address, Destination: p.trader, Amount: String(Math.max(1, Math.round(pay * 1e6))), ...memo({ v: 1, op: 'settle', id: p.id, why, px, pnl: +pnl.toFixed(6), pay: +pay.toFixed(6) }) });
-      olog(`${why.toUpperCase()} ${p.long ? 'long' : 'short'} ${p.lev}x ${nm(p.key)} for ${short(ctx.show(p.trader), 6, 4)} at ${fmt(px)}: paid ${fmt(pay)} ${nat()}${r.ok ? '' : ' FAILED ' + r.msg}`);
+      olog(`${why.toUpperCase()} ${sd(p.key, p.long) ? 'long' : 'short'} ${p.lev}x ${nmS(p.key)} for ${short(ctx.show(p.trader), 6, 4)} at ${fmt(px)}: paid ${fmt(pay)} ${nat()}${r.ok ? '' : ' FAILED ' + r.msg}`);
       MG.lastSettle = Date.now();
     }
   } catch (e: any) {
@@ -534,7 +537,7 @@ export function openRows(list: Live[], actions = true) {
   return `<table class="dxt"><thead><tr><th>Market</th><th>Side</th><th class="r">Size (${nat()})</th><th class="r">Entry</th><th class="r">Mark</th><th class="r">Liq. price</th><th class="r">SL / TP</th><th class="r">PnL</th><th class="r">ROE</th><th>Margin</th>${actions ? '<th></th>' : ''}</tr></thead><tbody>${
     list
       .map(
-        l => `<tr><td><b>${esc(nm(l.p.key))}</b><br><small class="mut">${ago(Date.now() - l.p.ms)}</small></td><td><span class="chip ${l.p.long ? '' : 'bad'}">${l.p.long ? 'LONG' : 'SHORT'} ${l.p.lev}x</span></td><td class="r">${fmt(l.p.n)}<br><small class="mut">margin ${fmt(l.p.coll)}</small></td><td class="r mono">${pxk(l.p.key, l.p.pe)}</td><td class="r mono">${pxk(l.p.key, l.mark)}</td><td class="r mono dn">${pxk(l.p.key, l.liq)}</td><td class="r mono">${l.p.sl ? pxk(l.p.key, l.p.sl) : '–'} / ${l.p.tp ? pxk(l.p.key, l.p.tp) : '–'}</td><td class="r">${pnlTxt(l.pnl)}<br><small class="mut">equity ${fmt(l.equity, 3)}</small></td><td class="r">${pctHtml(l.roe * 100)}</td><td style="min-width:6rem">${bar(l.ratio)}<small class="mut">${l.p.closeReq ? 'closing…' : l.ratio >= 1 ? (MG.op ? 'LIQUIDATING…' : 'LIQUIDATABLE · waiting for operator') : (l.ratio * 100).toFixed(0) + '% of liq.'}</small></td>${actions ? `<td class="r"><button class="sm" onclick="window.mg.edit('${l.p.id}')">SL/TP</button> <button class="sm dng" ${l.p.closeReq ? 'disabled' : ''} onclick="window.mg.close('${l.p.id}',this)">Close</button></td>` : ''}</tr>`
+        l => `<tr><td><b>${esc(nmS(l.p.key))}</b><br><small class="mut">${ago(Date.now() - l.p.ms)}</small></td><td><span class="chip ${sd(l.p.key, l.p.long) ? '' : 'bad'}">${sd(l.p.key, l.p.long) ? 'LONG' : 'SHORT'} ${l.p.lev}x</span></td><td class="r">${fmt(l.p.n)}<br><small class="mut">margin ${fmt(l.p.coll)}</small></td><td class="r mono">${pxk(l.p.key, l.p.pe)}</td><td class="r mono">${pxk(l.p.key, l.mark)}</td><td class="r mono dn">${pxk(l.p.key, l.liq)}</td><td class="r mono">${l.p.sl ? pxk(l.p.key, l.p.sl) : '–'} / ${l.p.tp ? pxk(l.p.key, l.p.tp) : '–'}</td><td class="r">${pnlTxt(l.pnl)}<br><small class="mut">equity ${fmt(l.equity, 3)}</small></td><td class="r">${pctHtml(l.roe * 100)}</td><td style="min-width:6rem">${bar(l.ratio)}<small class="mut">${l.p.closeReq ? 'closing…' : l.ratio >= 1 ? (MG.op ? 'LIQUIDATING…' : 'LIQUIDATABLE · waiting for operator') : (l.ratio * 100).toFixed(0) + '% of liq.'}</small></td>${actions ? `<td class="r"><button class="sm" onclick="window.mg.edit('${l.p.id}')">SL/TP</button> <button class="sm dng" ${l.p.closeReq ? 'disabled' : ''} onclick="window.mg.close('${l.p.id}',this)">Close</button></td>` : ''}</tr>`
       )
       .join('') || `<tr><td colspan="${actions ? 11 : 10}" class="mut" style="padding:1rem">No open leveraged positions.</td></tr>`
   }</tbody></table>`;
@@ -542,7 +545,7 @@ export function openRows(list: Live[], actions = true) {
 export function histRows(list: Pos[]) {
   return `<table class="dxt"><thead><tr><th>Market</th><th>Side</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Exit</th><th>Result</th><th class="r">PnL</th><th class="r">Paid out</th><th class="r">Held</th><th class="r">Closed</th></tr></thead><tbody>${
     list
-      .map(p => `<tr><td><b>${esc(nm(p.key))}</b></td><td><span class="chip ${p.long ? '' : 'bad'}">${p.long ? 'LONG' : 'SHORT'} ${p.lev}x</span></td><td class="r">${fmt(p.n)}</td><td class="r mono">${pxk(p.key, p.pe)}</td><td class="r mono">${pxk(p.key, p.px)}</td><td><span class="chip ${p.why === 'liq' ? 'bad' : p.why === 'tp' ? '' : 'b'}">${esc(WHY[p.why] || p.why)}</span></td><td class="r">${p.why === 'reject' ? '–' : pnlTxt(p.pay - p.coll)}</td><td class="r">${fmt(p.pay, 4)}</td><td class="r mut">${dur(p.endMs - p.ms)}</td><td class="r mut">${ago(Date.now() - p.endMs)}</td></tr>`)
+      .map(p => `<tr><td><b>${esc(nmS(p.key))}</b></td><td><span class="chip ${sd(p.key, p.long) ? '' : 'bad'}">${sd(p.key, p.long) ? 'LONG' : 'SHORT'} ${p.lev}x</span></td><td class="r">${fmt(p.n)}</td><td class="r mono">${pxk(p.key, p.pe)}</td><td class="r mono">${pxk(p.key, p.px)}</td><td><span class="chip ${p.why === 'liq' ? 'bad' : p.why === 'tp' ? '' : 'b'}">${esc(WHY[p.why] || p.why)}</span></td><td class="r">${p.why === 'reject' ? '–' : pnlTxt(p.pay - p.coll)}</td><td class="r">${fmt(p.pay, 4)}</td><td class="r mut">${dur(p.endMs - p.ms)}</td><td class="r mut">${ago(Date.now() - p.endMs)}</td></tr>`)
       .join('') || '<tr><td colspan="10" class="mut" style="padding:1rem">No closed positions yet.</td></tr>'
   }</tbody></table>`;
 }
@@ -668,6 +671,7 @@ const tkShow = (f: 'sl' | 'tp') => { const raw = TK[f + 'D']; if (raw) return ra
 /** typed in the displayed units (USD per LUMA for the dollar token), stored per unit */
 const tkSet = (f: 'sl' | 'tp', v: string) => { TK[f + 'D'] = v; const n = parseFloat(v); TK[f] = !(n > 0) ? '' : isUsdKey(TK.key) ? String(1 / n) : v; };
 export function ticketHtml(key: string, asLong: boolean, label: string) {
+  const wantLong = sd(key, asLong);   // asLong is the side on the asset itself; the trader reads the dollar token's pair as LUMA/USD
   TK.key = key;
   TK.long = asLong;
   const tvl = MG.tvl.get(key) || 0;
@@ -684,7 +688,7 @@ export function ticketHtml(key: string, asLong: boolean, label: string) {
   const err = coll > 0 ? check({ key, long: asLong, lev: TK.lev, coll, sl, tp }) : '';
   const quick = [1, 2, 5, 10, 25, 50, 100].filter(x => x <= ml);
   return `<div class="mgt">
-    <div class="mut" style="font-size:.78rem">Leveraged ${asLong ? 'long' : 'short'} on <b>${esc(label)}</b>, priced in ${isUsdKey(key) ? 'USD' : nat()}: ${mark ? fmt(D(key, mark), 6) : '–'} ${unitTxt(key)}.</div>
+    <div class="mut" style="font-size:.78rem">Leveraged ${wantLong ? 'long' : 'short'} on <b>${esc(isUsdKey(key) ? 'LUMA/USD' : label)}</b>, priced in ${isUsdKey(key) ? 'USD' : nat()}: ${mark ? fmt(D(key, mark), 6) : '–'} ${unitTxt(key)}.</div>
     <div class="dxbox"><div class="k">LEVERAGE <b id="mg_lv" style="float:right;font-size:1rem">${TK.lev}x</b></div><input type="range" min="1" max="${ml}" step="1" value="${TK.lev}" oninput="window.mg.lev(this.value)" style="width:100%"><div class="row" style="gap:.25rem;flex-wrap:wrap;margin-top:.3rem">${quick.map(x => `<button class="sm ${TK.lev === x ? 'pri' : 'ghost'}" onclick="window.mg.lev(${x},true)">${x}x</button>`).join('')}</div><small class="mut">Up to ${ml}x for this asset (pool value ${fmt(tvl, 0)} ${nat()}).</small></div>
     <div class="dxbox"><div class="k">MARGIN (${nat()}) <span style="float:right;text-transform:none"><a href="#" onclick="window.mg.pct(25);return false">25%</a> · <a href="#" onclick="window.mg.pct(50);return false">50%</a> · <a href="#" onclick="window.mg.pct(100);return false">MAX</a></span></div><div class="dxin"><input id="mg_coll" inputmode="decimal" placeholder="min ${MIN_COLLATERAL}" value="${esc(TK.coll)}" oninput="window.mg.coll(this.value)"></div></div>
     <div class="btgrid"><label class="btf"><span>Stop loss (${unitTxt(key)})</span><input id="mg_sl" inputmode="decimal" value="${esc(tkShow('sl'))}" placeholder="optional" oninput="window.mg.sl(this.value)"></label><label class="btf"><span>Take profit</span><input id="mg_tp" inputmode="decimal" value="${esc(tkShow('tp'))}" placeholder="optional" oninput="window.mg.tp(this.value)"></label></div>
@@ -695,7 +699,7 @@ export function ticketHtml(key: string, asLong: boolean, label: string) {
       <div><span>Fees (open + close)</span><b>${fmt(N * (FEE_OPEN + FEE_CLOSE), 4)}</b></div><div><span>Funding per hour</span><b>${fmt(N * FUND_H, 5)}</b></div>
       <div><span>Max loss</span><b class="dn">${fmt(coll, 4)}</b></div><div><span>${slLoss != null ? 'Loss at stop' : 'Stop loss'}</span><b>${slLoss != null ? fmt(slLoss, 4) : '–'}</b></div>
       <div><span>${tpGain != null ? 'Gain at target' : 'Take profit'}</span><b class="up">${tpGain != null ? fmt(tpGain, 4) : '–'}</b></div><div><span>Reward : risk</span><b>${slLoss && tpGain ? (tpGain / slLoss).toFixed(2) : '–'}</b></div></div>
-    <button class="pri ${asLong ? 'acc' : 'sellgo'} dxgo" onclick="window.mg.go(this)" ${!ctx.online() || !ctx.account() ? 'disabled' : ''}>${asLong ? 'Open long' : 'Open short'} ${TK.lev}x</button>
+    <button class="pri ${wantLong ? 'acc' : 'sellgo'} dxgo" onclick="window.mg.go(this)" ${!ctx.online() || !ctx.account() ? 'disabled' : ''}>${wantLong ? 'Open long' : 'Open short'} ${TK.lev}x</button>
     <div class="mut" id="mg_msg" style="font-size:.78rem;margin-top:.4rem;color:${TK.bad ? 'var(--crit)' : 'var(--ok)'}">${esc(TK.msg || err)}</div>
     <div class="mut" style="font-size:.72rem;margin-top:.4rem">Margin is sent to the genesis wallet. The operator settles stop loss, take profit, liquidation and closes. You cannot lose more than your margin.</div></div>`;
 }
@@ -740,7 +744,7 @@ export const mgApi: any = {
   edit(id: string) {
     const p: Pos | undefined = MG.mine.find((x: Pos) => x.id === id);
     if (!p) return;
-    ctx.modal(`<h2>Stop loss / take profit</h2><p class="mut">${esc(nm(p.key))} ${p.long ? 'long' : 'short'} ${p.lev}x, entry ${pxk(p.key, p.pe)}, liquidation ${pxk(p.key, liqPrice(p.pe, p.lev, p.long))} (${unitTxt(p.key)}). Leave empty to remove. Sends a 1-drop update to the genesis wallet.</p>
+    ctx.modal(`<h2>Stop loss / take profit</h2><p class="mut">${esc(nmS(p.key))} ${sd(p.key, p.long) ? 'long' : 'short'} ${p.lev}x, entry ${pxk(p.key, p.pe)}, liquidation ${pxk(p.key, liqPrice(p.pe, p.lev, p.long))} (${unitTxt(p.key)}). Leave empty to remove. Sends a 1-drop update to the genesis wallet.</p>
       <div class="btgrid"><label class="btf"><span>Stop loss</span><input id="me_sl" value="${p.sl ? +D(p.key, p.sl).toPrecision(6) : ''}"></label><label class="btf"><span>Take profit</span><input id="me_tp" value="${p.tp ? +D(p.key, p.tp).toPrecision(6) : ''}"></label></div>
       <div class="row" style="margin-top:1rem"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" onclick="window.mg.saveEdit('${id}')">Save</button></div>`);
   },
@@ -775,7 +779,7 @@ export function chartLines(key: string, ticketOn: boolean): CL[] {
   const out: CL[] = [];
   for (const p of MG.mine as Pos[]) {
     if (p.status !== 'open' || p.bad || p.key !== key || !(p.pe > 0)) continue;
-    const t = `${p.long ? 'LONG' : 'SHORT'} ${p.lev}x`;
+    const t = `${sd(p.key, p.long) ? 'LONG' : 'SHORT'} ${p.lev}x`;
     out.push({ id: 'e:' + p.id, price: p.pe, color: '#9a92b8', label: 'ENTRY ' + t, dash: '2 4' });
     out.push({ id: 'l:' + p.id, price: liqPrice(p.pe, p.lev, p.long), color: '#ff453a', label: 'LIQ ' + t });
     const liqp = liqPrice(p.pe, p.lev, p.long);
@@ -786,7 +790,7 @@ export function chartLines(key: string, ticketOn: boolean): CL[] {
   const mark = markOf(key);
   const coll = parseFloat(TK.coll) || 0;
   if (ticketOn && mark && coll > 0 && TK.key === key) {
-    out.push({ id: 'd:ent', price: mark, color: '#c9c2e6', label: 'NEW ' + (TK.long ? 'LONG' : 'SHORT') + ' ' + TK.lev + 'x', dash: '2 4' });
+    out.push({ id: 'd:ent', price: mark, color: '#c9c2e6', label: 'NEW ' + (sd(TK.key, TK.long) ? 'LONG' : 'SHORT') + ' ' + TK.lev + 'x', dash: '2 4' });
     out.push({ id: 'd:liq', price: liqPrice(mark, TK.lev, TK.long), color: '#ff453a', label: 'LIQ (drag = leverage)', drag: true });
     const sl = parseFloat(TK.sl) || 0,
       tp = parseFloat(TK.tp) || 0;
@@ -830,7 +834,7 @@ export function dragEnd(id: string, price: number): void {
   if (field === 'sl' && dl < 1.5) warn.push('This stop is very close to the liquidation price; a fast move could liquidate before it fills.');
   if (field === 'sl' && atPnl < -p.coll * 0.9) warn.push('At this level you would lose most of your margin.');
   const rr = p.sl && field === 'tp' ? Math.abs(atPnl) / Math.max(1e-9, Math.abs(p.n * sgn * (p.sl / p.pe - 1))) : p.tp && field === 'sl' ? Math.abs(p.n * sgn * (p.tp / p.pe - 1)) / Math.max(1e-9, Math.abs(atPnl)) : 0;
-  const msg = `Move the ${field === 'sl' ? 'STOP LOSS' : 'TAKE PROFIT'} of this ${p.long ? 'long' : 'short'} ${p.lev}x ${nm(p.key)} to ${fmt(pr, 6)}?\n\nNow ${fmt(m, 6)} (${dm.toFixed(2)}% away) · entry ${fmt(p.pe, 6)} · liquidation ${fmt(liq, 6)}\nIf it fills: ${atPnl >= 0 ? 'profit' : 'loss'} about ${fmt(Math.abs(atPnl), 2)} ${nat()} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% of price, ${(atPnl / p.coll * 100).toFixed(0)}% of your margin)${rr ? `\nReward to risk: ${rr.toFixed(2)} : 1` : ''}${warn.length ? '\n\nWarning:\n- ' + warn.join('\n- ') : ''}\n\nThis sends a 1-drop update (the smallest amount possible) with the position ID to the genesis wallet.`;
+  const msg = `Move the ${field === 'sl' ? 'STOP LOSS' : 'TAKE PROFIT'} of this ${sd(p.key, p.long) ? 'long' : 'short'} ${p.lev}x ${nmS(p.key)} to ${fmt(pr, 6)}?\n\nNow ${fmt(m, 6)} (${dm.toFixed(2)}% away) · entry ${fmt(p.pe, 6)} · liquidation ${fmt(liq, 6)}\nIf it fills: ${atPnl >= 0 ? 'profit' : 'loss'} about ${fmt(Math.abs(atPnl), 2)} ${nat()} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% of price, ${(atPnl / p.coll * 100).toFixed(0)}% of your margin)${rr ? `\nReward to risk: ${rr.toFixed(2)} : 1` : ''}${warn.length ? '\n\nWarning:\n- ' + warn.join('\n- ') : ''}\n\nThis sends a 1-drop update (the smallest amount possible) with the position ID to the genesis wallet.`;
   if (!confirm(msg)) return void (onChange && onChange());
   opMemo({ op: 'edit', id: pid, [field]: pr }, 'Updated');
 }

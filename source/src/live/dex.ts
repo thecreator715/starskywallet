@@ -791,7 +791,7 @@ function renderTrade(soft = false) {
     const lbl2 = nb ? nm(m.quote) : nm(m.base);
     return setHtml(
       'dx_trade',
-      modeBar() + `<div class="dxbs"><button class="${buy ? 'on buy' : ''}" onclick="window.dx.setSide('buy')">${nb ? 'SHORT' : 'LONG'}</button><button class="${!buy ? 'on sell' : ''}" onclick="window.dx.setSide('sell')">${nb ? 'LONG' : 'SHORT'}</button></div>` + Mg.ticketHtml(key, asLong, lbl2)
+      modeBar() + `<div class="dxbs"><button class="${buy ? 'on buy' : ''}" onclick="window.dx.setSide('buy')">${Mg.sd(key, !nb) ? 'LONG' : 'SHORT'}</button><button class="${!buy ? 'on sell' : ''}" onclick="window.dx.setSide('sell')">${Mg.sd(key, nb) ? 'LONG' : 'SHORT'}</button></div>` + Mg.ticketHtml(key, asLong, lbl2)
     );
   }
   const pay = buy ? m.quote : m.base,
