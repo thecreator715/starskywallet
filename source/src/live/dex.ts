@@ -377,7 +377,7 @@ function renderHead() {
     setHtml('dx_head', `<span class="mut">${esc(DX.err || 'Loading markets…')}</span>`);
     return;
   }
-  const opts = DX.markets.map((x: M.Market) => `<option value="${esc(x.id)}" ${x.id === DX.mid ? 'selected' : ''}>${esc(x.label)}${x.pool ? '' : ' (book)'}</option>`).join('');
+  const opts = DX.markets.map((x: M.Market) => `<option value="${esc(x.id)}" ${x.id === DX.mid ? 'selected' : ''}>${esc(x.id === DX.mid ? m.label : x.label)}${x.pool ? '' : ' (book)'}</option>`).join('');
   const p = livePrice();
   const d24 = DX.pc ? DX.pc.ch['24h'] : null;
   const qusd = usdOfQuote();
@@ -891,7 +891,8 @@ Mg.setOnChange(() => {
 export const api: any = {
   setMode(k: string) {
     DX.mode = k;
-    if (k === 'margin' && marginOrient()) { DX.amt = ''; DX.price = ''; load(); }
+    // every mode opens with the pair the normal way round (asset priced in LUMA); no need to flip it first
+    if (k === 'margin' ? marginOrient() : DX.inv && (DX.inv = false, true)) { DX.amt = ''; DX.price = ''; load(); }
     if (k === 'margin') {
       Mg.refresh(true);
       Mg.monitor();
