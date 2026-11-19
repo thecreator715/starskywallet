@@ -74,6 +74,12 @@ const mkt = (): M.Market | null => {
   if (!m) return null;
   return DX.inv ? { id: M.marketId(m.quote, m.base), base: m.quote, quote: m.base, label: m.quote ? M.labelOf(m.quote) + '/' + M.labelOf(m.base) : m.label, pool: m.pool } : m;
 };
+/** Leverage trading is always priced the way orders are placed: LUMA per 1 asset (USD/LUMA = 0.49, never 2.04). The chart is never flipped while it is open. */
+const marginOrient = () => {
+  if (DX.mode !== 'margin') return false;
+  const m = DX.markets.find((x: M.Market) => x.id === DX.mid), want = !!(m && isNative(m.base) && !isNative(m.quote));
+  const changed = DX.inv !== want; DX.inv = want; return changed;
+};
 const nm = (a: Asset) => M.labelOf(a);
 const RANGE = () => M.RANGES.find(r => r.k === DX.range) || M.RANGES[2];
 
@@ -230,6 +236,7 @@ export async function load(keepSelection = true) {
       DX.mid = (native[0] || DX.markets[0]).id;
       DX.inv = false;
     }
+    marginOrient();
     if (DX.loadedMid !== DX.mid + (DX.inv ? '~' : '')) DX.cd = DX.tr = DX.tok = DX.hold = DX.bookd = DX.pc = null;
     DX.loadedMid = DX.mid + (DX.inv ? '~' : '');
     renderAll();
@@ -884,6 +891,7 @@ Mg.setOnChange(() => {
 export const api: any = {
   setMode(k: string) {
     DX.mode = k;
+    if (k === 'margin' && marginOrient()) { DX.amt = ''; DX.price = ''; load(); }
     if (k === 'margin') {
       Mg.refresh(true);
       Mg.monitor();
@@ -919,6 +927,7 @@ export const api: any = {
   pick(id: string) {
     DX.mid = id;
     DX.inv = false;
+    marginOrient();
     DX.amt = '';
     DX.price = '';
     load();
@@ -935,6 +944,7 @@ export const api: any = {
     }
   },
   flip() {
+    if (DX.mode === 'margin') { ctx.toast('Leverage trading always shows the price you place orders at (LUMA per asset), so the chart is not flipped here.'); return; }
     DX.inv = !DX.inv;
     DX.amt = '';
     DX.price = '';
