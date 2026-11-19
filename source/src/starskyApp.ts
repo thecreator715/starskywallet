@@ -2338,6 +2338,7 @@ export function initWindowBindings() {
     req: async (command: string, params: any = {}) => {
       if (!st.client) throw new Error('not connected');
       const cl: any = await chainClient();
+      if (!cl.isConnected()) { try { await cl.connect(); } catch {} }   // never send while the socket is still opening
       const r: any = await cl.request({ command, ...params });
       return r.result;
     },

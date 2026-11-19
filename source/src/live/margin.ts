@@ -489,6 +489,7 @@ async function operatorTick() {
       }
       if (!why) continue;
       // never settle twice: look at the chain again right before paying
+      await new Promise(r => setTimeout(r, Math.random() * 4000));   // two operators (panel and a browser tab) must not pay the same position twice: a random pause, then look at the chain again
       const again = await derive(await events(op.address), op.address);
       if (again.find(x => x.id === p.id)?.status !== 'open') continue;
       if (pay > 0 && pay > MG.gbal - 1) {   // a liquidation pays nothing (1 drop), so it must never wait on the genesis balance
