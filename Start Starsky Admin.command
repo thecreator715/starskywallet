@@ -11,7 +11,7 @@ if ! up 5006 && ! up 5106; then
   if [ -n "$KIT" ]; then echo "No LUMA node answers here. Starting Mainnet and Testnet from $KIT ..."; (cd "$KIT" && chmod +x luma-auto.sh start-luma.sh lumactl 2>/dev/null; bash ./luma-auto.sh main; bash ./luma-auto.sh test)
   else echo "No LUMA node answers on this computer and the LUMA kit was not found next to this folder. Starsky will open but stay Offline until the nodes run."; fi
 fi
-OLD=$(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null); [ -n "$OLD" ] && kill $OLD 2>/dev/null
+for OLD in $(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null); do ps -p "$OLD" -o command= 2>/dev/null | grep -qiE "docker|vpnkit|virtualization|colima|lima" || kill "$OLD" 2>/dev/null; done
 STARSKY_PORT=$PORT node admin/serve-admin.js &
 SV=$!; trap 'kill $SV 2>/dev/null' EXIT
 sleep 1; URL="http://127.0.0.1:$PORT/"

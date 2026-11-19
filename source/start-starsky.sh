@@ -11,7 +11,7 @@ if [ "$NEED" = 1 ]; then
   echo "Building the latest Starsky…"; { [ -d node_modules ] || npm install; } && npm run build || exit 1
 fi
 # stop an older Starsky still running on this port
-if command -v lsof >/dev/null; then OLD=$(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null); [ -n "$OLD" ] && { echo "Stopping the old Starsky on port $PORT…"; kill $OLD 2>/dev/null; sleep 1; }; fi
+if command -v lsof >/dev/null; then for OLD in $(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null); do ps -p "$OLD" -o command= 2>/dev/null | grep -qiE "docker|vpnkit|virtualization|colima|lima" || { echo "Stopping the old Starsky on port $PORT…"; kill "$OLD" 2>/dev/null; sleep 1; }; done; fi
 URL="http://127.0.0.1:$PORT"
 ( sleep 1; (open "$URL" || xdg-open "$URL" || true) >/dev/null 2>&1 ) &
 echo "Starsky: $URL   (Ctrl+C to stop). It connects to your LUMA node at ws://127.0.0.1:6006 (Mainnet) / 6106 (Testnet)."
