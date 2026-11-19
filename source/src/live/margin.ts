@@ -274,6 +274,10 @@ export async function genesis(): Promise<string> {
 }
 export const MG: any = { stale: false, mine: [] as Pos[], all: [] as Pos[], px: null as M.Snap | null, at: 0, loading: false, alerts: [] as string[], tvl: new Map<string, number>(), op: false, opTimer: null, opLog: [] as string[], opBusy: false, gbal: 0, lastSettle: 0, warned: new Map<string, number>(), err: '' };
 const nat = () => ctx.native();
+/** The dollar token is shown the way the market quotes it: USD per LUMA (2.04), the same number as the chart. Everything inside is still LUMA per unit; only what is shown and typed is converted. */
+export const isUsdKey = (key: string) => { try { const a = fromKey(key); return !isNative(a) && hexName(a.c).toUpperCase() === ctx.usdName().toUpperCase(); } catch { return false; } };
+const D = (key: string, v: number) => (isUsdKey(key) && v > 0 && isFinite(v) ? 1 / v : v);
+const unitTxt = (key: string) => (isUsdKey(key) ? `USD per ${nat()}` : `${nat()} per unit`);
 const nm = (k: string) => (k === 'native' ? nat() : hexName(fromKey(k).c));
 export const markOf = (key: string): number | null => (MG.px ? MG.px.px.get(key) ?? null : null);
 function tvlOfAsset(sn: M.Snap, key: string): number {
@@ -476,7 +480,7 @@ async function operatorTick() {
       // never settle twice: look at the chain again right before paying
       const again = await derive(await events(op.address), op.address);
       if (again.find(x => x.id === p.id)?.status !== 'open') continue;
-      if (pay > MG.gbal - 1) {
+      if (pay > 0 && pay > MG.gbal - 1) {   // a liquidation pays nothing (1 drop), so it must never wait on the genesis balance
         olog(`cannot pay ${fmt(pay)} to ${short(ctx.show(p.trader), 6, 4)}: genesis balance too low`);
         continue;
       }
@@ -521,6 +525,7 @@ const dur = (ms: number) => {
   const m = Math.floor(ms / 60000);
   return m < 60 ? m + ' min' : m < 2880 ? (m / 60).toFixed(1) + ' h' : (m / 1440).toFixed(1) + ' d';
 };
+const pxk = (key: string, v: number | null | undefined) => px(v && v > 0 ? D(key, v) : v);
 const px = (v: number | null | undefined) => (v == null || !isFinite(v) || v === 0 ? '–' : fmt(v, v < 1 ? 6 : 4));
 const pnlTxt = (v: number) => `<span class="${v >= 0 ? 'up' : 'dn'}">${v >= 0 ? '+' : ''}${fmt(v, 4)}</span>`;
 const WHY: Record<string, string> = { close: 'Closed', sl: 'Stop loss', tp: 'Take profit', liq: 'Liquidated', reject: 'Rejected (refunded)' };
@@ -529,7 +534,7 @@ export function openRows(list: Live[], actions = true) {
   return `<table class="dxt"><thead><tr><th>Market</th><th>Side</th><th class="r">Size (${nat()})</th><th class="r">Entry</th><th class="r">Mark</th><th class="r">Liq. price</th><th class="r">SL / TP</th><th class="r">PnL</th><th class="r">ROE</th><th>Margin</th>${actions ? '<th></th>' : ''}</tr></thead><tbody>${
     list
       .map(
-        l => `<tr><td><b>${esc(nm(l.p.key))}</b><br><small class="mut">${ago(Date.now() - l.p.ms)}</small></td><td><span class="chip ${l.p.long ? '' : 'bad'}">${l.p.long ? 'LONG' : 'SHORT'} ${l.p.lev}x</span></td><td class="r">${fmt(l.p.n)}<br><small class="mut">margin ${fmt(l.p.coll)}</small></td><td class="r mono">${px(l.p.pe)}</td><td class="r mono">${px(l.mark)}</td><td class="r mono dn">${px(l.liq)}</td><td class="r mono">${l.p.sl ? px(l.p.sl) : '–'} / ${l.p.tp ? px(l.p.tp) : '–'}</td><td class="r">${pnlTxt(l.pnl)}<br><small class="mut">equity ${fmt(l.equity, 3)}</small></td><td class="r">${pctHtml(l.roe * 100)}</td><td style="min-width:6rem">${bar(l.ratio)}<small class="mut">${l.p.closeReq ? 'closing…' : (l.ratio * 100).toFixed(0) + '% of liq.'}</small></td>${actions ? `<td class="r"><button class="sm" onclick="window.mg.edit('${l.p.id}')">SL/TP</button> <button class="sm dng" ${l.p.closeReq ? 'disabled' : ''} onclick="window.mg.close('${l.p.id}',this)">Close</button></td>` : ''}</tr>`
+        l => `<tr><td><b>${esc(nm(l.p.key))}</b><br><small class="mut">${ago(Date.now() - l.p.ms)}</small></td><td><span class="chip ${l.p.long ? '' : 'bad'}">${l.p.long ? 'LONG' : 'SHORT'} ${l.p.lev}x</span></td><td class="r">${fmt(l.p.n)}<br><small class="mut">margin ${fmt(l.p.coll)}</small></td><td class="r mono">${pxk(l.p.key, l.p.pe)}</td><td class="r mono">${pxk(l.p.key, l.mark)}</td><td class="r mono dn">${pxk(l.p.key, l.liq)}</td><td class="r mono">${l.p.sl ? pxk(l.p.key, l.p.sl) : '–'} / ${l.p.tp ? pxk(l.p.key, l.p.tp) : '–'}</td><td class="r">${pnlTxt(l.pnl)}<br><small class="mut">equity ${fmt(l.equity, 3)}</small></td><td class="r">${pctHtml(l.roe * 100)}</td><td style="min-width:6rem">${bar(l.ratio)}<small class="mut">${l.p.closeReq ? 'closing…' : l.ratio >= 1 ? (MG.op ? 'LIQUIDATING…' : 'LIQUIDATABLE · waiting for operator') : (l.ratio * 100).toFixed(0) + '% of liq.'}</small></td>${actions ? `<td class="r"><button class="sm" onclick="window.mg.edit('${l.p.id}')">SL/TP</button> <button class="sm dng" ${l.p.closeReq ? 'disabled' : ''} onclick="window.mg.close('${l.p.id}',this)">Close</button></td>` : ''}</tr>`
       )
       .join('') || `<tr><td colspan="${actions ? 11 : 10}" class="mut" style="padding:1rem">No open leveraged positions.</td></tr>`
   }</tbody></table>`;
@@ -537,7 +542,7 @@ export function openRows(list: Live[], actions = true) {
 export function histRows(list: Pos[]) {
   return `<table class="dxt"><thead><tr><th>Market</th><th>Side</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Exit</th><th>Result</th><th class="r">PnL</th><th class="r">Paid out</th><th class="r">Held</th><th class="r">Closed</th></tr></thead><tbody>${
     list
-      .map(p => `<tr><td><b>${esc(nm(p.key))}</b></td><td><span class="chip ${p.long ? '' : 'bad'}">${p.long ? 'LONG' : 'SHORT'} ${p.lev}x</span></td><td class="r">${fmt(p.n)}</td><td class="r mono">${px(p.pe)}</td><td class="r mono">${px(p.px)}</td><td><span class="chip ${p.why === 'liq' ? 'bad' : p.why === 'tp' ? '' : 'b'}">${esc(WHY[p.why] || p.why)}</span></td><td class="r">${p.why === 'reject' ? '–' : pnlTxt(p.pay - p.coll)}</td><td class="r">${fmt(p.pay, 4)}</td><td class="r mut">${dur(p.endMs - p.ms)}</td><td class="r mut">${ago(Date.now() - p.endMs)}</td></tr>`)
+      .map(p => `<tr><td><b>${esc(nm(p.key))}</b></td><td><span class="chip ${p.long ? '' : 'bad'}">${p.long ? 'LONG' : 'SHORT'} ${p.lev}x</span></td><td class="r">${fmt(p.n)}</td><td class="r mono">${pxk(p.key, p.pe)}</td><td class="r mono">${pxk(p.key, p.px)}</td><td><span class="chip ${p.why === 'liq' ? 'bad' : p.why === 'tp' ? '' : 'b'}">${esc(WHY[p.why] || p.why)}</span></td><td class="r">${p.why === 'reject' ? '–' : pnlTxt(p.pay - p.coll)}</td><td class="r">${fmt(p.pay, 4)}</td><td class="r mut">${dur(p.endMs - p.ms)}</td><td class="r mut">${ago(Date.now() - p.endMs)}</td></tr>`)
       .join('') || '<tr><td colspan="10" class="mut" style="padding:1rem">No closed positions yet.</td></tr>'
   }</tbody></table>`;
 }
@@ -657,7 +662,11 @@ export function pageMount() {
   paintAll();
 }
 /* ----- DEX ticket ----- */
-export const TK: any = { long: true, lev: 10, coll: '', sl: '', tp: '', key: '', msg: '', bad: true };
+export const TK: any = { long: true, lev: 10, coll: '', sl: '', tp: '', slD: '', tpD: '', key: '', msg: '', bad: true };
+/** what the stop loss / take profit box shows: exactly what was typed, otherwise the stored value in the displayed units */
+const tkShow = (f: 'sl' | 'tp') => { const raw = TK[f + 'D']; if (raw) return raw; const v = parseFloat(TK[f]); return v > 0 ? String(+D(TK.key, v).toPrecision(6)) : ''; };
+/** typed in the displayed units (USD per LUMA for the dollar token), stored per unit */
+const tkSet = (f: 'sl' | 'tp', v: string) => { TK[f + 'D'] = v; const n = parseFloat(v); TK[f] = !(n > 0) ? '' : isUsdKey(TK.key) ? String(1 / n) : v; };
 export function ticketHtml(key: string, asLong: boolean, label: string) {
   TK.key = key;
   TK.long = asLong;
@@ -675,14 +684,14 @@ export function ticketHtml(key: string, asLong: boolean, label: string) {
   const err = coll > 0 ? check({ key, long: asLong, lev: TK.lev, coll, sl, tp }) : '';
   const quick = [1, 2, 5, 10, 25, 50, 100].filter(x => x <= ml);
   return `<div class="mgt">
-    <div class="mut" style="font-size:.78rem">Leveraged ${asLong ? 'long' : 'short'} on <b>${esc(label)}</b>, priced in ${nat()}: ${mark ? fmt(mark, 6) : '–'} ${nat()} per unit.</div>
+    <div class="mut" style="font-size:.78rem">Leveraged ${asLong ? 'long' : 'short'} on <b>${esc(label)}</b>, priced in ${isUsdKey(key) ? 'USD' : nat()}: ${mark ? fmt(D(key, mark), 6) : '–'} ${unitTxt(key)}.</div>
     <div class="dxbox"><div class="k">LEVERAGE <b id="mg_lv" style="float:right;font-size:1rem">${TK.lev}x</b></div><input type="range" min="1" max="${ml}" step="1" value="${TK.lev}" oninput="window.mg.lev(this.value)" style="width:100%"><div class="row" style="gap:.25rem;flex-wrap:wrap;margin-top:.3rem">${quick.map(x => `<button class="sm ${TK.lev === x ? 'pri' : 'ghost'}" onclick="window.mg.lev(${x},true)">${x}x</button>`).join('')}</div><small class="mut">Up to ${ml}x for this asset (pool value ${fmt(tvl, 0)} ${nat()}).</small></div>
     <div class="dxbox"><div class="k">MARGIN (${nat()}) <span style="float:right;text-transform:none"><a href="#" onclick="window.mg.pct(25);return false">25%</a> · <a href="#" onclick="window.mg.pct(50);return false">50%</a> · <a href="#" onclick="window.mg.pct(100);return false">MAX</a></span></div><div class="dxin"><input id="mg_coll" inputmode="decimal" placeholder="min ${MIN_COLLATERAL}" value="${esc(TK.coll)}" oninput="window.mg.coll(this.value)"></div></div>
-    <div class="btgrid"><label class="btf"><span>Stop loss (${nat()}/unit)</span><input id="mg_sl" inputmode="decimal" value="${esc(TK.sl)}" placeholder="optional" oninput="window.mg.sl(this.value)"></label><label class="btf"><span>Take profit</span><input id="mg_tp" inputmode="decimal" value="${esc(TK.tp)}" placeholder="optional" oninput="window.mg.tp(this.value)"></label></div>
+    <div class="btgrid"><label class="btf"><span>Stop loss (${unitTxt(key)})</span><input id="mg_sl" inputmode="decimal" value="${esc(tkShow('sl'))}" placeholder="optional" oninput="window.mg.sl(this.value)"></label><label class="btf"><span>Take profit</span><input id="mg_tp" inputmode="decimal" value="${esc(tkShow('tp'))}" placeholder="optional" oninput="window.mg.tp(this.value)"></label></div>
     <div class="row" style="gap:.25rem;margin:.3rem 0">${[2, 5, 10].map(p => `<button class="sm ghost" onclick="window.mg.slp(${p})">SL −${p}%</button>`).join('')}${[5, 10, 25].map(p => `<button class="sm ghost" onclick="window.mg.tpp(${p})">TP +${p}%</button>`).join('')}</div>
     <div class="kvt2" id="mg_calc">
-      <div><span>Size</span><b>${fmt(N, 2)} ${nat()}</b></div><div><span>Entry (now)</span><b>${mark ? fmt(mark, 6) : '–'}</b></div>
-      <div><span>Liquidation price</span><b class="dn">${lq ? fmt(lq, 6) : '–'}</b></div><div><span>Distance to liquidation</span><b>${mark && lq ? (Math.abs(1 - lq / mark) * 100).toFixed(2) + '%' : '–'}</b></div>
+      <div><span>Size</span><b>${fmt(N, 2)} ${nat()}</b></div><div><span>Entry (now)</span><b>${mark ? fmt(D(key, mark), 6) : '–'}</b></div>
+      <div><span>Liquidation price</span><b class="dn">${lq ? fmt(D(key, lq), 6) : '–'}</b></div><div><span>Distance to liquidation</span><b>${mark && lq ? (Math.abs(1 - lq / mark) * 100).toFixed(2) + '%' : '–'}</b></div>
       <div><span>Fees (open + close)</span><b>${fmt(N * (FEE_OPEN + FEE_CLOSE), 4)}</b></div><div><span>Funding per hour</span><b>${fmt(N * FUND_H, 5)}</b></div>
       <div><span>Max loss</span><b class="dn">${fmt(coll, 4)}</b></div><div><span>${slLoss != null ? 'Loss at stop' : 'Stop loss'}</span><b>${slLoss != null ? fmt(slLoss, 4) : '–'}</b></div>
       <div><span>${tpGain != null ? 'Gain at target' : 'Take profit'}</span><b class="up">${tpGain != null ? fmt(tpGain, 4) : '–'}</b></div><div><span>Reward : risk</span><b>${slLoss && tpGain ? (tpGain / slLoss).toFixed(2) : '–'}</b></div></div>
@@ -703,10 +712,10 @@ export const mgApi: any = {
     mgApi.rerender(redraw);
   },
   coll(v: string) { TK.coll = v; TK.msg = ''; mgApi.rerender(false); },
-  sl(v: string) { TK.sl = v; TK.msg = ''; mgApi.rerender(false); },
-  tp(v: string) { TK.tp = v; TK.msg = ''; mgApi.rerender(false); },
-  slp(p: number) { const m = markOf(TK.key); if (m) TK.sl = String(+(m * (TK.long ? 1 - p / 100 : 1 + p / 100)).toPrecision(6)); mgApi.rerender(true); },
-  tpp(p: number) { const m = markOf(TK.key); if (m) TK.tp = String(+(m * (TK.long ? 1 + p / 100 : 1 - p / 100)).toPrecision(6)); mgApi.rerender(true); },
+  sl(v: string) { tkSet('sl', v); TK.msg = ''; mgApi.rerender(false); },
+  tp(v: string) { tkSet('tp', v); TK.msg = ''; mgApi.rerender(false); },
+  slp(p: number) { const m = markOf(TK.key); if (m) { TK.sl = String(+(m * (TK.long ? 1 - p / 100 : 1 + p / 100)).toPrecision(6)); TK.slD = ''; } mgApi.rerender(true); },
+  tpp(p: number) { const m = markOf(TK.key); if (m) { TK.tp = String(+(m * (TK.long ? 1 + p / 100 : 1 - p / 100)).toPrecision(6)); TK.tpD = ''; } mgApi.rerender(true); },
   async pct(p: number) {
     const r: any = await tryReq('account_info', { account: ctx.account(), ledger_index: 'validated' }, 2000);
     if (!r || !r.account_data) return;
@@ -719,7 +728,7 @@ export const mgApi: any = {
     const r = await open({ key: TK.key, long: TK.long, lev: TK.lev, coll: parseFloat(TK.coll) || 0, sl: parseFloat(TK.sl) || 0, tp: parseFloat(TK.tp) || 0 });
     TK.bad = !r.ok;
     TK.msg = r.msg;
-    if (r.ok) { TK.coll = ''; TK.sl = ''; TK.tp = ''; ctx.toast('✓ Position opened'); }
+    if (r.ok) { TK.coll = ''; TK.sl = ''; TK.tp = ''; TK.slD = ''; TK.tpD = ''; ctx.toast('✓ Position opened'); }
     btn.disabled = false;
     mgApi.rerender(true);
   },
@@ -731,15 +740,15 @@ export const mgApi: any = {
   edit(id: string) {
     const p: Pos | undefined = MG.mine.find((x: Pos) => x.id === id);
     if (!p) return;
-    ctx.modal(`<h2>Stop loss / take profit</h2><p class="mut">${esc(nm(p.key))} ${p.long ? 'long' : 'short'} ${p.lev}x, entry ${px(p.pe)}, liquidation ${px(liqPrice(p.pe, p.lev, p.long))}. Leave empty to remove. Sends a 1-drop update to the genesis wallet.</p>
-      <div class="btgrid"><label class="btf"><span>Stop loss</span><input id="me_sl" value="${p.sl || ''}"></label><label class="btf"><span>Take profit</span><input id="me_tp" value="${p.tp || ''}"></label></div>
+    ctx.modal(`<h2>Stop loss / take profit</h2><p class="mut">${esc(nm(p.key))} ${p.long ? 'long' : 'short'} ${p.lev}x, entry ${pxk(p.key, p.pe)}, liquidation ${pxk(p.key, liqPrice(p.pe, p.lev, p.long))} (${unitTxt(p.key)}). Leave empty to remove. Sends a 1-drop update to the genesis wallet.</p>
+      <div class="btgrid"><label class="btf"><span>Stop loss</span><input id="me_sl" value="${p.sl ? +D(p.key, p.sl).toPrecision(6) : ''}"></label><label class="btf"><span>Take profit</span><input id="me_tp" value="${p.tp ? +D(p.key, p.tp).toPrecision(6) : ''}"></label></div>
       <div class="row" style="margin-top:1rem"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" onclick="window.mg.saveEdit('${id}')">Save</button></div>`);
   },
   saveEdit(id: string) {
     const p: Pos | undefined = MG.mine.find((x: Pos) => x.id === id);
     if (!p) return;
-    const sl = parseFloat(($('me_sl') as HTMLInputElement).value) || 0,
-      tp = parseFloat(($('me_tp') as HTMLInputElement).value) || 0;
+    const slIn = parseFloat(($('me_sl') as HTMLInputElement).value) || 0, tpIn = parseFloat(($('me_tp') as HTMLInputElement).value) || 0;
+    const sl = slIn > 0 ? D(p.key, slIn) : 0, tp = tpIn > 0 ? D(p.key, tpIn) : 0;   // typed in the displayed units, stored per unit
     const m = markOf(p.key) ?? p.pe;
     if (sl && (p.long ? sl >= m : sl <= m)) return ctx.toast('Stop loss is on the wrong side of the price.', true);
     if (tp && (p.long ? tp <= m : tp >= m)) return ctx.toast('Take profit is on the wrong side of the price.', true);
@@ -791,8 +800,8 @@ export function dragEnd(id: string, price: number): void {
   const pr = +price.toPrecision(6);
   if (id.startsWith('d:')) {
     const mark = markOf(TK.key);
-    if (id === 'd:sl') TK.sl = String(pr);
-    else if (id === 'd:tp') TK.tp = String(pr);
+    if (id === 'd:sl') { TK.sl = String(pr); TK.slD = ''; }
+    else if (id === 'd:tp') { TK.tp = String(pr); TK.tpD = ''; }
     else if (id === 'd:liq' && mark) {
       const f = FEE_OPEN + MMR;
       const inv = TK.long ? 1 + f - pr / mark : pr / mark - 1 + f;

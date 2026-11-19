@@ -12,6 +12,7 @@ export const DX: any = {
   mid: '',
   inv: false,
   lineInv: false,
+  flipped: false,
   range: '1d',
   side: 'buy' as Side,
   type: 'market' as 'market' | 'limit',
@@ -74,11 +75,16 @@ const mkt = (): M.Market | null => {
   if (!m) return null;
   return DX.inv ? { id: M.marketId(m.quote, m.base), base: m.quote, quote: m.base, label: m.quote ? M.labelOf(m.quote) + '/' + M.labelOf(m.base) : m.label, pool: m.pool } : m;
 };
-/** Leverage trading is always priced the way orders are placed: LUMA per 1 asset (USD/LUMA = 0.49, never 2.04). The chart is never flipped while it is open. */
-const marginOrient = () => {
-  if (DX.mode !== 'margin') return false;
-  const m = DX.markets.find((x: M.Market) => x.id === DX.mid), want = !!(m && isNative(m.base) && !isNative(m.quote));
-  const changed = DX.inv !== want; DX.inv = want; return changed;
+/** Default way round for the open pair, so nobody has to flip it: the dollar token reads LUMA/USD (USD per 1 LUMA, the number the chart shows),
+ *  leverage on any other asset is priced in LUMA per asset, and spot keeps the market's own orientation. A manual flip is kept until another pair or mode is picked. */
+const orient = () => {
+  const m = DX.markets.find((x: M.Market) => x.id === DX.mid);
+  if (!m) return false;
+  const asset = isNative(m.base) ? m.quote : isNative(m.quote) ? m.base : null;
+  const want = asset && Mg.isUsdKey(akey(asset)) ? isNative(m.quote) : DX.mode === 'margin' ? isNative(m.base) && !isNative(m.quote) : false;
+  const changed = DX.inv !== want;
+  DX.inv = want;
+  return changed;
 };
 const nm = (a: Asset) => M.labelOf(a);
 const RANGE = () => M.RANGES.find(r => r.k === DX.range) || M.RANGES[2];
@@ -236,7 +242,7 @@ export async function load(keepSelection = true) {
       DX.mid = (native[0] || DX.markets[0]).id;
       DX.inv = false;
     }
-    marginOrient();
+    if (!DX.flipped) orient();
     if (DX.loadedMid !== DX.mid + (DX.inv ? '~' : '')) DX.cd = DX.tr = DX.tok = DX.hold = DX.bookd = DX.pc = null;
     DX.loadedMid = DX.mid + (DX.inv ? '~' : '');
     renderAll();
@@ -891,8 +897,9 @@ Mg.setOnChange(() => {
 export const api: any = {
   setMode(k: string) {
     DX.mode = k;
-    // every mode opens with the pair the normal way round (asset priced in LUMA); no need to flip it first
-    if (k === 'margin' ? marginOrient() : DX.inv && (DX.inv = false, true)) { DX.amt = ''; DX.price = ''; load(); }
+    // every mode opens with the pair the right way round; no need to flip it first
+    DX.flipped = false;
+    if (orient()) { DX.amt = ''; DX.price = ''; load(); }
     if (k === 'margin') {
       Mg.refresh(true);
       Mg.monitor();
@@ -928,7 +935,8 @@ export const api: any = {
   pick(id: string) {
     DX.mid = id;
     DX.inv = false;
-    marginOrient();
+    DX.flipped = false;
+    orient();
     DX.amt = '';
     DX.price = '';
     load();
@@ -940,13 +948,15 @@ export const api: any = {
     if (m) {
       DX.mid = m.id;
       DX.inv = false;
+      DX.flipped = false;
+      orient();
       load();
       window.scrollTo(0, 0);
     }
   },
   flip() {
-    if (DX.mode === 'margin') { ctx.toast('Leverage trading always shows the price you place orders at (LUMA per asset), so the chart is not flipped here.'); return; }
     DX.inv = !DX.inv;
+    DX.flipped = true;
     DX.amt = '';
     DX.price = '';
     load();
