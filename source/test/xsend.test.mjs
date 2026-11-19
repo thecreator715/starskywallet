@@ -1,0 +1,24 @@
+// Unit tests for src/live/xsend.ts route finding, estimates and the payment it builds.
+import assert from 'assert';
+globalThis.localStorage = { getItem: () => null, setItem() {} };
+globalThis.document = { getElementById: () => null, head: { appendChild() {} }, createElement: () => ({}) }; globalThis.window = globalThis; globalThis.location = { hash: '' };
+const X = await import(process.argv[2] || '/tmp/xsend.mjs'); let n = 0;
+const t = async (name, f) => { try { await f(); n++; console.log('  ok  ' + name); } catch (e) { console.log('  FAIL ' + name + '\n       ' + e.message); process.exitCode = 1; } };
+const N = { c: 'native', i: '' }, A = { c: 'AAA', i: 'rA' }, B = { c: 'BBB', i: 'rB' }, U = { c: 'USD', i: 'rU' };
+const P = (account, a, b, ra, rb, fee = 0.3) => ({ account, a, b, ra, rb, fee });
+await t('direct pool output matches constant product with fee', () => { const o = X.swapOut(1000, 2000, 0.3, 10); assert(Math.abs(o - 2000 * 10 * 0.997 / (1000 + 9.97)) < 1e-9); });
+await t('swapIn is the inverse of swapOut', () => { const i = X.swapIn(1000, 2000, 0.3, 19.5); assert(Math.abs(X.swapOut(1000, 2000, 0.3, i) - 19.5) < 1e-9); assert.strictEqual(X.swapIn(1000, 2000, 0.3, 2000), Infinity); });
+await t('finds direct and two-hop routes, shortest first, no loops', () => { const ps = [P('p1', A, B, 100, 100), P('p2', A, N, 100, 100), P('p3', N, B, 100, 100)]; const r = X.findPaths(ps, A, B); assert.strictEqual(r.length, 2); assert.strictEqual(r[0].length, 1); assert.strictEqual(r[1].length, 2); });
+await t('no connection gives a clear reason', () => { const p = X.planSend([P('p1', A, N, 100, 100)], A, B, 5); assert(!p.ok && /No pool route/.test(p.reason)); });
+await t('small trade has tiny impact and out ~ amount x price', () => { const p = X.planSend([P('p1', A, B, 1e6, 2e6)], A, B, 10); assert(p.ok); assert(p.impact < 0.0001); assert(Math.abs(p.outAmt - 20 * 0.997) < 0.01); });
+await t('large trade shows large price impact', () => { const p = X.planSend([P('p1', A, B, 1000, 1000)], A, B, 500); assert(p.impact > 0.2); });
+await t('only a two-hop route exists: used, and 3 assets chain through', () => { const p = X.planSend([P('p2', A, N, 1e5, 1e5), P('p3', N, B, 1e5, 3e5)], A, B, 100); assert(p.ok && p.routes[0].hops.length === 2); assert(Math.abs(p.outAmt - 100 * 3 * 0.997 * 0.997) < 1.5); });
+await t('a big payment is split across the direct pool and a second route when that is cheaper', () => { const ps = [P('d', A, B, 1000, 1000), P('x', A, U, 5000, 5000), P('y', U, B, 5000, 5000)]; const p = X.planSend(ps, A, B, 800); assert(p.split, 'expected a split'); const direct = X.planSend([ps[0]], A, B, 800); assert(p.outAmt > direct.outAmt, 'split must beat direct only'); });
+await t('callers pools are not mutated', () => { const ps = [P('p1', A, B, 1000, 1000)]; X.planSend(ps, A, B, 500); assert.strictEqual(ps[0].ra, 1000); assert.strictEqual(ps[0].rb, 1000); });
+await t('receive mode: paying the planned input delivers at least the wanted amount', () => { const ps = [P('p1', A, B, 1e5, 2e5)]; const r = X.planReceive(ps, A, B, 150); assert(r.ok); assert(X.planSend(ps, A, B, r.inAmt).outAmt >= 150 - 1e-6); assert(r.inAmt < 80); });
+await t('receive more than the pools hold is refused', () => { const r = X.planReceive([P('p1', A, B, 100, 100)], A, B, 5000); assert(!r.ok && /do not hold enough/.test(r.reason)); });
+await t('send payment: SendMax exact, partial flag, DeliverMin below estimate, Paths only for multi-hop', () => { const ps = [P('p2', A, N, 1e5, 1e5), P('p3', N, B, 1e5, 3e5)]; const pl = X.planSend(ps, A, B, 100); const tx = X.buildPayment({ account: 'rMe', dest: 'rYou', from: A, to: B, mode: 'send', plan: pl, slip: 1 }); assert.strictEqual(tx.Flags, 0x00020000); assert.strictEqual(tx.SendMax.value, '100'); assert(+tx.DeliverMin.value < pl.outAmt); assert(+tx.Amount.value > pl.outAmt); assert.deepStrictEqual(tx.Paths, [[{ currency: 'XRP' }]]); });
+await t('direct route needs no Paths; native amounts are drops', () => { const pl = X.planSend([P('p1', N, B, 1e5, 1e5)], N, B, 10); const tx = X.buildPayment({ account: 'rMe', dest: 'rYou', from: N, to: B, mode: 'send', plan: pl, slip: 1 }); assert.strictEqual(tx.SendMax, '10000000'); assert(!tx.Paths); });
+await t('receive payment: exact Amount, SendMax above the quote, no partial flag', () => { const pl = X.planReceive([P('p1', A, B, 1e5, 2e5)], A, B, 100); const tx = X.buildPayment({ account: 'rMe', dest: 'rYou', from: A, to: B, mode: 'receive', plan: pl, slip: 1 }); assert.strictEqual(tx.Amount.value, '100'); assert(+tx.SendMax.value > pl.inAmt); assert(!tx.Flags && !tx.DeliverMin); });
+await t('minimum received and maximum paid use the slippage', () => { assert.strictEqual(X.minReceived(100, 1), 99); assert(Math.abs(X.maxPaid(100, 2) - 102) < 1e-9); });
+console.log(n + ' passed'); 

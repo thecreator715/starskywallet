@@ -25,6 +25,7 @@ import * as Extras from './live/extras.ts';
 import * as NL from './live/nodelink.ts';
 import * as SF from './live/safety.ts';
 import * as More from './live/more.ts';
+import * as Xs from './live/xsend.ts';
 
 // Types
 export interface NetworkDef {
@@ -1614,6 +1615,7 @@ export function renderApp() {
               <button class="sm" onclick="window.sendMax()">Max</button>
               <input id="s_tag" placeholder="Tag (optional)" inputmode="numeric" style="width:8.5rem">
             </div>
+            ${Xs.controlsHtml()}
             <div class="row">
               <input id="s_memo" class="grow" placeholder="Memo / Note (optional, public on ledger)">
             </div>
@@ -1911,6 +1913,7 @@ export function renderApp() {
   else Pages.marketsUnmount();
   if (st.tab === 'bridge') Pages.bridgeMount();
   if (st.tab === 'home') Pages.assetsMount();
+  if (st.tab === 'send') Xs.afterRender();
   Extras.afterRender(st.tab, { unfunded: !!(b && b.unfunded), online: st.status === 'online', lockMin: CFG.lockMin });
 }
 
@@ -2567,6 +2570,7 @@ export function initWindowBindings() {
   };
 
   (window as any).reviewSend = () => {
+    if ((document.getElementById('s_recv') as HTMLSelectElement | null)?.value) { void Xs.reviewCross(); return; }   // recipient receives a different asset: priced from the pools
     try {
       const aSelect = (document.getElementById('s_asset') as HTMLSelectElement)?.value;
       const destVal = (document.getElementById('s_dest') as HTMLInputElement)?.value;
