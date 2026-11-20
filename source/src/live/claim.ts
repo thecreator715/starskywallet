@@ -17,10 +17,10 @@ async function call(p: string, init?: RequestInit): Promise<any> {
   for (let n = 0; n < rs.length; n++) {
     const i = (RIGHT + n) % rs.length, u = `${rs[i]}/api/public/claim/${p}`;
     try {
-      const r = await fetch(u, { ...init, cache: 'no-store' }); const j = await r.json().catch(() => null);
+      const r = await fetch(u, { ...init, cache: 'no-store' }); const txt = await r.text().catch(() => ''); let j: any = null; try { j = JSON.parse(txt); } catch {}
       if (j && typeof j === 'object') { RIGHT = i; WHY = ''; return j; }
       if (r.status === 429) throw new Error('Too many tries from your network. Wait a little and try again.');
-      tried.push(`${new URL(u).host}: ${r.status === 403 ? 'blocked (the gateway is an old version: restart it from the latest lumanet)' : r.status === 404 ? 'not found (restart the control panel from the latest lumanet)' : 'HTTP ' + r.status}`);
+      tried.push(`${new URL(u).host}: ${r.status === 403 ? (/gateway gw-/.test(txt) ? txt.slice(0, 160) : 'blocked by an OLD gateway (' + txt.slice(0, 40) + '): close every Terminal window and run Start LUMA All from the latest lumanet') : r.status === 404 ? 'not found (restart the control panel from the latest lumanet)' : 'HTTP ' + r.status}`);
     } catch (e: any) { if (/Too many/.test(e.message)) throw e; tried.push(`${(() => { try { return new URL(u).host; } catch { return u; } })()}: not reachable`); }
   }
   WHY = tried.join(' · ');
