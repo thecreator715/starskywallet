@@ -13,6 +13,7 @@ import * as Bot from './live/bot.ts';
 import * as Mg from './live/margin.ts';
 import * as PL from './live/poolinfo.ts';
 import * as Bn from './live/burn.ts';
+import * as Claim from './live/claim.ts';
 import * as Nft from './live/nft.ts';
 import * as Hist from './live/history.ts';
 import * as Hold from './live/holders.ts';
@@ -297,7 +298,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -1166,6 +1167,7 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['runnode', 'Run a Node'],
   ['supply', 'LUMA Supply'],
   ['burn', 'Burns'],
+  ['claim', 'Free LUMA'],
   ['bot', 'Trading Bot'],
   ['margin', 'Leverage'],
   ['more', 'Settings'],
@@ -1585,6 +1587,10 @@ export function renderApp() {
       body = Bn.pageShell();
       break;
 
+    case 'claim':
+      body = Claim.shell();
+      break;
+
     case 'bot':
       body = Bot.botShell();
       break;
@@ -1803,6 +1809,7 @@ export function renderApp() {
         ${renderNavItem('dex', 'DEX')}
         ${renderNavItem('pools', 'Liquidity Pools')}
         ${renderNavItem('bridge', 'Bridge')}
+        ${renderNavItem('claim', 'Free LUMA')}
 
         <div class="nav-section">Explorer</div>
         ${renderNavItem('network', 'Network')}
@@ -1912,6 +1919,7 @@ export function renderApp() {
   if (st.tab === 'markets') Pages.marketsMount();
   else Pages.marketsUnmount();
   if (st.tab === 'bridge') Pages.bridgeMount();
+  if (st.tab === 'claim') Claim.mount();
   if (st.tab === 'home') Pages.assetsMount();
   if (st.tab === 'send') Xs.afterRender();
   Extras.afterRender(st.tab, { unfunded: !!(b && b.unfunded), online: st.status === 'online', lockMin: CFG.lockMin });

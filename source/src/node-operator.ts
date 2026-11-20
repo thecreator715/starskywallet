@@ -72,4 +72,6 @@ Mg.setGenesis(wallet.classicAddress);
   Mg.setOperator(true);
   setInterval(() => Mg.refresh(true).catch(() => {}), 20000);
   console.log('operator running. Press Ctrl+C to stop. State is kept in', file);
+  // heartbeat for the control panel: one line every 5 s, read by the panel to show the engine's health and to restart it if it hangs
+  setInterval(() => { try { console.log('@@HB ' + JSON.stringify({ ...Mg.engineStats(), connected: client.isConnected(), pid: process.pid, up: Math.round(process.uptime()) })); } catch {} }, 5000);
 })();

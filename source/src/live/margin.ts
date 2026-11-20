@@ -365,7 +365,7 @@ function alerts() {
         if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') new Notification('Starsky margin alert', { body: `${lbl} is close to liquidation.` });
       } catch {}
     }
-    if (l.p.closeReq) out.push(`${lbl}: close requested, waiting for the operator to settle.`);
+    if (l.p.closeReq) out.push(`${lbl}: close requested. ${nodeOnline() ? 'The leverage node settles it in a few seconds.' : 'The leverage node is not answering right now, so it will settle as soon as the node is back. Your position and margin are safe on the ledger.'}`);
   }
   for (const p of MG.mine) {
     if (p.status === 'closed' && p.why === 'liq' && Date.now() - p.endMs < 3600e3 && !MG.warned.has('liq' + p.id)) {
@@ -375,7 +375,10 @@ function alerts() {
   }
   if (MG.stale) out.push('The node did not answer the last history request. Showing the last saved data; nothing is lost.');
   const waiting = MG.mine.filter((p: Pos) => p.status === 'open' && !p.bad && (p.closeReq || liveList([p])[0].ratio >= 1));
-  if (waiting.length && !MG.op) out.push('Close requests, stops and liquidations are settled by the operator that runs inside the LUMA panel (it starts by itself with Start LUMA All). If this stays here for more than a minute, the LUMA panel is not running or is an old version: update the lumanet folder and run Start LUMA All again. You can also press Start operator on the Leverage page if the genesis wallet is in this vault.');
+  if (waiting.length && !MG.op) {
+    if (!nodeOnline()) out.push('The leverage node is not answering right now. Close requests, stops and liquidations settle automatically when it is back; nothing is lost and your margin stays on the ledger.');
+    else if (NODE.st.oldestDueSec > 90) out.push(`The leverage node is online but settling is slower than usual (oldest waiting ${NODE.st.oldestDueSec}s). It restarts itself if it stays stuck.`);
+  }
   MG.alerts = out;
 }
 export const mgRecall = recall;
@@ -441,9 +444,30 @@ const olog = (m: string) => {
   MG.opLog.unshift(new Date().toLocaleTimeString() + '  ' + m);
   MG.opLog.length = Math.min(MG.opLog.length, 60);
 };
+/** The leverage NODE: settlement runs on the network operator's node (panel), always on. This is its public health, read through the gateway. */
+const NODE: any = { st: null, at: 0, err: '' };
+const base = (): string => String((ctx as any).nodeUrl ? (ctx as any).nodeUrl() : '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '');
+export async function nodeEngine(force = false) {
+  if (ctx.xrpl() || (!force && Date.now() - NODE.at < 12000)) return NODE.st;
+  NODE.at = Date.now();
+  try {
+    const c = new AbortController(), t = setTimeout(() => c.abort(), 6000);
+    const r = await fetch(`${base()}/panel/${ctx.netKey() === 'test' ? 'test' : 'main'}/api/public/leverage`, { cache: 'no-store', signal: c.signal }); clearTimeout(t);
+    const j = await r.json(); NODE.st = j && j.ok ? j : null; NODE.err = j && j.ok ? '' : 'no answer';
+  } catch (e: any) { NODE.st = null; NODE.err = String(e?.message || e); }
+  return NODE.st;
+}
+const nodeOnline = () => !!(NODE.st && NODE.st.online);
+/** what the node-side engine reports about itself (the panel reads this heartbeat and shows it to everyone) */
+const ENG: any = { tickAt: 0, open: 0, due: new Map<string, number>(), settled: 0, failed: 0, errors: 0, lastErr: '', lastSettle: 0, lastTickMs: 0 };
+export const engineStats = () => {
+  const t = Date.now(), ages = [...ENG.due.values()].map((x: number) => t - x);
+  return { tickAt: ENG.tickAt, open: ENG.open, due: ENG.due.size, oldestDueSec: ages.length ? Math.round(Math.max(...ages) / 1000) : 0, settled: ENG.settled, failed: ENG.failed, errors: ENG.errors, lastErr: ENG.lastErr, lastSettle: ENG.lastSettle, lastTickMs: ENG.lastTickMs, genesisBalance: MG.gbal };
+};
 async function operatorTick() {
   if (MG.opBusy || !MG.op) return;
   MG.opBusy = true;
+  const t0 = Date.now(), dueNow = new Set<string>();
   try {
     const op = await operatorSeed();
     if (!op) throw new Error('the genesis wallet is not in this vault');
@@ -488,6 +512,7 @@ async function operatorTick() {
         }
       }
       if (!why) continue;
+      dueNow.add(p.id); if (!ENG.due.has(p.id)) ENG.due.set(p.id, Date.now());
       // never settle twice: look at the chain again right before paying
       await new Promise(r => setTimeout(r, Math.random() * 4000));   // two operators (panel and a browser tab) must not pay the same position twice: a random pause, then look at the chain again
       const again = await derive(await events(op.address), op.address);
@@ -499,8 +524,12 @@ async function operatorTick() {
       const r = await ctx.submitAs(op.seed, { TransactionType: 'Payment', Account: op.address, Destination: p.trader, Amount: String(Math.max(1, Math.round(pay * 1e6))), ...memo({ v: 1, op: 'settle', id: p.id, why, px, pnl: +pnl.toFixed(6), pay: +pay.toFixed(6) }) });
       olog(`${why.toUpperCase()} ${sd(p.key, p.long) ? 'long' : 'short'} ${p.lev}x ${nmS(p.key)} for ${short(ctx.show(p.trader), 6, 4)} at ${fmt(px)}: paid ${fmt(pay)} ${nat()}${r.ok ? '' : ' FAILED ' + r.msg}`);
       MG.lastSettle = Date.now();
+      if (r.ok) { ENG.settled++; ENG.lastSettle = Date.now(); ENG.due.delete(p.id); } else ENG.failed++;
     }
+    ENG.open = all.filter(p => p.status === 'open').length; ENG.tickAt = Date.now(); ENG.lastTickMs = ENG.tickAt - t0; ENG.lastErr = '';
+    for (const id of [...ENG.due.keys()]) if (!dueNow.has(id)) ENG.due.delete(id);   // settled by someone else, or no longer due
   } catch (e: any) {
+    ENG.errors++; ENG.lastErr = String(e?.message || e).slice(0, 160);
     olog('⚠ ' + String(e?.message || e));
   }
   MG.opBusy = false;
@@ -591,7 +620,7 @@ export function pageShell() {
     <div class="nwh">Position history</div><div class="card nwscroll" id="mg_hist" style="max-height:26rem"></div>
     <div class="nwg3" style="margin-top:1rem;grid-template-columns:repeat(2,minmax(0,1fr))">
       <div class="card"><div class="k">Markets and limits</div><div id="mg_mk" class="nwscroll"></div></div>
-      <div class="card"><div class="k">Operator (genesis wallet)</div><div id="mg_op"></div></div></div>
+      <div class="card"><div class="k">Leverage node</div><div id="mg_op"></div></div></div>
     <div class="card" style="margin-top:1rem"><div class="k">How the math works</div><div id="mg_math" class="mut" style="font-size:.86rem;line-height:1.6"></div></div></div>`;
 }
 const mathHtml = () => `<b>Size</b> = margin × leverage. <b>PnL</b> (long) = size × (price ÷ entry − 1); (short) = size × (1 − price ÷ entry). Prices are LUMA per 1 asset, from the AMM pool.<br>
@@ -628,12 +657,13 @@ async function paintOp() {
   const longN = open.filter(p => p.long).reduce((s, p) => s + p.n, 0);
   const shortN = open.filter(p => !p.long).reduce((s, p) => s + p.n, 0);
   const upn = open.reduce((s, p) => s + evalPos(p, markOf(p.key)).pnl, 0);
-  const body = op
+  const ns = NODE.st, nodeBlock = `<div class="row" style="gap:.6rem;align-items:center;flex-wrap:wrap;margin-bottom:.6rem"><span class="chip ${nodeOnline() ? '' : 'bad'}">${nodeOnline() ? 'NODE ONLINE' : ns ? 'NODE STARTING' : 'NODE NOT ANSWERING'}</span><span class="mut">${ns ? `checked ${ns.tickAgeSec ?? '–'}s ago · ${ns.open} open · ${ns.due} due now · ${ns.settled} settled` : 'The network operator\'s node settles stop loss, take profit, liquidation and close requests. You do not need to do anything.'}</span></div>`;
+  const body = nodeBlock + (op
     ? `<div class="row" style="gap:.6rem;align-items:center;flex-wrap:wrap"><button id="mg_opbtn" class="${MG.op ? 'bad' : 'pri acc'}" onclick="window.mg.operator()">${MG.op ? 'Stop operator' : 'Start operator'}</button><span class="chip ${MG.op ? '' : 'bad'}">${MG.op ? (MG.opBusy ? 'WORKING' : 'RUNNING') : 'STOPPED'}</span><small class="mut">Settles stop losses, take profits, liquidations and closes for everyone, paying from the genesis wallet. Keep Starsky open.</small></div>
       <div class="pgrid nwk" style="margin:.7rem 0"><div class="tile kvt"><div class="k">Genesis balance</div><div class="big2">${fmt(MG.gbal, 2)}</div></div><div class="tile kvt"><div class="k">Open size</div><div class="big2">${fmt(longN + shortN, 0)}</div><small class="mut">${open.length} positions</small></div><div class="tile kvt"><div class="k">Long / short</div><div class="big2">${fmt(longN, 0)} / ${fmt(shortN, 0)}</div><small class="mut">net ${fmt(longN - shortN, 0)}</small></div><div class="tile kvt"><div class="k">Traders' unrealized PnL</div><div class="big2">${pnlTxt(upn)}</div><small class="mut">genesis side: ${pnlTxt(-upn)}</small></div></div>
       <div class="mono nwscroll" style="font-size:.76rem;max-height:12rem">${MG.opLog.map((l: string) => `<div>${esc(l)}</div>`).join('') || '<span class="mut">No settlements yet.</span>'}</div>`
-    : `<div class="mut">The operator needs the genesis wallet (${MG.gbal ? esc(short(ctx.show(G.addr), 8, 6)) : 'not found'}) in this vault. Import its seed under Wallets and the operator controls appear here. Without a running operator, stop loss, take profit, liquidation and close requests wait.</div>
-      <div class="mut" style="margin-top:.5rem">Last settlement seen on the ledger: ${MG.mine.filter((p: Pos) => p.status === 'closed').length ? ago(Date.now() - Math.max(...MG.mine.filter((p: Pos) => p.status === 'closed').map((p: Pos) => p.endMs))) : 'none yet'}.</div>`;
+    : `<div class="mut">This computer does not run the node. Only the network operator needs the genesis wallet (${MG.gbal ? esc(short(ctx.show(G.addr), 8, 6)) : 'not found'}) in this vault. Import its seed under Wallets and the operator controls appear here. Without a running leverage node, stop loss, take profit, liquidation and close requests wait.</div>
+      <div class="mut" style="margin-top:.5rem">Last settlement seen on the ledger: ${MG.mine.filter((p: Pos) => p.status === 'closed').length ? ago(Date.now() - Math.max(...MG.mine.filter((p: Pos) => p.status === 'closed').map((p: Pos) => p.endMs))) : 'none yet'}.</div>`);
   setHtml('mg_op', body);
 }
 const CH: any = { key: '', range: '1h', at: 0, busy: false, cd: null, ck: '' };
@@ -848,6 +878,7 @@ export function dragEnd(id: string, price: number): void {
   opMemo({ op: 'edit', id: pid, [field]: pr }, 'Updated');
 }
 export async function startMonitor() {
+  nodeEngine(true).catch(() => {});
   autoOperator();
   refresh(false);
 }
@@ -855,6 +886,7 @@ let mon: any = null;
 export function monitor() {
   if (mon) return;
   mon = setInterval(() => {
+    nodeEngine().then(() => { try { paintAll(); } catch {} }).catch(() => {});
     if (ctx.online()) autoOperator();
     if (ctx.online() && ctx.account()) refresh(false);
   }, 10000);
