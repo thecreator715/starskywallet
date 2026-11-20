@@ -450,11 +450,16 @@ const base = (): string => String((ctx as any).nodeUrl ? (ctx as any).nodeUrl() 
 export async function nodeEngine(force = false) {
   if (ctx.xrpl() || (!force && Date.now() - NODE.at < 12000)) return NODE.st;
   NODE.at = Date.now();
-  try {
-    const c = new AbortController(), t = setTimeout(() => c.abort(), 6000);
-    const r = await fetch(`${base()}/panel/${ctx.netKey() === 'test' ? 'test' : 'main'}/api/public/leverage`, { cache: 'no-store', signal: c.signal }); clearTimeout(t);
-    const j = await r.json(); NODE.st = j && j.ok ? j : null; NODE.err = j && j.ok ? '' : 'no answer';
-  } catch (e: any) { NODE.st = null; NODE.err = String(e?.message || e); }
+  const k = ctx.netKey() === 'test' ? 'test' : 'main', cf = (window as any).STARSKY_CONFIG || {}, pn = String((cf[k] || cf.main || {}).panel || '').replace(/\/+$/, '');
+  const roots = [`${base()}/panel/${k}`]; if (pn) roots.push(pn);
+  NODE.st = null; NODE.err = '';
+  for (const root of roots) {
+    try {
+      const c = new AbortController(), t = setTimeout(() => c.abort(), 6000);
+      const r = await fetch(`${root}/api/public/leverage`, { cache: 'no-store', signal: c.signal }); clearTimeout(t);
+      const j = await r.json(); if (j && j.ok) { NODE.st = j; NODE.err = ''; break; } NODE.err = 'no answer';
+    } catch (e: any) { NODE.err = String(e?.message || e); }
+  }
   return NODE.st;
 }
 const nodeOnline = () => !!(NODE.st && NODE.st.online);

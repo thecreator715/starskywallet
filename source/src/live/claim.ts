@@ -8,7 +8,24 @@ import { base } from './nodelink.ts';
 
 const $ = (id: string) => document.getElementById(id);
 const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
-const url = (p: string) => `${base()}/panel/${net()}/api/public/claim/${p}`;
+// Where the claim service can be reached: the gateway first (works from anywhere), then the operator's own panel on this computer.
+const roots = (): string[] => { const k = net(), port = k === 'test' ? 8091 : 8090; const c = (window as any).STARSKY_CONFIG || {}, pn = String((c[k] || c.main || {}).panel || '').replace(/\/+$/, '');
+  const r = [`${base()}/panel/${k}`]; if (pn) r.push(pn); r.push(`http://127.0.0.1:${port}`, `http://localhost:${port}`); return r; };
+let RIGHT = 0; let WHY = '';
+async function call(p: string, init?: RequestInit): Promise<any> {
+  const rs = roots(), tried: string[] = [];
+  for (let n = 0; n < rs.length; n++) {
+    const i = (RIGHT + n) % rs.length, u = `${rs[i]}/api/public/claim/${p}`;
+    try {
+      const r = await fetch(u, { ...init, cache: 'no-store' }); const j = await r.json().catch(() => null);
+      if (j && typeof j === 'object') { RIGHT = i; WHY = ''; return j; }
+      if (r.status === 429) throw new Error('Too many tries from your network. Wait a little and try again.');
+      tried.push(`${new URL(u).host}: ${r.status === 403 ? 'blocked (the gateway is an old version: restart it from the latest lumanet)' : r.status === 404 ? 'not found (restart the control panel from the latest lumanet)' : 'HTTP ' + r.status}`);
+    } catch (e: any) { if (/Too many/.test(e.message)) throw e; tried.push(`${(() => { try { return new URL(u).host; } catch { return u; } })()}: not reachable`); }
+  }
+  WHY = tried.join(' · ');
+  throw new Error('The claim service did not answer. ' + WHY);
+}
 const enc = new TextEncoder();
 const hexOf = (s: string) => Array.from(enc.encode(s)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
 const lead = (b: Uint8Array) => { let n = 0; for (const x of b) { if (x === 0) { n += 8; continue; } n += Math.clz32(x) - 24; break; } return n; };
@@ -16,8 +33,8 @@ const lead = (b: Uint8Array) => { let n = 0; for (const x of b) { if (x === 0) {
 interface St { status: any; stats: any; mine: any; err: string; busy: boolean; step: string; done: any; ts: any; tsToken: string }
 const S: St = { status: null, stats: null, mine: null, err: '', busy: false, step: '', done: null, ts: null, tsToken: '' };
 
-async function get(p: string) { const r = await fetch(url(p), { cache: 'no-store' }); const j = await r.json().catch(() => null); if (!j) throw new Error('The claim service did not answer. The operator\'s control panel may be offline.'); return j; }
-async function post(p: string, body: any) { const r = await fetch(url(p), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' }); const j = await r.json().catch(() => null); if (!j) throw new Error(r.status === 429 ? 'Too many tries from your network. Wait a little and try again.' : 'The claim service did not answer. The operator\'s control panel may be offline.'); return j; }
+const get = (p: string) => call(p);
+const post = (p: string, body: any) => call(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 const myAddr = (): string => { try { const a = ctx.account(); return a ? a : ''; } catch { return ''; } };
 const walletOf = (): { seed: string; classic: string } | null => {
