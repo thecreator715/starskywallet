@@ -10,7 +10,7 @@ import { base } from './nodelink.ts';
 const MT = 'luma-social';
 const HUBS: Record<string, string> = { main: 'rHNDrZSmSH6TqDCfA1KENwwZyKwHmStvPL', test: 'rGeYQ26dzMz3TfTqz34dpBfmpHZpHbeFdE' };
 // what each action costs (LUMA). The network fee of the chain is on top. All of it lands in the hub; tips go straight to the person tipped.
-const COST: Record<string, number> = { post: 0.001, rt: 0.001, like: 0.0001, unl: 0.0001, fol: 0.001, unf: 0.001, prof: 0.01, hdl: 1, vote: 0.0001, del: 0.0001, rx: 0.0001, boost: 1, edit: 0.001, pin: 0.0001, tipn: 0.0001, rep: 0.0001, lst: 0.01, lup: 0.001, ofr: 0.0001, ask: 0.0001, ans: 0.0001, rev: 0.0001, chk: 0.0001 };
+const COST: Record<string, number> = { post: 0.000001, rt: 0.001, like: 0.0001, unl: 0.0001, fol: 0.001, unf: 0.001, prof: 0.01, hdl: 1, vote: 0.0001, del: 0.0001, rx: 0.0001, boost: 1, edit: 0.001, pin: 0.0001, tipn: 0.0001, rep: 0.0001, lst: 0.01, lup: 0.001, ofr: 0.0001, ask: 0.0001, ans: 0.0001, rev: 0.0001, chk: 0.0001 };
 const MAXTXT = 500, MAXMEMO = 900, MAXPARTS = 10, RIPPLE_EPOCH = 946684800;
 const EMOJI = ['🔥', '😂', '🚀', '👏', '😮', '😢'];
 
@@ -482,7 +482,7 @@ function composer(opts: { reply?: string; quote?: string } = {}): string {
   <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
   ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
   <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
-  <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 4)} LUMA</span></button></div></div></div>`;
+  <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 6)} LUMA</span></button></div></div></div>`;
 }
 
 function topTipped(days = 7) {
