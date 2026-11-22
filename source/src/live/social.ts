@@ -536,6 +536,7 @@ function composer(opts: { reply?: string; quote?: string } = {}): string {
   ${S.nft ? `<div class="sc-nftat"><img src="${esc(S.nft.img)}" alt="" referrerpolicy="no-referrer"><div><b>${esc(S.nft.name)}</b><div class="sc-m">NFT attached. It will be shown with a check that you own it.</div></div><button class="sc-ib" data-act="nftx" title="Remove">${ic('x', 16)}</button></div>` : ''}
   ${S.media && !S.nft ? `<div class="sc-nftat"><img src="${esc(safeUrl(S.media))}" alt="" referrerpolicy="no-referrer"><div><b>Picture attached</b><div class="sc-m">${UP ? 'Uploading…' : 'It will be shown in your post.'}</div></div><button class="sc-ib" data-act="mediax" title="Remove">${ic('x', 16)}</button></div>` : ''}
   ${qq ? `<div class="sc-quote">${postCard(qq, { quoted: true })}<button class="sc-btn sm ghost" data-act="noquote" style="margin-top:6px">Remove quote</button></div>` : ''}
+  ${PP.barHtml()}
   <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
   ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
   <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib ${S.media && !S.nft ? 'on' : ''}" data-act="upl" title="Upload a picture from your computer (5 MB max)">${ic('up')}</button><input type="file" id="sc-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onchange="sc.upload(this,'post')"><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
@@ -746,7 +747,7 @@ function center(): string {
   return `<div class="sc-head">${back}Search</div>${searchView(v.q)}`;
 }
 
-export function shell() { return `<div id="sc-root"><style>${CSS}${CSS2}${CSS3}</style><div class="sc" id="sc"></div></div>`; }
+export function shell() { return `<div id="sc-root"><style>${CSS}${CSS2}${CSS3}${PP.CSS}</style><div class="sc" id="sc"></div></div>`; }
 function resolvePend() { if (!S.pend) return; for (const k of IX.posts.keys()) { if (String(k).toUpperCase().startsWith(S.pend)) { S.view = { k: 'thread', id: String(k).toUpperCase() } as any; S.pend = ''; break; } } }
 function paint() {
   resolvePend();
@@ -1253,6 +1254,8 @@ async function doPost(reply: string, quote: string) {
 let draftT: any = 0;
 function bind() {
   const root = document.getElementById('sc-root'); if (!root || bound === root) return; bound = root;
+  root.addEventListener('click', e => { PP.onClick(e); }, true);
+  root.addEventListener('keydown', PP.onKey as any); root.addEventListener('input', PP.onInput); root.addEventListener('paste', PP.onPaste as any); root.addEventListener('drop', PP.onDrop as any);
   root.addEventListener('click', e => { const el = (e.target as HTMLElement).closest('[data-act]') as HTMLElement | null; if (!el || !root.contains(el)) return; if ((e.target as HTMLElement).closest('a[href]')) return; void onClick(el, e); });
   root.addEventListener('input', e => {
     const t = e.target as HTMLInputElement;
@@ -1357,10 +1360,11 @@ function deepLink() {
   } catch {}
 }
 let LASTACC: string | null = null;
+import * as PP from './postplus.ts';
 export async function mount() {
   if (!document.getElementById('sc-root')) return;
   if (LASTACC !== me()) { const first = LASTACC === null; LASTACC = me(); if (!first) { S.view = { k: 'home' } as any; hist.length = 0; S.draft = ''; S.media = ''; S.nft = null; S.quote = ''; S.err = ''; S.loaded = false; POL.at = 0; } }
-  cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
+  PP.init({ me, setMedia: u => { S.media = u; S.nft = null; paint(); }, post: () => { const b = document.getElementById('sc-go') as HTMLElement | null; if (b) b.click(); }, toast: (m, b) => ctx.toast(m, b), upload: async f => { const u = await uploadFiles([f], 1); if (u[0]) { S.media = u[0]; S.nft = null; paint(); } }, showL: a => ctx.showL(a) }); cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
   await pull(); paint();
   timer = setInterval(() => { if (document.hidden || !document.getElementById('sc')) { if (!document.getElementById('sc')) stop(); return; } void pull().then(() => { const a = document.activeElement as HTMLElement | null; if (!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) && !document.getElementById('m')?.innerHTML) paintSoft(); }); }, 9000);
 }
