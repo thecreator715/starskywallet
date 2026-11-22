@@ -1852,15 +1852,9 @@ export function renderApp() {
             `
             ).join('')}
           </div>
-          <span class="tstat" id="tstat"></span></div>
-          <span class="pill ${st.status === 'online' ? 'on' : ''}" id="chip"></span>
-        </div>
-
-        ${
-          a
-            ? `
-          <div class="row" style="margin-top:-.6rem;margin-bottom:1rem">
-            <select id="acs" onchange="window.switchAcct(this.value)" style="width:auto;max-width:100%">
+          <span class="tstat" id="tstat"></span>${a ? `
+          <div class="acrow">
+            <select id="acs" onchange="window.switchAcct(this.value)">
               ${(VAULT?.data.accounts || [])
                 .filter(x => (st.walletMode === 'luma' ? x.type !== 'xrpl' : x.type === 'xrpl'))
                 .map(
@@ -1875,9 +1869,10 @@ export function renderApp() {
             <button class="sm ghost" onclick="window.copyText('${esc(showAddr(a.address))}')">Copy Address</button>
             <button class="sm ghost" onclick="window.copyText('${esc(a.address)}')">Copy Classic (r…)</button>
           </div>
-        `
-            : ''
-        }
+` : ''}</div>
+          <span class="pill ${st.status === 'online' ? 'on' : ''}" id="chip"></span>
+        </div>
+
 
         <div id="netstrip"><div class="nsrow"><input id="gs" placeholder="Search a transaction hash or wallet address" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')window.globalSearch(this.value)"><button class="sm pri" onclick="window.globalSearch(document.getElementById('gs').value)">Search</button></div><div id="nsstats"></div></div>
         <div id="banner"></div>
