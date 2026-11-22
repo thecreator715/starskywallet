@@ -1156,6 +1156,8 @@ export const ic = (k: string) =>
 export const TABS: Array<[AppState['tab'], string]> = [
   ['home', 'Portfolio'],
   ['wallets', 'Wallets'],
+  ['social', 'Social'],
+  ['rewards', 'Rewards'],
   ['send', 'Send'],
   ['receive', 'Receive'],
   ['markets', 'Markets & Tokens'],
@@ -1171,8 +1173,6 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['supply', 'LUMA Supply'],
   ['burn', 'Burns'],
   ['claim', 'Free LUMA'],
-  ['rewards', 'Rewards'],
-  ['social', 'Social'],
   ['bot', 'Trading Bot'],
   ['margin', 'Leverage'],
   ['more', 'Settings'],
