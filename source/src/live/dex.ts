@@ -94,7 +94,7 @@ const nm = (a: Asset) => M.labelOf(a);
 async function safeCandles(m: M.Market): Promise<any> {
   let to: any;
   try {
-    return await Promise.race([M.candles(m, RANGE()), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('The node took too long to answer.')), 30000); })]);
+    return await Promise.race([(async () => { const r = RANGE(); if (r.sec <= 3600) { const q = await M.quickCandles(m, r).catch(() => null); if (q && q.list.length) return q; } return M.candles(m, r); })(), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('The node took too long to answer.')), 25000); })]);
   } catch (e: any) {
     return { list: [], first: 0, clamped: false, note: 'Could not read price history: ' + String(e?.message || e) + ' Tap a range to retry.' };
   } finally { clearTimeout(to); }

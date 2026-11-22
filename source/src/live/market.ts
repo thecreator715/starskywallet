@@ -685,3 +685,25 @@ export async function growth(sec: number, points: number): Promise<{ ms: number;
   }
   return out;
 }
+
+/** Fast candles for short ranges: built from the pool's own recent swaps plus its current price (a handful of requests instead of dozens of history lookups). Empty periods repeat the last price. */
+export async function quickCandles(m: Market, range: RangeDef): Promise<{ list: Candle[]; first: number; clamped: boolean; note: string } | null> {
+  const refs = await poolRefs(), dp = directPool(refs, m.base, m.quote);
+  if (!dp || !isFinite(range.sec)) return null;
+  const nowMs = Date.now(), span = range.sec * 1000, start = nowMs - span, step = span / range.candles;
+  const [st, trs] = await Promise.all([poolState(dp).catch(() => null), tradesSince(m, start - span).catch(() => [] as Trade[])]);
+  const pts = trs.filter(t => (t.kind === 'buy' || t.kind === 'sell') && t.price != null && t.price > 0 && t.ms > 0).sort((a, b) => a.ms - b.ms);
+  const cur = st ? poolPrice(st, m.base) : null;
+  if (!pts.length && cur == null) return null;
+  let last = (pts.filter(t => t.ms < start).pop()?.price as number | undefined) ?? (pts[0] ? (pts[0].price as number) : (cur as number));
+  const list: Candle[] = [];
+  for (let c = 0; c < range.candles; c++) {
+    const t0 = start + c * step, t1 = t0 + step, inb = pts.filter(t => t.ms >= t0 && t.ms < t1), o = last;
+    let h = o, l = o, cl = o, flow = 0;
+    for (const t of inb) { const p = t.price as number; h = Math.max(h, p); l = Math.min(l, p); cl = p; flow += t.quote; }
+    if (c === range.candles - 1 && cur != null) { cl = cur; h = Math.max(h, cur); l = Math.min(l, cur); }
+    list.push({ t: t0, o, h, l, c: cl, flow });
+    last = cl;
+  }
+  return { list, first: 0, clamped: false, note: '' };
+}
