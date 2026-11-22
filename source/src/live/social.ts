@@ -361,6 +361,7 @@ const CSS = `
 `;
 
 const CSS3 = `
+.card .sc-in,.card select.sc-in,.card textarea.sc-in{box-sizing:border-box;max-width:100%;min-width:0}.card .sc-fl{min-width:0;box-sizing:border-box}.card .sc-row>*{min-width:0}
 main:has(#sc-root){max-width:none!important;width:100%}main:has(#sc-root) #netstrip,main:has(#sc-root) .top h1{display:none!important}
 #sc.sc{grid-template-columns:260px minmax(0,1fr) 340px;gap:26px;max-width:1600px;width:100%;margin:0 auto}
 .sc-rail{position:sticky;top:14px;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 28px);overflow-y:auto;scrollbar-width:none;padding-bottom:6px}.sc-rail::-webkit-scrollbar{display:none}
@@ -886,7 +887,7 @@ function custModal() {
 // ---------- modals ----------
 const need = (): boolean => { const bl = blocked(); if (bl) { ctx.toast(bl, true); return false; } if (!me()) { ctx.toast('Create or open a LUMA wallet first', true); return false; } return true; };
 const go = (v: View) => { hist.push(S.view); if (hist.length > 30) hist.shift(); S.view = v; S.shown = 25; S.err = ''; window.scrollTo({ top: 0 }); paint(); };
-const mcard = (inner: string, w = 400) => `<div class="card" style="min-width:min(${w}px,92vw);max-width:94vw;max-height:88vh;overflow:auto">${inner}</div>`;
+const mcard = (inner: string, w = 400) => `<div class="card" style="width:min(${w}px,92vw);max-width:94vw;max-height:88vh;overflow-y:auto;overflow-x:hidden;box-sizing:border-box">${inner}</div>`;
 const mi = (icon: string, label: string, fn: string, cls = '') => `<button class="sc-mi ${cls}" onclick="${fn}">${ic(icon, 19)}<span>${label}</span></button>`;
 const linkFor = (kind: string, id: string) => location.href.split(/[?#]/)[0] + '?social=' + kind + ':' + encodeURIComponent(id);
 function postMenu(id: string) {
