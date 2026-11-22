@@ -227,12 +227,12 @@ export async function pull(full = false) {
     if (!ctx.online()) throw new Error('not connected to the network yet');
     const have = new Set(EV.map(e => e.h)), stop = full ? 0 : IX.maxLedger; let marker: any, added = 0;
     for (let page = 0; page < (stop ? 12 : 20); page++) {
-      const r = await ctx.req('account_tx', { account: hub(), ledger_index_min: -1, ledger_index_max: -1, limit: 200, forward: false, ...(marker ? { marker } : {}) });
+      const r = await lreq('account_tx', { account: hub(), ledger_index_min: -1, ledger_index_max: -1, limit: 200, forward: false, ...(marker ? { marker } : {}) });
       let old = false;
       for (const x of r.transactions || []) { const e = parseTx(x); const l = Number((x.tx || x.tx_json || {}).ledger_index ?? x.ledger_index ?? 0); if (stop && l && l < stop - 1) old = true; if (e && !have.has(e.h)) { EV.push(e); have.add(e.h); added++; } }
       marker = r.marker; if (!marker || old) break;
     }
-    const gn = genesis(); if (gn && gn !== hub()) { try { let mk: any; for (let pg = 0; pg < 3; pg++) { const r = await ctx.req('account_tx', { account: gn, ledger_index_min: -1, ledger_index_max: -1, limit: 200, forward: false, ...(mk ? { marker: mk } : {}) }); for (const x of r.transactions || []) { const e = parseTx(x, gn, 'boost'); if (e && !have.has(e.h)) { EV.push(e); have.add(e.h); added++; } } mk = r.marker; if (!mk) break; } } catch { /* genesis history unavailable: boosts just do not show yet */ } }
+    const gn = genesis(); if (gn && gn !== hub()) { try { let mk: any; for (let pg = 0; pg < 3; pg++) { const r = await lreq('account_tx', { account: gn, ledger_index_min: -1, ledger_index_max: -1, limit: 200, forward: false, ...(mk ? { marker: mk } : {}) }); for (const x of r.transactions || []) { const e = parseTx(x, gn, 'boost'); if (e && !have.has(e.h)) { EV.push(e); have.add(e.h); added++; } } mk = r.marker; if (!mk) break; } } catch { /* genesis history unavailable: boosts just do not show yet */ } }
     S.hubErr = ''; if (added || full) { rebuild(); saveCache(); }
     S.loaded = true;
   } catch (e: any) { const m = String(e?.message || e); S.hubErr = /actNotFound|Account not found/i.test(m) ? 'The LUMA Social hub is not switched on yet on this network. The network operator turns it on from the control panel (Social tab).' : m; S.loaded = true; }
@@ -249,7 +249,7 @@ async function verifyTips() {
       await Promise.all(todo.slice(k, k + 5).map(async c => {
         tipTries.set(c.th, (tipTries.get(c.th) || 0) + 1);
         try {
-          const r = await ctx.req('tx', { transaction: c.th }), tx = r.tx_json || r.tx || r, meta = r.meta || r.metaData || {};
+          const r = await lreq('tx', { transaction: c.th }), tx = r.tx_json || r.tx || r, meta = r.meta || r.metaData || {};
           if (r.validated === false) return;
           const amt = meta.delivered_amount ?? tx.DeliverMax ?? tx.Amount;
           if (tx.TransactionType !== 'Payment' || meta.TransactionResult !== 'tesSUCCESS' || tx.Account !== c.by || tx.Destination !== c.to || amt == null) { TV[c.th] = 0; n++; return; }
@@ -270,6 +270,8 @@ const hist: View[] = [];
 let timer: any = 0, bound: HTMLElement | null = null, kd: ((e: KeyboardEvent) => void) | null = null, KD: ((e: KeyboardEvent) => void) | null = null;
 const LS = { get: (k: string, d: any) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set: (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 const bmKey = () => 'sc.bm.' + net(), seenKey = () => 'sc.seen.' + net() + '.' + (ctx.account() || ''), muteKey = () => 'sc.mute.' + net(), draftKey = () => 'sc.draft.' + net();
+// Social lives on the LUMA chain: under an XRPL wallet the same keys post to LUMA through the LUMA node
+const lreq = (c: string, p?: any) => (ctx.lumaReq || ctx.req)(c, p), lsub = (tx: any) => (ctx.lumaSubmit || ctx.submit)(tx);
 const me = () => ctx.account() || '';
 const bookmarks = (): string[] => LS.get(bmKey(), []);
 const muted = (): string[] => LS.get(muteKey(), []);
@@ -375,12 +377,11 @@ const totalStr = (list: Tip[], max = 3) => { const t = totals(list), s = t.slice
 function memoFor(d: any) { return [{ Memo: { MemoType: toHex(MT), MemoData: toHex(JSON.stringify({ v: 1, ...d })) } }]; }
 const drops = (n: number) => String(Math.max(1, Math.round(n * 1e6)));
 async function pay(dest: string, amount: any, d: any, label: string, extra: any = {}): Promise<{ ok: boolean; hash?: string; msg?: string }> {
-  if (ctx.xrpl()) return { ok: false, msg: 'LUMA Social works with your LUMA wallet. Switch the wallet type to LUMA.' };
   if (!me()) return { ok: false, msg: 'Create or open a LUMA wallet first.' };
   if (!dest) return { ok: false, msg: 'The Social hub address is not set.' };
   const json = JSON.stringify({ v: 1, ...d }); if (enc.encode(json).length > MAXMEMO) return { ok: false, msg: 'That is too long to store in one transaction. Shorten the text or remove a link.' };
   S.busy = true; S.step = label; paint();
-  try { return await ctx.submit({ TransactionType: 'Payment', Account: me(), Destination: dest, Amount: amount, ...extra, Memos: memoFor(d) }); }
+  try { return await lsub({ TransactionType: 'Payment', Account: me(), Destination: dest, Amount: amount, ...extra, Memos: memoFor(d) }); }
   catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
   finally { S.busy = false; S.step = ''; }
 }
@@ -813,7 +814,6 @@ function paint() {
   resolvePend();
   const root = document.getElementById('sc'); if (!root) return;
   if (S.view.k !== 'editprof') EDP = false; else if (EDP && root.querySelector('.sc-editpg')) return; // never repaint the profile editor under someone who is typing
-  if (ctx.xrpl()) { root.innerHTML = `<div class="sc-box" style="grid-column:1/-1">LUMA Social runs on the LUMA chain. Switch the wallet type to LUMA to use it.</div>`; return; }
   const keep = document.activeElement as HTMLElement | null, kid = keep && keep.id, ss = (keep as any)?.selectionStart;
   const un = unread(), v = S.view, on = (x: string) => (v.k === x ? 'on' : ''); if (v.k === 'editprof') EDP = true;
   const nb = (id: string, icon: string, label: string, extra = '', cls = '') => `<button class="${cls}" data-act="nav" data-v="${id}" aria-label="${label}">${ic(icon, 21)}<span class="t">${label}</span>${extra}</button>`;
@@ -830,7 +830,7 @@ interface Nft { id: string; uri: string; issuer: string; serial: number }
 const NFTS = new Map<string, { at: number; list: Nft[] }>(), NM: Record<string, { name: string; img: string }> = LS.get('sc.nftm2', {}), askOwner = new Set<string>();
 async function loadNfts(a: string, force = false): Promise<Nft[]> {
   const c = NFTS.get(a); if (c && !force && Date.now() - c.at < 120000) return c.list;
-  const list: Nft[] = []; try { let marker: any; for (let i = 0; i < 4; i++) { const r = await ctx.req('account_nfts', { account: a, limit: 100, ...(marker ? { marker } : {}) }); for (const n of r.account_nfts || []) list.push({ id: String(n.NFTokenID).toUpperCase(), uri: fromHex(n.URI || ''), issuer: n.Issuer || '', serial: n.nft_serial || 0 }); marker = r.marker; if (!marker) break; } } catch {}
+  const list: Nft[] = []; try { let marker: any; for (let i = 0; i < 4; i++) { const r = await lreq('account_nfts', { account: a, limit: 100, ...(marker ? { marker } : {}) }); for (const n of r.account_nfts || []) list.push({ id: String(n.NFTokenID).toUpperCase(), uri: fromHex(n.URI || ''), issuer: n.Issuer || '', serial: n.nft_serial || 0 }); marker = r.marker; if (!marker) break; } } catch {}
   NFTS.set(a, { at: Date.now(), list }); return list;
 }
 const gw = (u: string) => { u = String(u || '').trim(); if (/^ipfs:\/\//.test(u)) return 'https://ipfs.io/ipfs/' + u.slice(7).replace(/^ipfs\//, ''); return /^https:\/\/[^\s"'<>\\]{4,400}$/.test(u) ? u : ''; };
@@ -1270,26 +1270,26 @@ interface TipOpt { c: string; i: string; name: string; bal: number; ok: boolean 
 let TS: { ref: string; to: string; opts: TipOpt[]; sel: number; amt: string; note: string; load: boolean; err: string; busy: boolean } | null = null;
 async function allLines(acct: string): Promise<any[]> {
   const out: any[] = []; let marker: any;
-  for (let i = 0; i < 6; i++) { const r = await ctx.req('account_lines', { account: acct, ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) }).catch(() => null); if (!r) break; out.push(...(r.lines || [])); marker = r.marker; if (!marker) break; }
+  for (let i = 0; i < 6; i++) { const r = await lreq('account_lines', { account: acct, ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) }).catch(() => null); if (!r) break; out.push(...(r.lines || [])); marker = r.marker; if (!marker) break; }
   return out;
 }
 const RATES = new Map<string, { r: number; at: number }>();
 /** the issuer's transfer fee as a multiplier (1 = no fee). A holder paying a token that has a fee must allow for it with SendMax, or the payment fails. */
 async function rateOf(issuer: string): Promise<number> {
   const c = RATES.get(issuer); if (c && Date.now() - c.at < 300000) return c.r;
-  let r = 1; try { const i = await ctx.req('account_info', { account: issuer, ledger_index: 'validated' }); const tr = Number(i?.account_data?.TransferRate || 0); if (tr > 1e9) r = tr / 1e9; } catch { /* assume no fee */ }
+  let r = 1; try { const i = await lreq('account_info', { account: issuer, ledger_index: 'validated' }); const tr = Number(i?.account_data?.TransferRate || 0); if (tr > 1e9) r = tr / 1e9; } catch { /* assume no fee */ }
   RATES.set(issuer, { r, at: Date.now() }); return r;
 }
 async function loadHold(to: string): Promise<TipOpt[]> {
   const m = me(), out: TipOpt[] = [];
-  const [ai, al, bl] = await Promise.all([ctx.req('account_info', { account: m, ledger_index: 'validated' }).catch(() => null), allLines(m), allLines(to)]);
+  const [ai, al, bl] = await Promise.all([lreq('account_info', { account: m, ledger_index: 'validated' }).catch(() => null), allLines(m), allLines(to)]);
   const lum = ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0; out.push({ c: 'LUMA', i: '', name: 'LUMA', bal: lum, ok: true });
   const theirs = new Set(bl.map((l: any) => l.currency + '|' + l.account));
   const mine = al.filter((l: any) => Number(l.balance) > 0), iss = Array.from(new Set(mine.map((l: any) => String(l.account)))).filter(x => x !== m && x !== to).slice(0, 40);
   const rates = new Map<string, number>(); await Promise.all(iss.map(async x => { rates.set(x, await rateOf(x)); }));
   for (const l of mine) { const bal = Number(l.balance), rate = l.account === to ? 1 : rates.get(l.account) || 1; out.push({ c: l.currency, i: l.account, name: hexName(l.currency), bal, rate, ok: l.account === to || theirs.has(l.currency + '|' + l.account) } as any); }
   // the wallet that issued tokens (the Genesis wallet) holds none of its own: it can send as much as it likes, so list what it issued
-  try { const gb = await ctx.req('gateway_balances', { account: m, ledger_index: 'validated' }); for (const [cur, v] of Object.entries((gb && gb.obligations) || {})) { const tot = Number(v); if (tot > 0) out.push({ c: cur, i: m, name: hexName(cur), bal: Math.max(tot * 1000, 1e12), rate: 1, ok: theirs.has(cur + '|' + m) } as any); } } catch { /* not an issuer */ }
+  try { const gb = await lreq('gateway_balances', { account: m, ledger_index: 'validated' }); for (const [cur, v] of Object.entries((gb && gb.obligations) || {})) { const tot = Number(v); if (tot > 0) out.push({ c: cur, i: m, name: hexName(cur), bal: Math.max(tot * 1000, 1e12), rate: 1, ok: theirs.has(cur + '|' + m) } as any); } } catch { /* not an issuer */ }
   return out.sort((a, b) => (a.name === 'LUMA' ? -1 : b.name === 'LUMA' ? 1 : Number(b.ok) - Number(a.ok) || a.name.localeCompare(b.name)));
 }
 function tipModal(ref: string, to: string) {

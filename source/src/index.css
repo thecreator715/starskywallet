@@ -1399,3 +1399,12 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 .hd_r code,.hd_r .mono,.hd_r b.mono{font-size:.78rem;word-break:break-all;overflow-wrap:anywhere}
 .hd_pg .row{flex-wrap:wrap}.hd_pg .row .b{flex:1 1 auto}
 @media(max-width:520px){.hd_ov{padding:.6rem}.hd_pg{padding:.9rem;margin:1vh auto}.hd_r{padding:.55rem 0}.hd_r b,.hd_r>:last-child{flex-basis:100%;text-align:left}}
+/* XRPL DEX */
+.xd_grid{display:grid;grid-template-columns:minmax(0,1fr);gap:1rem}
+@media(min-width:900px){.xd_grid{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}}
+.xd_scroll{max-height:70vh;overflow:auto;margin-top:.5rem;border-radius:10px}
+.xd_bk{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-top:.5rem}
+.xd tr.xd_on{background:rgba(99,102,241,.18)}
+.xd_av{display:inline-grid;place-items:center;min-width:1.7rem;height:1.7rem;padding:0 .25rem;margin-right:.5rem;border-radius:50%;background:linear-gradient(135deg,#00ff8c33,#4f7cff55);font-size:.62rem;font-weight:800;vertical-align:middle}
+.xd input[type=text],.xd input:not([type]),.xd input[inputmode]{width:100%;box-sizing:border-box}
+.xd td,.xd th{overflow-wrap:anywhere}

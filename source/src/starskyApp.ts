@@ -17,6 +17,7 @@ import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
 import * as Social from './live/social.ts';
 import * as Bio from './live/bio.ts';
+import * as XDex from './live/xdex.ts';
 import * as Nft from './live/nft.ts';
 import * as Hist from './live/history.ts';
 import * as Hold from './live/holders.ts';
@@ -1010,7 +1011,7 @@ export function buildChart() {
 }
 
 // Transactions
-export async function submitTx(tx: any, seed?: string) {
+export async function submitTx(tx: any, seed?: string, luma = false) {
   const a = activeAccount();
   if (!st.client || (!a && !seed)) throw new Error('No active account or connection');
 
@@ -1020,7 +1021,7 @@ export async function submitTx(tx: any, seed?: string) {
   if (dup) return { ok: false, msg: dup };
   let cl: any, w: any, p: any;
   try {
-    cl = await chainClient();
+    cl = luma ? st.client : await chainClient();
     w = xrpl.Wallet.fromSeed(seed || a!.seed);
     p = await cl.autofill(tx);
   } catch (e: any) { NL.guardClear({ ...tx, Account: tx.Account || (seed ? '' : a?.address) }); if (NL.queueTx(tx, String(e?.message || e))) return { ok: false, msg: 'The node could not be reached. The payment was saved and will wait for you at the top of the page; nothing was sent.' }; throw e; }
@@ -1496,7 +1497,7 @@ export function renderApp() {
   const b = st.bal;
 
   let body = '';
-  const LUMA_ONLY = ['dex', 'pools', 'network', 'supply', 'burn', 'bot', 'margin', 'holders'];
+  const LUMA_ONLY = ['pools', 'network', 'supply', 'burn', 'bot', 'margin', 'holders'];
   const blocked = st.walletMode === 'xrpl' && LUMA_ONLY.includes(st.tab);   // those pages read the LUMA network: never show them under an XRPL wallet
   switch (blocked ? '__luma_only' : st.tab) {
     case '__luma_only':
@@ -1557,7 +1558,7 @@ export function renderApp() {
       break;
 
     case 'dex':
-      body = Dex.shell();
+      body = st.walletMode === 'xrpl' ? XDex.shell() : Dex.shell();
       break;
 
     case 'pools': {
@@ -1904,8 +1905,9 @@ export function renderApp() {
   renderBanner();
   if (st.tab === 'home') drawChart();
   if (st.tab === 'receive') drawQR();
-  if (st.tab === 'dex') Dex.mount();
-  else Dex.unmount();
+  if (st.tab === 'dex' && st.walletMode === 'xrpl') { Dex.unmount(); void XDex.mount(); }
+  else if (st.tab === 'dex') { XDex.unmount(); Dex.mount(); }
+  else { Dex.unmount(); XDex.unmount(); }
   if (st.tab === 'network') Pages.networkMount();
   else Pages.networkUnmount();
   if (st.tab === 'nfts' || st.tab === 'nftmarket') Nft.marketMount();
@@ -2370,6 +2372,15 @@ export function initWindowBindings() {
       if (!cl.isConnected()) { try { await cl.connect(); } catch {} }   // never send while the socket is still opening
       const r: any = await cl.request({ command, ...params });
       return r.result;
+    },
+    lumaReq: async (command: string, params: any = {}) => {
+      if (!st.client) throw new Error('not connected');
+      if (!st.client.isConnected()) { try { await st.client.connect(); } catch {} }
+      return (await st.client.request({ command, ...params })).result;
+    },
+    lumaSubmit: async (tx: any) => {
+      try { const r: any = await submitTx(tx, undefined, true); return r.ok ? { ok: true, hash: r.hash } : { ok: false, msg: r.msg }; }
+      catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
     },
     xrpl: () => st.walletMode === 'xrpl',
     online: () => st.status === 'online' && !!st.client,
