@@ -1810,6 +1810,8 @@ export function renderApp() {
         <div class="nav-section">Wallet</div>
         ${renderNavItem('home', 'Portfolio')}
         ${renderNavItem('wallets', 'Wallets')}
+        ${renderNavItem('social', 'Social')}
+        ${renderNavItem('rewards', 'Rewards')}
         ${renderNavItem('send', 'Send')}
         ${renderNavItem('receive', 'Receive')}
         ${renderNavItem('markets', 'Markets & Tokens')}
@@ -1823,8 +1825,6 @@ export function renderApp() {
         ${renderNavItem('pools', 'Liquidity Pools')}
         ${renderNavItem('bridge', 'Bridge')}
         ${renderNavItem('claim', 'Free LUMA')}
-        ${renderNavItem('rewards', 'Rewards')}
-        ${renderNavItem('social', 'Social')}
 
         <div class="nav-section">Explorer</div>
         ${renderNavItem('network', 'Network')}
