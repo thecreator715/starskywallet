@@ -807,7 +807,9 @@ function center(): string {
 export function shell() { return `<div id="sc-root"><style>${CSS}${CSS2}${CSS3}${PP.CSS}</style><div class="sc" id="sc"></div></div>`; }
 function resolvePend() { if (!S.pend) return; for (const k of IX.posts.keys()) { if (String(k).toUpperCase().startsWith(S.pend)) { S.view = { k: 'thread', id: String(k).toUpperCase() } as any; S.pend = ''; break; } } }
 let EDP = false;
+let LASTP = 0;
 function paint() {
+  LASTP = Date.now();
   resolvePend();
   const root = document.getElementById('sc'); if (!root) return;
   if (S.view.k !== 'editprof') EDP = false; else if (EDP && root.querySelector('.sc-editpg')) return; // never repaint the profile editor under someone who is typing
@@ -1566,7 +1568,7 @@ export async function mount() {
   if (me() && LASTACC !== me()) { const first = LASTACC === null; LASTACC = me(); if (!first) { S.view = { k: 'home' } as any; hist.length = 0; S.draft = ''; S.media = ''; S.nft = null; S.quote = ''; S.err = ''; S.loaded = false; POL.at = 0; } }
   PP.init({ cam: () => sc_cam('post'), me, setMedia: u => { S.media = u; S.nft = null; paint(); }, post: () => { const b = document.getElementById('sc-go') as HTMLElement | null; if (b) b.click(); }, toast: (m, b) => ctx.toast(m, b), upload: async f => { const u = await uploadFiles([f], 1, true); if (u[0]) { S.media = u[0]; S.nft = null; paint(); } }, showL: a => ctx.showL(a) }); cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
   await pull(); paint();
-  timer = setInterval(() => { if (document.hidden || !document.getElementById('sc')) { if (!document.getElementById('sc')) stop(); return; } void pull().then(() => { const a = document.activeElement as HTMLElement | null; if (!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) && !document.getElementById('m')?.innerHTML) paintSoft(); }); }, 9000);
+  timer = setInterval(() => { if (document.hidden || !document.getElementById('sc')) { if (!document.getElementById('sc')) stop(); return; } void pull().then(() => { const a = document.activeElement as HTMLElement | null; if (!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) && !document.getElementById('m')?.innerHTML && Date.now() - LASTP > 60000) paintSoft(); }); }, 9000);   // new posts repaint by themselves; this only refreshes the "19s ago" labels once a minute, so the feed and its pictures stop flickering
 }
 function stop() { if (timer) { clearInterval(timer); timer = 0; } if (kd) { document.removeEventListener('keydown', kd); kd = null; } }
 export function unmount() { stop(); bound = null; }

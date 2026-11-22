@@ -904,7 +904,7 @@ export async function refreshAccount(quiet = false) {
     const sig = JSON.stringify([String(bal.drops), bal.owner, lines, st.hist.length, (st.hist[0] as any)?.tx?.hash || (st.hist[0] as any)?.hash || '', st.px, st.nfts.length, st.mpts.length]);
     const changed = sig !== lastSig;
     lastSig = sig;
-    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket'].includes(st.tab)) renderTop();
+    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
     else if (changed || !quiet) renderApp();
     else renderTop();
   } catch (e: any) {
