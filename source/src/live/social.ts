@@ -6,6 +6,7 @@
 import { ctx } from './ctx.ts';
 import { amtTx, esc, fmt, hexName } from './util.ts';
 import { ipfsAdd, mintFromImage } from './nft.ts';
+import * as CAM from './camera.ts';
 import { base } from './nodelink.ts';
 
 const MT = 'luma-social';
@@ -582,7 +583,7 @@ function composer(opts: { reply?: string; quote?: string } = {}): string {
   ${PP.barHtml()}
   <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
   ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
-  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib ${S.media && !S.nft ? 'on' : ''}" data-act="upl" title="Upload a picture from your computer (5 MB max)">${ic('up')}</button><input type="file" id="sc-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onchange="sc.upload(this,'post')"><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
+  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib ${S.media && !S.nft ? 'on' : ''}" data-act="upl" title="Upload a picture from your computer (5 MB max)">${ic('up')}</button><input type="file" id="sc-file" accept="image/*" hidden onchange="sc.upload(this,'post')"><button class="sc-ib" data-act="cam" title="Take a photo, edit it and post it">${ic('image')}</button><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
   <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 6)} LUMA</span></button></div></div></div>`;
 }
 
@@ -834,11 +835,20 @@ const GWS = (): string[] => nodeGws().concat(['https://ipfs.io/ipfs/', 'https://
 const pubGw = (): string => nodeGws().find(g => g.startsWith('https://')) || 'https://ipfs.io/ipfs/';
 const MAXIMG = 5 * 1024 * 1024;
 let UP = false;
+function sc_cam(kind: string) {
+  if (!need()) return;
+  CAM.openCamera(async f => {
+    const u = await uploadFiles([f], 1); if (!u[0]) return;
+    if (kind === 'post') { S.media = u[0]; S.nft = null as any; paint(); ctx.toast('Photo added. Write something and press Post.'); }
+    else if (kind === 'mk') { ED = { ...collectListing(), __mk: 1, eid: (ED && ED.eid) || '' }; const mm: string[] = ED.m || []; if (mm.length < 4) mm.push(u[0]); ED.m = mm; void listModal(ED.eid); }
+    else { const i = document.getElementById(kind === 'avatar' ? 'pf-i' : 'pf-k') as HTMLInputElement | null; if (i) { i.value = u[0]; i.dispatchEvent(new Event('input')); } }
+  }, (m, b) => ctx.toast(m, b));
+}
 async function uploadFiles(files: FileList | File[], max: number): Promise<string[]> {
   const out: string[] = [], list = Array.from(files).slice(0, max);
-  for (const f of list) {
-    if (!/^image\/(png|jpe?g|gif|webp)$/i.test(f.type)) { ctx.toast(`${f.name}: choose a PNG, JPG, GIF or WebP picture.`, true); continue; }
-    if (f.size > MAXIMG) { ctx.toast(`${f.name} is ${(f.size / 1048576).toFixed(1)} MB. Pictures can be 5 MB at most.`, true); continue; }
+  for (let f of list) {
+    if (!/^image\//i.test(f.type)) { ctx.toast(`${f.name}: choose a picture.`, true); continue; }
+    if (f.size > MAXIMG || !/^image\/(png|jpe?g|gif|webp)$/i.test(f.type)) { try { ctx.toast(`Shrinking ${f.name} to fit 5 MB…`); const g = !/^image\/(png|jpe?g|gif|webp)$/i.test(f.type) ? await CAM.compressImage(f, 0, undefined).catch(() => f) : await CAM.compressImage(f, MAXIMG * 0.94); if (g.size > MAXIMG) throw new Error('Could not shrink that picture under 5 MB.'); f = g; } catch (e: any) { ctx.toast(String(e?.message || e), true); continue; } }
     try { ctx.toast('Uploading ' + f.name + '…'); out.push('ipfs://' + await ipfsAdd(f, f.name)); } catch (e: any) { ctx.toast(String(e?.message || e), true); break; }
   }
   return out;
@@ -1038,7 +1048,7 @@ async function listModal(editId = '', fresh = false) {
   ${O('mk-lc', 'Location', e.lc, 40, 'City or "Ships worldwide"')}
   <label class="sc-fl">Description<textarea class="sc-in" id="mk-ds" maxlength="300" rows="4" placeholder="Condition, size, what is included, how to receive it">${esc(e.ds || '')}</textarea></label>
   <div class="sc-sec">Photos (up to 4, 5 MB each)</div>${[0, 1, 2, 3].map(i => `<input class="sc-in" id="mk-m${i}" value="${esc(ms[i] || '')}" placeholder="Photo ${i + 1}: https:// or ipfs://">`).join('')}
-  <div class="sc-row" style="margin-top:6px"><button class="sc-btn sm" onclick="document.getElementById('mk-file').click()">${ic('up', 15)}Upload from your computer</button><input type="file" id="mk-file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onchange="sc.upload(this,'mk')"><button class="sc-btn sm ghost" onclick="sc.lpick()">${ic('gem', 15)}Add a photo from your NFTs</button></div>
+  <div class="sc-row" style="margin-top:6px"><button class="sc-btn sm" onclick="document.getElementById('mk-file').click()">${ic('up', 15)}Upload from your computer</button><input type="file" id="mk-file" accept="image/*" multiple hidden onchange="sc.upload(this,'mk')"><button class="sc-btn sm" onclick="sc.cam('mk')">${ic('image', 15)}Take a photo</button><button class="sc-btn sm ghost" onclick="sc.lpick()">${ic('gem', 15)}Add a photo from your NFTs</button></div>
   <div class="sc-row" style="margin-top:14px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.lsubmit()">${e.eid ? 'Save changes' : 'Publish listing'}</button></div>`, e.eid ? 'Edit listing' : 'Create a listing');
 }
 async function listSubmit() {
@@ -1203,8 +1213,8 @@ function editHtml(): string {
   return (`<div class="sc-editpg"><div class="k" style="font-size:1.1em">Edit profile</div><div class="muted" style="margin:4px 0 10px">Saved on the chain for ${COST.prof} LUMA and visible to everyone. Everything below is optional.</div>
   <div id="pf-prev">${prevHtml(p)}</div>
   <div class="sc-sec">Pictures</div>
-  <label class="sc-fl">Profile photo<div class="sc-row"><input class="sc-in" id="pf-i" value="${esc(p.i || '')}" placeholder="https:// or ipfs://" style="flex:1" oninput="sc.prev()"><button class="sc-btn sm ghost" onclick="sc.pickFor('avatar')">${ic('gem', 15)}Use an NFT</button></div></label>
-  <label class="sc-fl">Cover picture<div class="sc-row"><input class="sc-in" id="pf-k" value="${esc(p.k || '')}" placeholder="https:// or ipfs://" style="flex:1" oninput="sc.prev()"><button class="sc-btn sm ghost" onclick="sc.pickFor('banner')">${ic('gem', 15)}Use an NFT</button></div></label>
+  <label class="sc-fl">Profile photo<div class="sc-row"><input class="sc-in" id="pf-i" value="${esc(p.i || '')}" placeholder="https:// or ipfs://" style="flex:1" oninput="sc.prev()"><button class="sc-btn sm ghost" onclick="sc.cam('avatar')">${ic('image', 15)}Camera</button><button class="sc-btn sm ghost" onclick="sc.pickFor('avatar')">${ic('gem', 15)}Use an NFT</button></div></label>
+  <label class="sc-fl">Cover picture<div class="sc-row"><input class="sc-in" id="pf-k" value="${esc(p.k || '')}" placeholder="https:// or ipfs://" style="flex:1" oninput="sc.prev()"><button class="sc-btn sm ghost" onclick="sc.cam('banner')">${ic('image', 15)}Camera</button><button class="sc-btn sm ghost" onclick="sc.pickFor('banner')">${ic('gem', 15)}Use an NFT</button></div></label>
   <div class="sc-row" style="margin:6px 0"><label class="sc-fl" style="flex:1">Photo shape<select class="sc-in" id="pf-sh" onchange="sc.prev()"><option value="c" ${p.sh !== 's' ? 'selected' : ''}>Round</option><option value="s" ${p.sh === 's' ? 'selected' : ''}>Rounded square (best for NFTs)</option></select></label></div>
   <label class="sc-fl">Accent colour<div class="sc-row" style="gap:8px"><input class="sc-in" id="pf-c" type="color" value="${esc(p.c || '#6366f1')}" style="width:54px;height:40px;padding:2px;flex:none" oninput="sc.prev()">${SWATCH.map(c => `<button type="button" class="sc-sw" style="background:${c}" onclick="sc.swatch('${c}')" aria-label="${c}"></button>`).join('')}</div></label>
   <div class="sc-sec">About you</div>
@@ -1326,6 +1336,7 @@ async function onClick(el: HTMLElement, ev: Event) {
     case 'flist': flistModal(v, el.dataset.k || 'followers'); break;
     case 'plink': sc.m('copyu', v); break;
     case 'ytplay': { const box = el.closest('.sc-yt') as HTMLElement | null; if (box) box.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(v)}?autoplay=1&rel=0&playsinline=1" title="YouTube video" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; break; }
+    case 'cam': sc_cam('post'); break;
     case 'upl': (document.getElementById('sc-file') as HTMLInputElement | null)?.click(); break;
     case 'mediax': S.media = ''; paint(); break;
     case 'pcbig': bigChart(v); break;
@@ -1454,6 +1465,7 @@ export const sc: any = {
   dreset() { LS.set(dashKey(), {}); paint(); custModal(); },
   goTag(t: string) { ctx.closeModal(); go({ k: 'tag', tag: t }); },
   shareNft(id: string) { const el = document.createElement('i'); el.dataset.act = 'nftshare'; el.dataset.v = id; void onClick(el, new Event('click')); },
+  cam(k: string) { sc_cam(k); },
   async upload(inp: HTMLInputElement, kind: string) {
     const files = inp.files; if (!files || !files.length || UP || !need()) { inp.value = ''; return; } UP = true;
     try {
@@ -1502,7 +1514,7 @@ import * as PP from './postplus.ts';
 export async function mount() {
   if (!document.getElementById('sc-root')) return;
   if (me() && LASTACC !== me()) { const first = LASTACC === null; LASTACC = me(); if (!first) { S.view = { k: 'home' } as any; hist.length = 0; S.draft = ''; S.media = ''; S.nft = null; S.quote = ''; S.err = ''; S.loaded = false; POL.at = 0; } }
-  PP.init({ me, setMedia: u => { S.media = u; S.nft = null; paint(); }, post: () => { const b = document.getElementById('sc-go') as HTMLElement | null; if (b) b.click(); }, toast: (m, b) => ctx.toast(m, b), upload: async f => { const u = await uploadFiles([f], 1); if (u[0]) { S.media = u[0]; S.nft = null; paint(); } }, showL: a => ctx.showL(a) }); cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
+  PP.init({ cam: () => sc_cam('post'), me, setMedia: u => { S.media = u; S.nft = null; paint(); }, post: () => { const b = document.getElementById('sc-go') as HTMLElement | null; if (b) b.click(); }, toast: (m, b) => ctx.toast(m, b), upload: async f => { const u = await uploadFiles([f], 1); if (u[0]) { S.media = u[0]; S.nft = null; paint(); } }, showL: a => ctx.showL(a) }); cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
   await pull(); paint();
   timer = setInterval(() => { if (document.hidden || !document.getElementById('sc')) { if (!document.getElementById('sc')) stop(); return; } void pull().then(() => { const a = document.activeElement as HTMLElement | null; if (!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) && !document.getElementById('m')?.innerHTML) paintSoft(); }); }, 9000);
 }
