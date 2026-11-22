@@ -3,7 +3,7 @@ import { ipfsAdd } from './nft.ts';
 import * as xrpl from 'xrpl';
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
-import { Asset, NATIVE, akey, esc, fmt, hexName, nameToCur, short } from './util.ts';
+import { Asset, NATIVE, akey, esc, fmt, hexName, nameToCur, short, usd, isNative } from './util.ts';
 import { cached, clearCache, info, tryReq } from './chain.ts';
 
 export const FEE_LUMA = 10; // legacy fee (v1 tokens)
@@ -410,7 +410,9 @@ function drawManage() {
     <div class="row" style="gap:.5rem"><input id="tkm_burn" class="grow" inputmode="decimal" placeholder="Amount to burn"><button onclick="window.tk.burn(this)">Burn</button></div></div>
   <div class="lpcard" style="margin-top:.6rem"><div class="k">Cap the supply</div><div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Locks the issuer key for good, so the supply can never grow past ${fmt(m.supply)} ${esc(m.name)}. Burning still works afterwards. Mint first if you want a higher final number. Cannot be undone.</div>
     <button class="crit" ${m.locked ? 'disabled' : ''} onclick="window.tk.cap(this)">${m.locked ? 'Already capped' : 'Cap supply forever'}</button></div>
-  <div id="tkm_err" class="crit" style="min-height:1.2rem;font-size:.82rem;margin-top:.4rem"></div>`;
+  <div id="tkm_err" class="crit" style="min-height:1.2rem;font-size:.82rem;margin-top:.4rem"></div>
+  <div id="tkm_an" style="margin-top:.8rem"><div class="mut" style="padding:.8rem">Loading analytics from the ledger…</div></div>`;
+  void loadAnalytics(m);
 }
 export async function openManage() {
   if (!ctx.account()) return ctx.toast('Select a wallet first', true);
@@ -446,3 +448,90 @@ Object.assign(tkApi, {
     if (r.ok) await mDone(`${m.name} is capped at ${fmt(m.supply)}`); else { mErr('Could not cap: ' + (r.msg || '')); b.disabled = false; }
   },
 });
+
+// ---------- full analytics for a token you created ----------
+const SPK = (v: number[], up: boolean) => { if (v.length < 2) return ''; const lo = Math.min(...v), hi = Math.max(...v), r = hi - lo || 1, pts = v.map((y, i) => `${(i / (v.length - 1) * 220).toFixed(1)},${(38 - ((y - lo) / r) * 34).toFixed(1)}`).join(' '); return `<svg viewBox="0 0 220 40" width="100%" height="48" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${up ? '#34d399' : '#f87171'}" stroke-width="2"/></svg>`; };
+const kv = (a: string, b: string) => `<div class="dxkv"><span class="mut">${a}</span><b>${b}</b></div>`;
+const pc = (n: number | null | undefined) => (n == null ? '–' : (n >= 0 ? '+' : '') + n.toFixed(2) + '%');
+let ANG = 0;
+async function loadAnalytics(m: Mg) {
+  const g = ++ANG, box = () => (g === ANG ? document.getElementById('tkm_an') : null);
+  const a: Asset = { c: m.cur, i: m.issuer }, me = ctx.account() as string, key = akey(a);
+  const sec = (t: string, h: string) => `<div class="lpcard" style="margin-top:.6rem"><div class="k">${t}</div>${h}</div>`;
+  const parts: string[] = [];
+  const put = () => { const b = box(); if (b) b.innerHTML = parts.join(''); };
+  try {
+    // price, market cap, liquidity, changes
+    const tt = await M.tokenTable([a]);
+    if (!box()) return;
+    const row: any = tt.rows.find(r => r.key === key), nativeUsd = tt.now.usdPerNative, px = row ? row.usdPx : null;
+    const chg = row ? ['5m', '1h', '24h', '7d'].map(k => `${k.toUpperCase()} ${pc(row.chg[k])}`).join(' · ') : '–';
+    parts.push(sec('Price and market', kv('Price', px != null ? usd(px) : row && row.nativePx != null ? fmt(row.nativePx, 6) + ' ' + esc(ctx.native()) : 'No pool yet, so no price')
+      + kv('Change', chg) + kv('Market cap', row ? (row.mcapUsd != null ? usd(row.mcapUsd) : row.mcapNative != null ? fmt(row.mcapNative) + ' ' + esc(ctx.native()) : '–') : '–')
+      + kv('Fully diluted', px != null ? usd(px * m.supply) : '–') + kv('Liquidity (TVL)', row ? (row.tvlUsd != null ? usd(row.tvlUsd) : fmt(row.tvlNative) + ' ' + esc(ctx.native())) : '–')
+      + kv('Pools', String(row ? row.pools : 0)) + kv('Listed at ledger', row && row.listedSeq ? String(row.listedSeq) : '–')));
+    put();
+    // pools: reserves, fee, price, volume, traders, your pnl
+    const refs = (await M.poolRefs()).filter(p => akey(p.a) === key || akey(p.b) === key);
+    const states = (await Promise.all(refs.map(r => M.poolState(r).catch(() => null)))).filter(Boolean) as M.PoolState[];
+    const dayMs = Date.now() - 86400000;
+    let vol24 = 0, volAll = 0, buys = 0, sells = 0, trades = 0, pnlUsd = 0, spentUsd = 0, gotUsd = 0;
+    const traders = new Set<string>(), recent: Array<M.Trade & { sym: string }> = [], poolRows: string[] = [];
+    const qUsd = (q: Asset): number | null => { if (isNative(q)) return nativeUsd; const r2: any = tt.rows.find(r => r.key === akey(q)); return r2 && r2.usdPx != null ? r2.usdPx : null; };
+    for (const st of states) {
+      const base = akey(st.a) === key ? st.a : st.b, quote = base === st.a ? st.b : st.a;
+      const mk: M.Market = { id: M.marketId(base, quote), base, quote, label: '', pool: st };
+      const trs = await M.tradesSince(mk, dayMs - 6 * 86400000).catch(() => [] as M.Trade[]);
+      const qu = qUsd(quote);
+      for (const t of trs) {
+        if (t.kind !== 'buy' && t.kind !== 'sell') continue;
+        trades++; traders.add(t.who); if (t.kind === 'buy') buys++; else sells++;
+        const v = qu != null ? t.quote * qu : 0; volAll += v; if (t.ms >= dayMs) vol24 += v;
+        if (t.who === me && qu != null) { if (t.kind === 'buy') spentUsd += t.quote * qu; else gotUsd += t.quote * qu; }
+        recent.push({ ...t, sym: M.labelOf(quote) });
+      }
+      const pr = M.poolPrice(st, base), tvl = (qu != null ? st.ra : 0);
+      poolRows.push(`<tr><td>${esc(M.labelOf(base))}/${esc(M.labelOf(quote))}</td><td class="r">${fmt(akey(st.a) === key ? st.ra : st.rb)} / ${fmt(akey(st.a) === key ? st.rb : st.ra)}</td><td class="r">${pr != null ? fmt(pr, 6) : '–'}</td><td class="r">${st.fee}%</td><td class="r mono">${esc(short(st.account, 5, 4))}</td></tr>`);
+      void tvl;
+    }
+    parts.push(sec('Pools', poolRows.length ? `<table class="dxt"><thead><tr><th>Pair</th><th class="r">Reserves</th><th class="r">Price</th><th class="r">Fee</th><th class="r">Pool</th></tr></thead><tbody>${poolRows.join('')}</tbody></table>` : '<div class="mut">No liquidity pool for this token yet. Create one from Liquidity Pools so people can trade it.</div>'));
+    parts.push(sec('Trading (last 7 days of pool history)', kv('Volume 24h', usd(vol24)) + kv('Volume 7d', usd(volAll)) + kv('Swaps', `${trades} (${buys} buys, ${sells} sells)`) + kv('Buy / sell ratio', sells ? (buys / sells).toFixed(2) : buys ? 'all buys' : '–') + kv('Unique traders', String(traders.size))
+      + kv('Fees earned by pools', px != null && states.length ? usd(volAll * (states[0].fee / 100)) + ' (paid to liquidity providers)' : '–')));
+    // your position and pnl
+    const val = px != null ? m.mine * px : null;
+    if (px != null) pnlUsd = (val || 0) + gotUsd - spentUsd;
+    parts.push(sec('Your position and PnL', kv('Balance', fmt(m.mine) + ' ' + esc(m.name)) + kv('Value now', val != null ? usd(val) : '–') + kv('Bought (pool trades)', usd(spentUsd)) + kv('Sold (pool trades)', usd(gotUsd))
+      + kv('PnL', px != null ? `<span style="color:${pnlUsd >= 0 ? '#34d399' : '#f87171'}">${pnlUsd >= 0 ? '+' : ''}${usd(pnlUsd)}</span>` : '–') + '<div class="mut" style="font-size:.74rem;margin-top:.3rem">PnL counts your pool buys and sells plus the value of what you hold. Tokens you minted to yourself count as free, so the figure is your total gain on the token.</div>'));
+    put();
+    // holders / users
+    const pa = new Set(refs.map(r => r.account)), hd = await M.holders(a, m.supply, pa).catch(() => null);
+    if (hd) {
+      const t10 = hd.top.slice(0, 10).reduce((n, h) => n + (h.share || 0), 0), top1 = hd.top[0];
+      parts.push(sec('Users and holders', kv('Holders', fmt(hd.count, 0) + (hd.truncated ? '+' : '')) + kv('Top 10 own', pc(t10 * (t10 <= 1 ? 100 : 1)).replace('+', '')) + kv('Largest holder', top1 ? `${(top1.share || 0) * (top1.share! <= 1 ? 100 : 1) | 0}%` : '–')
+        + `<table class="dxt"><thead><tr><th>Holder</th><th class="r">Balance</th><th class="r">Share</th></tr></thead><tbody>${hd.top.slice(0, 10).map(h => `<tr><td class="mono">${esc(short(ctx.showL(h.addr), 6, 4))}${h.tag ? ' <span class="mut">' + esc(h.tag) + '</span>' : ''}</td><td class="r">${fmt(h.bal)}</td><td class="r">${h.share != null ? (h.share * (h.share <= 1 ? 100 : 1)).toFixed(2) + '%' : '–'}</td></tr>`).join('')}</tbody></table>`));
+    }
+    put();
+    // supply history: mints, burns, issuer settings
+    const [ai, tx] = await Promise.all([ctx.req('account_info', { account: m.issuer, ledger_index: 'validated' }).catch(() => null), ctx.req('account_tx', { account: m.issuer, limit: 400, ledger_index_min: -1, ledger_index_max: -1 }).catch(() => null)]);
+    let minted = 0, burned = 0; const ev: Array<{ t: number; k: string; v: number; who: string }> = [];
+    for (const x of (tx && tx.transactions) || []) {
+      const t = x.tx || x.tx_json || {}, meta = x.meta || x.metaData || {}; if (t.TransactionType !== 'Payment' || meta.TransactionResult !== 'tesSUCCESS') continue;
+      const am = meta.delivered_amount ?? t.Amount ?? t.DeliverMax; if (!am || typeof am !== 'object' || am.currency !== m.cur) continue;
+      const v = Number(am.value), ms = ((t.date ?? x.date ?? 0) + 946684800) * 1000;
+      if (t.Account === m.issuer) { minted += v; ev.push({ t: ms, k: 'Mint', v, who: t.Destination }); } else if (t.Destination === m.issuer) { burned += v; ev.push({ t: ms, k: 'Burn', v, who: t.Account }); }
+    }
+    const tr = ai && ai.account_data && ai.account_data.TransferRate ? (Number(ai.account_data.TransferRate) / 1e9 - 1) * 100 : 0;
+    parts.push(sec('Supply history', kv('Minted (ever)', fmt(minted)) + kv('Burned (ever)', fmt(burned)) + kv('In circulation', fmt(m.supply)) + kv('Transfer fee on sends', tr > 0 ? tr.toFixed(2) + '%' : 'none') + kv('Issuer', `<span class="mono">${esc(short(ctx.showL(m.issuer), 8, 6))}</span>`)
+      + (ev.length ? `<table class="dxt"><thead><tr><th>When</th><th>Type</th><th class="r">Amount</th></tr></thead><tbody>${ev.slice(0, 12).map(e => `<tr><td>${new Date(e.t).toLocaleString()}</td><td>${e.k}</td><td class="r">${fmt(e.v)}</td></tr>`).join('')}</tbody></table>` : '')));
+    // recent trades
+    recent.sort((x, y) => y.ms - x.ms);
+    parts.push(sec('Recent trades', recent.length ? `<table class="dxt"><thead><tr><th>When</th><th>Side</th><th class="r">Amount</th><th class="r">Price</th><th>Trader</th></tr></thead><tbody>${recent.slice(0, 15).map(t => `<tr><td>${new Date(t.ms).toLocaleTimeString()}</td><td style="color:${t.kind === 'buy' ? '#34d399' : '#f87171'}">${t.kind}</td><td class="r">${fmt(t.base)}</td><td class="r">${t.price != null ? fmt(t.price, 6) + ' ' + esc(t.sym) : '–'}</td><td class="mono">${esc(short(ctx.showL(t.who), 5, 4))}</td></tr>`).join('')}</tbody></table>` : '<div class="mut">No trades yet.</div>'));
+    // price trend (24h candles)
+    if (states.length) {
+      const st = states[0], base = akey(st.a) === key ? st.a : st.b, quote = base === st.a ? st.b : st.a;
+      const c = await M.candles({ id: M.marketId(base, quote), base, quote, label: '', pool: st }, M.RANGES.find(r => r.k === '1d') as M.RangeDef).catch(() => null);
+      if (c && c.list.length > 2) { const cl = c.list.map(x => x.c); parts.splice(1, 0, sec('Price, last 24 hours', SPK(cl, cl[cl.length - 1] >= cl[0]) + kv('Low / high', fmt(Math.min(...c.list.map(x => x.l)), 6) + ' / ' + fmt(Math.max(...c.list.map(x => x.h)), 6) + ' ' + esc(M.labelOf(quote))))); }
+    }
+    put();
+  } catch (e: any) { parts.push(`<div class="crit" style="padding:.6rem">Some analytics could not be read: ${esc(String(e?.message || e))}</div>`); put(); }
+}
