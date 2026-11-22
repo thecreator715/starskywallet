@@ -257,8 +257,8 @@ async function verifyTips() {
 
 // ---------- state ----------
 type View = { k: 'home' } | { k: 'explore' } | { k: 'notif' } | { k: 'bm' } | { k: 'dash' } | { k: 'profile'; a: string; tab?: string } | { k: 'thread'; id: string } | { k: 'tag'; tag: string } | { k: 'search'; q: string } | { k: 'market' } | { k: 'stats' } | { k: 'listing'; id: string } | { k: 'editprof' };
-const S: { view: View; tab: 'foryou' | 'following'; xtab: 'hot' | 'new' | 'tipped'; draft: string; media: string; poll: string[]; pollOn: boolean; quote: string; busy: boolean; step: string; loaded: boolean; hubErr: string; shown: number; q: string; err: string; lb: string; deep: boolean; noCard: Set<string>; nft: { id: string; img: string; name: string } | null; rev: Set<string> } =
-  { view: { k: 'home' }, tab: 'foryou', xtab: 'hot', draft: '', media: '', poll: ['', ''], pollOn: false, quote: '', busy: false, step: '', loaded: false, hubErr: '', shown: 25, q: '', err: '', lb: '', deep: false, noCard: new Set(), nft: null, rev: new Set() };
+const S: { view: View; tab: 'foryou' | 'following'; xtab: 'hot' | 'new' | 'tipped'; draft: string; media: string; poll: string[]; pollOn: boolean; quote: string; busy: boolean; step: string; loaded: boolean; hubErr: string; shown: number; q: string; err: string; lb: string; deep: boolean; pend: string; noCard: Set<string>; nft: { id: string; img: string; name: string } | null; rev: Set<string> } =
+  { view: { k: 'home' }, tab: 'foryou', xtab: 'hot', draft: '', media: '', poll: ['', ''], pollOn: false, quote: '', busy: false, step: '', loaded: false, hubErr: '', shown: 25, q: '', err: '', lb: '', deep: false, pend: '', noCard: new Set(), nft: null, rev: new Set() };
 const hist: View[] = [];
 let timer: any = 0, bound: HTMLElement | null = null, kd: ((e: KeyboardEvent) => void) | null = null, KD: ((e: KeyboardEvent) => void) | null = null;
 const LS = { get: (k: string, d: any) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set: (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
@@ -747,7 +747,9 @@ function center(): string {
 }
 
 export function shell() { return `<div id="sc-root"><style>${CSS}${CSS2}${CSS3}</style><div class="sc" id="sc"></div></div>`; }
+function resolvePend() { if (!S.pend) return; for (const k of IX.posts.keys()) { if (String(k).toUpperCase().startsWith(S.pend)) { S.view = { k: 'thread', id: String(k).toUpperCase() } as any; S.pend = ''; break; } } }
 function paint() {
+  resolvePend();
   const root = document.getElementById('sc'); if (!root) return;
   if (ctx.xrpl()) { root.innerHTML = `<div class="sc-box" style="grid-column:1/-1">LUMA Social runs on the LUMA chain. Switch the wallet type to LUMA to use it.</div>`; return; }
   const keep = document.activeElement as HTMLElement | null, kid = keep && keep.id, ss = (keep as any)?.selectionStart;
@@ -1034,7 +1036,11 @@ const need = (): boolean => { const bl = blocked(); if (bl) { ctx.toast(bl, true
 const go = (v: View) => { hist.push(S.view); if (hist.length > 30) hist.shift(); S.view = v; S.shown = 25; S.err = ''; window.scrollTo({ top: 0 }); paint(); };
 const mcard = (inner: string, w = 400) => `<div class="card" style="width:min(${w}px,92vw);max-width:94vw;max-height:88vh;overflow-y:auto;overflow-x:hidden;box-sizing:border-box">${inner}</div>`;
 const mi = (icon: string, label: string, fn: string, cls = '') => `<button class="sc-mi ${cls}" onclick="${fn}">${ic(icon, 19)}<span>${label}</span></button>`;
-const linkFor = (kind: string, id: string) => location.href.split(/[?#]/)[0] + '?social=' + kind + ':' + encodeURIComponent(id);
+const PRETTY = /(^|\.)starsky-luma\.org$/i.test(location.hostname);
+const linkFor = (kind: string, id: string) => {
+  if (PRETTY) { const o = location.origin, k = ({ post: 'p', u: 'u', tag: 't', ref: 'r', l: 'l' } as any)[kind]; if (k) return o + '/' + k + '/' + encodeURIComponent(kind === 'post' ? id.slice(0, 12).toLowerCase() : id); }
+  return location.href.split(/[?#]/)[0] + '?social=' + kind + ':' + encodeURIComponent(id);
+};
 function postMenu(id: string) {
   const p = IX.posts.get(id); if (!p) return; const mine = p.a === me(), bm = bookmarks().includes(id), pinned = IX.pin.get(me()) === id;
   ctx.modal(mcard(`<div class="k" style="margin-bottom:6px">Post options</div>${mi('link', 'Copy link', `sc.m('copy','${id}')`)}${typeof navigator !== 'undefined' && (navigator as any).share ? mi('share', 'Share…', `sc.m('share','${id}')`) : ''}${mi('share', 'Share to X', `sc.m('sx','${id}')`)}${mi('quote', 'Quote post', `sc.m('quote','${id}')`)}${mi('bm', bm ? 'Remove bookmark' : 'Save to bookmarks', `sc.m('bm','${id}')`)}${mi('zap', 'Boost this post (1 LUMA or more)', `sc.m('boost','${id}')`)}${mi('smile', 'React', `sc.m('react','${id}')`)}${mine ? mi('pen', 'Edit text', `sc.m('edit','${id}')`) + (p.r ? '' : mi(pinned ? 'pinoff' : 'pin', pinned ? 'Unpin from profile' : 'Pin to profile', `sc.m('${pinned ? 'unpin' : 'pin'}','${id}')`)) + mi('trash', 'Delete', `sc.m('del','${id}')`, 'bad') : mi('slash', 'Mute ' + esc(tagOf(p.a)), `sc.m('mute','${p.a}')`, 'bad') + mi('flag', 'Report this post', `sc.m('report','${id}')`, 'bad')}`));
@@ -1343,7 +1349,10 @@ export const sc: any = {
 function deepLink() {
   if (S.deep) return; S.deep = true;
   try {
-    const q = new URLSearchParams(location.search).get('social'); if (!q) return; const i = q.indexOf(':'), kind = q.slice(0, i), id = decodeURIComponent(q.slice(i + 1));
+    let q = new URLSearchParams(location.search).get('social');
+    const pm = location.pathname.match(/^\/(p|u|t|r|l)\/([^/]+)\/?$/); if (!q && pm) q = ({ p: 'post', u: 'u', t: 'tag', r: 'ref', l: 'l' } as any)[pm[1]] + ':' + pm[2];
+    if (!q) return; const i = q.indexOf(':'), kind = q.slice(0, i), id = decodeURIComponent(q.slice(i + 1));
+    if (kind === 'post' && /^[0-9a-f]{6,63}$/i.test(id)) { S.pend = id.toUpperCase(); return; }
     if (kind === 'post' && isHash(id)) S.view = { k: 'thread', id: id.toUpperCase() }; else if (kind === 'u' && isAddr(id)) S.view = { k: 'profile', a: id }; else if (kind === 'tag' && id) S.view = { k: 'tag', tag: id.toLowerCase() }; else if (kind === 'ref' && isAddr(id)) { LS.set(refKey(), id); } else if (kind === 'l' && isHash(id)) S.view = { k: 'listing', id: id.toUpperCase() };
   } catch {}
 }

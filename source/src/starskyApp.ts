@@ -443,7 +443,7 @@ export const st: AppState = {
     searchResult: null,
   },
 };
-try { if (new URLSearchParams(location.search).get('social')) (st as any).tab = 'social'; } catch {}
+try { if (new URLSearchParams(location.search).get('social') || /^\/(p|u|t|r|l)\/[^/]+\/?$/.test(location.pathname)) (st as any).tab = 'social'; } catch {}
 
 // Market Pair Helpers
 export const NATIVE = { c: 'native', i: '' };
