@@ -16,6 +16,7 @@ import * as Bn from './live/burn.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
 import * as Social from './live/social.ts';
+import * as Bio from './live/bio.ts';
 import * as Nft from './live/nft.ts';
 import * as Hist from './live/history.ts';
 import * as Hold from './live/holders.ts';
@@ -1788,6 +1789,9 @@ export function renderApp() {
               <input id="iv" type="file" hidden onchange="window.importVaultFile(this.files[0])">
               <button class="ghost" onclick="window.lockNow()">Lock Wallet</button>
             </div>
+            <div class="k" style="margin-top:1.2rem">Face ID unlock</div>
+            <div class="mut" style="font-size:.85rem;margin:.2rem 0 .5rem">${Bio.enabled() ? 'On for this device. The lock screen shows an Unlock with Face ID button. Your password still works.' : 'Unlock this wallet with Face ID (or your device passcode) on this phone or computer. Your password still works. Type it once to turn this on.'}</div>
+            <div class="row">${Bio.enabled() ? `<button class="ghost" onclick="window.bioOff()">Turn off Face ID</button>` : `<input id="bio-pw" type="password" class="grow" placeholder="Your wallet password"><button onclick="window.bioOn()">Set up Face ID</button>`}</div>
           </div>
           ${Extras.settingsShell()}
         </div>
@@ -2256,6 +2260,7 @@ export function renderLockScreen(root: HTMLElement) {
         `
         }
 
+        ${hasVault && Bio.enabled() ? `<div class="row" style="margin-top:1rem"><button class="grow" onclick="window.bioUnlock()">Unlock with Face ID</button></div>` : ''}
         <div class="row" style="margin-top:1rem">
           <button class="pri acc grow" onclick="${hasVault ? 'window.unlockVault()' : 'window.createVault()'}">
             ${hasVault ? 'Unlock Wallet' : 'Create New Vault'}
@@ -3241,6 +3246,32 @@ export function initWindowBindings() {
       connectNodes();
     } catch (e: any) {
       if (err) err.textContent = e.message === 'Wrong password' ? 'Incorrect password' : e.message;
+    }
+  };
+
+  (window as any).bioOn = async () => {
+    const p = (document.getElementById('bio-pw') as HTMLInputElement)?.value || '';
+    if (!p) { toast('Type your wallet password first.', true); return; }
+    try {
+      const raw = store.get(VK); if (!raw) throw new Error('No vault found');
+      await openVault(JSON.parse(raw), p);   // proves the password is right before it is sealed
+      await Bio.enable(p);
+      toast('Face ID is on for this device.');
+      renderApp();
+    } catch (e: any) { toast(e && e.message === 'Wrong password' ? 'Incorrect password' : (e && e.name === 'NotAllowedError' ? 'Face ID was cancelled.' : (e && e.message) || 'Could not set up Face ID.'), true); }
+  };
+  (window as any).bioOff = () => { Bio.disable(); toast('Face ID is off. Use your password.'); renderApp(); };
+  (window as any).bioUnlock = async () => {
+    const err = document.getElementById('lerr');
+    try {
+      if (err) err.textContent = 'Waiting for Face ID…';
+      const pw = await Bio.unlockPassword();
+      const raw = store.get(VK); if (!raw) throw new Error('No vault found');
+      VAULT = await openVault(JSON.parse(raw), pw);
+      renderApp();
+      connectNodes();
+    } catch (e: any) {
+      if (err) err.textContent = e && e.name === 'NotAllowedError' ? 'Face ID was cancelled. Use your password.' : (e && e.message === 'Wrong password' ? 'The saved Face ID no longer matches your password. Turn it off and on again in Settings.' : (e && e.message) || 'Face ID failed. Use your password.');
     }
   };
 
