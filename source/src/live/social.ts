@@ -156,7 +156,8 @@ function updCard() { const el = document.getElementById('sc-card'); if (el) el.i
 const ytId = (t: string): string => { const m = String(t || '').match(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^\s#]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i); return m ? m[1] : ''; };
 const ytCard = (id: string): string => `<div class="sc-yt" data-yt="${id}"><button class="sc-ytb" data-act="ytplay" data-v="${id}" aria-label="Play video"><img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'"><span class="sc-ytp"><svg viewBox="0 0 24 24" width="30" height="30"><path d="M8 5v14l11-7z" fill="#fff"/></svg></span><span class="sc-ytl">YouTube</span></button></div>`;
 const playing = (): boolean => !!document.querySelector('#sc .sc-yt iframe');
-function paintSoft() { if (!playing() && S.view.k !== 'editprof' && !PP.isOpen()) paint(); }
+let PICKING = 0;
+function paintSoft() { if (!playing() && S.view.k !== 'editprof' && !PP.isOpen() && !(PICKING && Date.now() - PICKING < 120000)) paint(); }
 
 function rebuild() {
   const ix = blank(); EV.sort((x, y) => x.l - y.l || x.i - y.i);
@@ -590,7 +591,7 @@ function composer(opts: { reply?: string; quote?: string } = {}): string {
   ${PP.barHtml()}
   <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
   ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
-  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool" style="position:relative"><button class="sc-ib ${S.media || S.nft || MMO ? 'on' : ''}" data-act="mm" title="Add a picture, video or NFT" aria-haspopup="true" aria-expanded="${MMO}">${ic('image')}</button><input type="file" id="sc-file" accept="image/*,video/*" hidden onchange="sc.upload(this,'post')">${MMO ? `<div class="sc-mm" role="menu"><button data-act="cam">${ic('image', 16)}Take a photo or video</button><button data-act="upl">${ic('up', 16)}Upload a picture or video</button><button data-act="showmedia">${ic('link', 16)}Add a picture link</button><button data-act="nftpick">${ic('gem', 16)}Use one of my NFTs</button></div>` : ''}${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
+  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool" style="position:relative"><button class="sc-ib ${S.media || S.nft || MMO ? 'on' : ''}" data-act="mm" title="Add a picture, video or NFT" aria-haspopup="true" aria-expanded="${MMO}">${ic('image')}</button><input type="file" id="sc-file" accept="image/*,video/*" hidden onchange="sc.upload(this,'post')">${MMO ? `<div class="sc-mm" role="menu">${TOUCH ? `<button data-act="upl">${ic('image', 16)}Photo or video</button>` : `<button data-act="cam">${ic('image', 16)}Take a photo or video</button><button data-act="upl">${ic('up', 16)}Upload a picture or video</button>`}<button data-act="showmedia">${ic('link', 16)}Add a picture link</button><button data-act="nftpick">${ic('gem', 16)}Use one of my NFTs</button></div>` : ''}${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
   <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 6)} LUMA</span></button></div></div></div>`;
 }
 
@@ -842,6 +843,20 @@ const GWS = (): string[] => nodeGws().concat(['https://ipfs.io/ipfs/', 'https://
 const pubGw = (): string => nodeGws().find(g => g.startsWith('https://')) || 'https://ipfs.io/ipfs/';
 const MAXIMG = 5 * 1024 * 1024;
 let UP = false;
+const TOUCH = typeof navigator !== 'undefined' && (navigator.maxTouchPoints > 0 && /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent));
+/** one picker for pictures and videos. The input is created here (not inside the page) so a repaint while the phone's picker is open cannot lose the choice. */
+function pickMedia() {
+  if (!need()) return; const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*,video/*'; i.style.display = 'none'; document.body.appendChild(i); PICKING = Date.now();
+  const done = () => { PICKING = 0; setTimeout(() => i.remove(), 1000); };
+  i.onchange = async () => {
+    const f = i.files && i.files[0]; if (!f) { done(); return; }
+    UP = true; paint();
+    try { const u = await uploadFiles([f], 1, true); if (u[0]) { S.media = u[0]; S.nft = null as any; ctx.toast(CAM.isVideoUrl(u[0]) ? 'Video added. Write something and press Post.' : 'Picture added. Write something and press Post.'); } }
+    catch (e: any) { ctx.toast(String(e?.message || e), true); }
+    UP = false; done(); paint();
+  };
+  i.addEventListener('cancel', done); i.click();
+}
 function sc_cam(kind: string) {
   if (!need()) return;
   CAM.openCamera(async f => {
@@ -1371,7 +1386,7 @@ async function onClick(el: HTMLElement, ev: Event) {
     case 'plink': sc.m('copyu', v); break;
     case 'ytplay': { const box = el.closest('.sc-yt') as HTMLElement | null; if (box) box.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(v)}?autoplay=1&rel=0&playsinline=1" title="YouTube video" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; break; }
     case 'cam': sc_cam('post'); break;
-    case 'upl': (document.getElementById('sc-file') as HTMLInputElement | null)?.click(); break;
+    case 'upl': pickMedia(); break;
     case 'mediax': S.media = ''; paint(); break;
     case 'pcbig': bigChart(v); break;
     case 'pcx': S.noCard.add(v); updCard(); break;
