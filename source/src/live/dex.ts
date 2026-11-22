@@ -90,6 +90,15 @@ const LPK = 'starsky.dex.lastpair';
 const lastPair = (): { id: string; inv: boolean; fl: boolean } | null => { try { const j = JSON.parse(localStorage.getItem(LPK) || 'null'); return j && j.id ? { id: String(j.id), inv: !!j.inv, fl: !!j.fl } : null; } catch { return null; } };
 const savePair = () => { try { if (DX.mid) localStorage.setItem(LPK, JSON.stringify({ id: DX.mid, inv: DX.inv, fl: DX.flipped })); } catch {} };
 const nm = (a: Asset) => M.labelOf(a);
+// never leave the chart on "Reading price history…": give up after 30s or on any error and show why, with a retry
+async function safeCandles(m: M.Market): Promise<any> {
+  let to: any;
+  try {
+    return await Promise.race([M.candles(m, RANGE()), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('The node took too long to answer.')), 30000); })]);
+  } catch (e: any) {
+    return { list: [], first: 0, clamped: false, note: 'Could not read price history: ' + String(e?.message || e) + ' Tap a range to retry.' };
+  } finally { clearTimeout(to); }
+}
 const RANGE = () => M.RANGES.find(r => r.k === DX.range) || M.RANGES[2];
 
 /* ---------- balances ---------- */
@@ -257,7 +266,7 @@ export async function load(keepSelection = true) {
     const m = mkt() as M.Market;
     const jobs: Promise<any>[] = [
       loadBal().then(() => !stale(g) && (renderTrade(), renderTok())),
-      M.candles(m, RANGE()).then(c => {
+      safeCandles(m).then(c => {
         if (stale(g)) return;
         DX.cd = c;
         renderChart();
@@ -997,7 +1006,7 @@ export const api: any = {
     const m = mkt();
     const g = DX.gen;
     if (m)
-      M.candles(m, RANGE()).then(c => {
+      safeCandles(m).then(c => {
         if (stale(g) || DX.range !== k) return;
         DX.cd = c;
         renderChart();
