@@ -1321,3 +1321,20 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
   .top{padding-left:3.4rem!important}
   main{padding-bottom:1.5rem!important}
 }
+
+/* phones: the whole top bar on one compact line */
+@media(max-width:759px){
+  .top{display:flex!important;flex-wrap:nowrap!important;align-items:center;gap:.3rem!important;padding-right:.5rem!important;overflow:hidden}
+  .top h1{flex:none;font-size:.8rem!important;white-space:nowrap;margin:0}
+  .top .topc{display:flex!important;flex:1 1 auto;min-width:0;flex-wrap:nowrap!important;gap:.3rem!important;justify-content:flex-end}
+  .top .sw{order:0!important;flex:none;padding:.12rem!important}.top .sw button{padding:.22rem .42rem!important;font-size:.58rem!important}
+  .top .tstat{display:none!important}
+  .top .acrow{display:flex;flex-wrap:nowrap!important;gap:.25rem;min-width:0;flex:0 1 auto}
+  .top .acrow select{max-width:6rem!important;min-width:4.6rem!important;flex:1 1 4.6rem;text-overflow:ellipsis;padding:.28rem .35rem!important;font-size:.6rem!important;border-radius:.6rem}
+  .top .acrow button{padding:.26rem .4rem!important;font-size:.58rem!important;white-space:nowrap;border-radius:.6rem}
+  .top .acrow button:nth-child(3){display:none!important}
+  .top .pill{order:5!important;flex:none;max-width:none!important;font-size:0!important;padding:0!important;width:.8rem;height:.8rem;min-width:.8rem;border-radius:50%;border:0!important;background:transparent!important}
+  .top .pill::before{margin:0!important}
+}
+@media(max-width:759px){.top{padding-right:.9rem!important}.top .acrow select{min-width:3.9rem!important;max-width:5rem!important}}
+@media(max-width:390px){.top{padding-left:3.1rem!important;gap:.2rem!important}.top h1{font-size:.72rem!important}.top .sw button{padding:.2rem .34rem!important;font-size:.54rem!important}.top .acrow button{padding:.24rem .3rem!important;font-size:.52rem!important}.top .acrow select{min-width:3.2rem!important;max-width:4rem!important;font-size:.54rem!important}}
