@@ -392,6 +392,8 @@ async function act(d: any, label: string, ok?: string, amount?: number): Promise
 
 // ---------- rendering ----------
 const CSS = `
+.sc-mm{position:absolute;left:0;bottom:calc(100% + 6px);z-index:30;min-width:230px;background:#141824;border:1px solid var(--sl);border-radius:14px;padding:6px;box-shadow:0 14px 40px rgba(0,0,0,.55);display:flex;flex-direction:column}
+.sc-mm button{all:unset;cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;font-weight:600;font-size:.92rem;color:var(--tx)}.sc-mm button:hover,.sc-mm button:focus-visible{background:var(--sh)}
 .sc{--sa:#8b5cf6;--sb:#22d3ee;--sg:linear-gradient(135deg,#8b5cf6,#6366f1 55%,#22d3ee);--sl:rgba(255,255,255,.08);--sh:rgba(139,92,246,.07);display:grid;grid-template-columns:248px minmax(0,620px) 330px;gap:28px;justify-content:center;align-items:start;max-width:1260px;margin:0 auto;font-feature-settings:"cv11","ss01"}
 .sc *{box-sizing:border-box}.sc-i{flex:none;display:block}
 .sc button{font-family:inherit}
@@ -587,7 +589,7 @@ function composer(opts: { reply?: string; quote?: string } = {}): string {
   ${PP.barHtml()}
   <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
   ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
-  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib ${S.media && !S.nft ? 'on' : ''}" data-act="upl" title="Upload a picture from your computer (5 MB max)">${ic('up')}</button><input type="file" id="sc-file" accept="image/*,video/*" hidden onchange="sc.upload(this,'post')"><button class="sc-ib" data-act="cam" title="Take a photo, edit it and post it">${ic('image')}</button><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
+  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool" style="position:relative"><button class="sc-ib ${S.media || S.nft || MMO ? 'on' : ''}" data-act="mm" title="Add a picture, video or NFT" aria-haspopup="true" aria-expanded="${MMO}">${ic('image')}</button><input type="file" id="sc-file" accept="image/*,video/*" hidden onchange="sc.upload(this,'post')">${MMO ? `<div class="sc-mm" role="menu"><button data-act="cam">${ic('image', 16)}Take a photo or video</button><button data-act="upl">${ic('up', 16)}Upload a picture or video</button><button data-act="showmedia">${ic('link', 16)}Add a picture link</button><button data-act="nftpick">${ic('gem', 16)}Use one of my NFTs</button></div>` : ''}${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
   <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 6)} LUMA</span></button></div></div></div>`;
 }
 
@@ -1309,8 +1311,11 @@ async function tipSend() {
 }
 
 // ---------- actions ----------
+let MMO = false;
 async function onClick(el: HTMLElement, ev: Event) {
   const a = el.dataset.act!, v = el.dataset.v || '';
+  if (a === 'mm') { MMO = !MMO; ev.stopPropagation(); paint(); return; }
+  if (MMO) { MMO = false; document.querySelector('.sc-mm')?.remove(); }
   ev.stopPropagation();
   switch (a) {
     case 'nav': if (v === 'me') { if (need()) go({ k: 'profile', a: me() }); } else if (v === 'compose') { go({ k: 'home' }); setTimeout(() => (document.getElementById('sc-txt') as HTMLElement | null)?.focus(), 30); } else { go({ k: v } as any); if (v === 'notif') { LS.set(seenKey(), Math.floor(Date.now() / 1000)); paint(); } } break;
