@@ -170,11 +170,11 @@ async function runChecks(): Promise<Chk[]> {
   if (acc) { const b = ST.bal.L; add(b && b.ok ? 'ok' : 'warn', 'Your LUMA wallet', b && b.ok ? `${fmt(b.native, 4)} ${nat}` : 'This wallet is not active on the network yet.', b && b.ok ? '' : 'Receive some LUMA first.'); }
   const xw = xrplWallets();
   if (!xw.length) add('warn', 'No XRPL wallet in this app', 'To send from XRPL (XRP, RLUSD, MINT, MAGIC) or to receive on XRPL you need an XRPL wallet here.', 'Wallets → switch to XRPL → import your seed (or create one). Fund it with XRP first.');
-  else for (const w of xw) { const x = ST.bal.X[w.address]; add(x && x.ok ? 'ok' : 'warn', `XRPL wallet “${w.label}”`, x && x.ok ? `${fmt(x.xrp, 4)} XRP` : 'Not activated on that XRPL yet (needs its reserve in XRP).', x && x.ok ? '' : 'Send it a few XRP (on testnet use the faucet).'); }
+  else for (const w of xw) { const x = ST.bal.X[w.address]; add(x && x.ok ? 'ok' : 'warn', `XRPL wallet “${w.label}”`, x && x.ok ? `${fmt(x.xrp, 4)} XRP` : 'Not activated on that XRPL yet (needs its reserve in XRP).', x && x.ok ? '' : 'Send it a few XRP (on testnet use the faucet), or press Fix: it can activate it by bridging a little LUMA.', x && x.ok ? '' : 'xact:' + w.address); }
   // receiving trust lines for the priority lanes
   const xrpzIssuer = await issuerOnLuma(L[0].luma);
-  if (acc && xrpzIssuer) { const has = ((ST.bal.L && ST.bal.L.lines) || []).some((l: any) => l.account === xrpzIssuer && hexName(l.currency) === L[0].luma); add(has ? 'ok' : 'warn', `Your LUMA wallet can receive ${L[0].luma}`, has ? '' : 'No trust line yet: an XRP → LUMA transfer would wait.', has ? '' : 'Use the “Add trust line” button in the transfer box.'); }
-  if (c.xrplIssuer) for (const w of xw) { const x = ST.bal.X[w.address]; if (!x || !x.ok) continue; const has = x.lines.some((l: any) => l.account === c.xrplIssuer && sameCur(l.currency, L[1].xrpl)); add(has ? 'ok' : 'warn', `“${w.label}” can receive ${L[1].xrpl}`, has ? '' : 'No trust line yet: a LUMA → XRPL transfer would wait.', has ? '' : 'Use the “Add trust line” button in the transfer box.'); }
+  if (acc && xrpzIssuer) { const has = ((ST.bal.L && ST.bal.L.lines) || []).some((l: any) => l.account === xrpzIssuer && hexName(l.currency) === L[0].luma); add(has ? 'ok' : 'warn', `Your LUMA wallet can receive ${L[0].luma}`, has ? '' : 'No trust line yet: an XRP → LUMA transfer would wait.', has ? '' : 'Press Fix to add it (a small XRP-style reserve of LUMA is held for a trust line).', has ? '' : 'trustL:' + xrpzIssuer + ':0'); }
+  if (c.xrplIssuer) for (const w of xw) { const x = ST.bal.X[w.address]; if (!x || !x.ok) continue; const has = x.lines.some((l: any) => l.account === c.xrplIssuer && sameCur(l.currency, L[1].xrpl)); add(has ? 'ok' : 'warn', `“${w.label}” can receive ${L[1].xrpl}`, has ? '' : 'No trust line yet: a LUMA → XRPL transfer would wait.', has ? '' : 'Press Fix to add it (about 0.2 XRP of reserve is held for a trust line).', has ? '' : 'trustX:' + w.address + ':1'); }
   return out;
 }
 async function issuerOnLuma(name: string): Promise<string> {
@@ -278,12 +278,20 @@ function paintSetup() {
     <div class="fgrid"><input id="br_lv" class="grow" placeholder="LUMA vault address (L… / T…)" value="${esc(c.lumaVault ? ctx.showL(c.lumaVault) : '')}"><input id="br_xv" class="grow" placeholder="XRPL vault address (r…)" value="${esc(c.xrplVault)}"><input id="br_xu" class="grow" placeholder="XRPL node (wss://…)" value="${esc(c.xrplUrl)}"><button class="pri" onclick="window.br.save()">Save settings</button></div>
     <div id="br_cmsg" class="mut" style="font-size:.78rem;margin-top:.3rem"></div></details>`);
 }
+function fixBtns(act: string): string {
+  const [kind, target, lx] = act.split(':'), b = (cls: string, js: string, t: string) => `<button class="sm ${cls}" style="margin:.3rem .3rem 0 0" onclick="${js}">${t}</button>`;
+  if (kind === 'trustL') return b('pri', `window.br.trust('l','${esc(target)}',this,${lx || 0})`, 'Fix: add trust line');
+  if (kind === 'trustX') return b('pri', `window.br.trust('x','${esc(target)}',this,${lx || 1})`, 'Fix: add trust line');
+  if (kind === 'xact') return b('ghost', `window.copyText('${esc(target)}')`, 'Copy address') + (ctx.netKey() === 'test' ? b('pri', `window.fundLinkedXrpl('${esc(target)}')`, 'Fix: get test XRP from the faucet') : '') + b('pri', `window.bridgeToActivate('${esc(target)}')`, 'Fix: activate by bridging LUMA');
+  return '';
+}
 function paintChecks() {
   const k: Chk[] = ST.chk;
   if (!k) return;
   const bad = k.filter(x => x.level === 'bad').length, warn = k.filter(x => x.level === 'warn').length;
   setHtml('br_chk', `<div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Bridge checklist</div><span>${bad ? `<b class="dn">${bad} to fix</b>` : warn ? `<b style="color:#ffc400">${warn} to check</b>` : '<b class="up">All good</b>'} <button class="sm ghost" onclick="window.br.refresh()">Re-check</button></span></div>
-    <div style="margin-top:.5rem">${k.map(x => `<div class="row" style="gap:.6rem;align-items:flex-start;padding:.35rem 0;border-top:1px solid rgba(255,255,255,.05)"><span style="width:1rem">${lvl(x.level)}</span><div style="flex:1"><div>${esc(x.title)}</div>${x.detail ? `<div class="mut" style="font-size:.78rem;word-break:break-word">${esc(x.detail)}</div>` : ''}${x.fix && x.level !== 'ok' ? `<div style="font-size:.78rem;color:#00ff8c">→ ${esc(x.fix)}</div>` : ''}</div></div>`).join('')}</div>`);
+    <div style="margin-top:.5rem">${k.map(x => `<div class="row" style="gap:.6rem;align-items:flex-start;padding:.35rem 0;border-top:1px solid rgba(255,255,255,.05)"><span style="width:1rem">${lvl(x.level)}</span><div style="flex:1"><div>${esc(x.title)}</div>${x.detail ? `<div class="mut" style="font-size:.78rem;word-break:break-word">${esc(x.detail)}</div>` : ''}${x.fix && x.level !== 'ok' ? `<div style="font-size:.78rem;color:#00ff8c">→ ${esc(x.fix)}</div>` : ''}${x.act && x.level !== 'ok' ? fixBtns(x.act) : ''}</div></div>`).join('')}</div>${k.some(x => x.act && x.level !== 'ok') ? `<div class="row" style="margin-top:.7rem;gap:.5rem;align-items:center"><button class="pri acc" onclick="window.br.autoFix(this)">Fix everything I can</button><span class="mut" style="font-size:.76rem">Re-checks by itself every 15 seconds until it is all good.</span></div><div id="br_fixmsg" class="mut" style="font-size:.78rem;margin-top:.3rem"></div>` : ''}`);
+  if (k.some(x => x.level !== 'ok')) { if (!ST.chkT) ST.chkT = setInterval(() => { if (!$('br_chk')) { clearInterval(ST.chkT); ST.chkT = 0; return; } void (brApi as any).refresh(); }, 15000); } else if (ST.chkT) { clearInterval(ST.chkT); ST.chkT = 0; }
 }
 function paintRep() {
   const r = ST.rep;
@@ -659,8 +667,21 @@ export const brApi = {
       bridgeLoad();
     } catch (e: any) { if (msg) msg.textContent = String(e?.message || e); }
   },
-  async trust(side: string, target: string, btn: HTMLButtonElement) {
-    const ln = laneOf(), c = bcfg();
+  async autoFix(btn: HTMLButtonElement) {
+    const k: Chk[] = (ST.chk || []).filter((x: Chk) => x.act && x.level !== 'ok'), msg = $('br_fixmsg'), say = (t: string) => { if (msg) msg.textContent = t; };
+    btn.disabled = true; let done = 0, left: string[] = [];
+    for (const x of k) {
+      const [kind, target, lx] = x.act!.split(':');
+      try {
+        if (kind === 'trustL' || kind === 'trustX') { say('Fixing: ' + x.title + '…'); if (await (brApi as any).trust(kind === 'trustL' ? 'l' : 'x', target, { disabled: false }, Number(lx))) done++; else left.push(x.title); }
+        else if (kind === 'xact') { if (ctx.netKey() === 'test' && (window as any).fundLinkedXrpl) { say('Asking the faucet for test XRP…'); await (window as any).fundLinkedXrpl(target); done++; } else left.push(x.title); }
+      } catch (e: any) { left.push(x.title + ' (' + String(e?.message || e).slice(0, 60) + ')'); }
+    }
+    btn.disabled = false; say(done ? `Fixed ${done}. ${left.length ? 'Still needs you: ' + left.join('; ') : 'Checking again…'}` : left.length ? 'These need you (they need real funds): ' + left.join('; ') + '. Use the Fix buttons next to them.' : 'Nothing to fix automatically.');
+    void (brApi as any).refresh();
+  },
+  async trust(side: string, target: string, btn: HTMLButtonElement, laneIx?: number) {
+    const ln = laneIx == null || !lanes()[laneIx] ? laneOf() : lanes()[laneIx], c = bcfg();
     btn.disabled = true;
     try {
       if (side === 'l') {
@@ -678,7 +699,8 @@ export const brApi = {
         ctx.toast('✓ Trust line added on XRPL');
       }
       bridgeLoad();
-    } catch (e: any) { ctx.toast(String(e?.message || e), true); btn.disabled = false; }
+      return true;
+    } catch (e: any) { ctx.toast(String(e?.message || e), true); btn.disabled = false; return false; }
   },
   async send(btn: HTMLButtonElement) {
     const c = bcfg(), ln = laneOf(), out = ST.dir === 'out', msg = $('br_msg'), say = (t: string) => msg && (msg.textContent = t);
