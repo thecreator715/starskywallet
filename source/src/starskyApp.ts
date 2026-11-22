@@ -1187,6 +1187,16 @@ export function modal(h: string) {
   document.body.appendChild(m);
 }
 
+export function page(h: string, title = '') {
+  closeModal();
+  const m = document.createElement('div');
+  m.className = 'modal pg';
+  m.id = 'modal';
+  m.innerHTML = `<div class="pgbar"><button onclick="window.closeModal()" aria-label="Back">\u2190 Back</button><b>${title}</b></div><div class="card pgc">${h}</div>`;
+  document.body.appendChild(m);
+  m.scrollTop = 0;
+}
+
 export function closeModal() {
   const m = document.getElementById('modal');
   if (m) m.remove();
@@ -2384,6 +2394,7 @@ export function initWindowBindings() {
       await persistVault();
     },
     modal: (h: string) => modal(h),
+    page: (h: string, t?: string) => page(h, t),
     closeModal: () => closeModal(),
     showL: (r: string) => { try { return LumaAddr.toL(r); } catch { return r; } },
   });

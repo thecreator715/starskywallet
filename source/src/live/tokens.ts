@@ -1,4 +1,5 @@
 // Token registry (created tokens), icons stored on the ledger, and the token creator.
+import { ipfsAdd } from './nft.ts';
 import * as xrpl from 'xrpl';
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
@@ -17,6 +18,7 @@ export interface TokenMeta {
   desc: string;
   site: string;
   icon: string; // data URL or ''
+  img?: string; // full-size picture on network storage (https gateway URL) or ''
   ms: number;
   hash: string;
   supply0: number;
@@ -43,7 +45,8 @@ const memos = (t: any): { type: string; fmt: string; data: string }[] => (t.Memo
 const okMeta = (x: any) => (x.meta || x.metaData || {}).TransactionResult === 'tesSUCCESS';
 let regCache: TokenMeta[] = [];
 export const cachedRegistry = () => regCache;
-export const iconOf = (key: string): string => (regCache.find(t => t.key === key) || ({} as any)).icon || '';
+export const iconOf = (key: string): string => { const r: any = regCache.find(t => t.key === key) || {}; return r.icon || r.img || ''; };
+export const imgOf = (key: string): string => { const r: any = regCache.find(t => t.key === key) || {}; return r.img || r.icon || ''; };
 
 /** every token created through the token creator on this network: read from the fee payments to the genesis wallet */
 export async function registry(): Promise<TokenMeta[]> {
@@ -86,6 +89,7 @@ export async function registry(): Promise<TokenMeta[]> {
                 const j = JSON.parse(textOf(mm.data));
                 m.desc = String(j.d || '').slice(0, 280);
                 m.site = /^https?:\/\//.test(j.w || '') ? String(j.w).slice(0, 120) : '';
+                if (/^ipfs:\/\/[A-Za-z0-9]{20,100}$/.test(j.i || '')) m.img = 'https://ipfs.io/ipfs/' + String(j.i).slice(7);
               } catch {}
             }
             if (mm.type === T_ICON && !m.icon && /^image\/(webp|png|jpeg)$/.test(mm.fmt)) m.icon = `data:${mm.fmt};base64,${b64(bytesOf(mm.data))}`;
@@ -93,6 +97,7 @@ export async function registry(): Promise<TokenMeta[]> {
         }
       })
     );
+    for (const m of out) if (!m.icon && m.img) m.icon = m.img;
     out.sort((a, b) => b.ms - a.ms);
     return (regCache = out);
   });
@@ -132,7 +137,7 @@ interface Form {
   lock: boolean;
 }
 let F: Form = { name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false };
-let ICON: { bytes: Uint8Array; mime: string; url: string } | null = null;
+let ICON: { bytes: Uint8Array; mime: string; url: string; ipfs?: string } | null = null;
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement | null;
 const val = (id: string) => ($(id)?.value || '').trim();
 export async function openCreate() {
@@ -147,7 +152,7 @@ export async function openCreate() {
       cand = top.top[0] ? top.top[0].addr : '';
     } catch {}
   }
-  ctx.modal(`<h2>Create a token</h2>
+  ctx.page(`<h2>Create a token</h2>
     <p class="mut" style="margin:.2rem 0 .6rem;font-size:.85rem">Creates a new issuer wallet for your token, issues the supply to <b>this wallet</b>, and records the token on the network so it appears under Others with trading and pools.</p>
     <div class="fgrid">
       <input id="tk_name" placeholder="Token name (e.g. Sun Coin)" maxlength="24" value="${esc(F.name)}">
@@ -157,32 +162,43 @@ export async function openCreate() {
     </div>
     <input id="tk_desc" style="width:100%;margin-top:.5rem" placeholder="Short description (optional)" maxlength="200" value="${esc(F.desc)}">
     <div class="row" style="margin-top:.6rem;gap:.8rem;align-items:center"><div id="tk_prev" class="tkicon">${ICON ? `<img src="${ICON.url}">` : '<span class="mut">icon</span>'}</div>
-      <div><input id="tk_file" type="file" accept="image/png,image/jpeg,image/webp" onchange="window.tk.icon(this)"><div class="mut" style="font-size:.75rem">Shrunk to a tiny square and stored on the ledger itself (under 760 bytes), so it never depends on a server.</div></div></div>
+      <div><input id="tk_file" type="file" accept="image/png,image/jpeg,image/webp" onchange="window.tk.icon(this)"><div id="tk_ist" class="mut" style="font-size:.75rem">Uploaded to the network picture storage (IPFS) like Social pictures, plus a tiny copy stored on the ledger so the icon shows everywhere, even if storage is offline.</div></div></div>
     <label class="mut" style="display:block;margin:.6rem 0;font-size:.82rem"><input id="tk_lock" type="checkbox" ${F.lock ? 'checked' : ''}> Lock the supply forever (disables the issuer key so nobody can ever issue more. Cannot be undone.)</label>
     ${g ? '' : `<div class="lpcard" style="margin:.5rem 0"><div class="k">Genesis wallet (receives the creation fee)</div><input id="tk_gen" style="width:100%" placeholder="Genesis address (L… / T…)" value="${esc(cand ? ctx.showL(cand) : '')}"><div class="mut" style="font-size:.74rem">${cand ? 'Filled with the largest holder of the native coin, which is normally the genesis wallet. Check it, it is saved for this network.' : 'Paste the genesis address from the control panel.'}</div></div>`}
     <div class="lpcard"><div class="dxkv"><span class="mut">Creation fee to genesis</span><b>${FEE_LUMA} ${esc(ctx.native())}</b></div>
       <div class="dxkv"><span class="mut">Funds for the new issuer wallet (reserve and fees)</span><b>about ${fmt(reserve)} ${esc(ctx.native())}</b></div>
       <div class="dxkv"><span class="mut">Paid from</span><span class="mono">${esc(short(ctx.showL(ctx.account() as string), 8, 6))}</span></div></div>
     <div id="tk_err" class="crit" style="min-height:1.2rem;font-size:.82rem;margin-top:.4rem"></div>
-    <div class="row"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" id="tk_go" onclick="window.tk.create(this)">Create token</button></div>`);
+    <div class="row"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" id="tk_go" onclick="window.tk.create(this)">Create token</button></div>`, 'Create a token');
 }
 const keepForm = () => {
   F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked };
 };
+async function bigBlob(file: File): Promise<Blob> {
+  const bmp = await createImageBitmap(file), k = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  (c.getContext('2d') as CanvasRenderingContext2D).drawImage(bmp, 0, 0, c.width, c.height);
+  return await new Promise<Blob>((r, j) => c.toBlob(b => (b ? r(b) : j(new Error('Could not read that picture.'))), 'image/webp', 0.9));
+}
 export async function pickIcon(inp: HTMLInputElement) {
   keepForm();
-  const err = document.getElementById('tk_err');
-  try {
-    const f = inp.files && inp.files[0];
-    if (!f) return;
-    ICON = await prepIcon(f);
-    const p = document.getElementById('tk_prev');
-    if (p) p.innerHTML = `<img src="${ICON.url}">`;
-    if (err) err.textContent = '';
-  } catch (e: any) {
-    ICON = null;
-    if (err) err.textContent = String(e?.message || e);
-  }
+  const err = document.getElementById('tk_err'), st = document.getElementById('tk_ist');
+  const f = inp.files && inp.files[0];
+  if (!f) return;
+  ICON = null;
+  const say = (m: string) => { if (st) st.textContent = m; };
+  let tiny: { bytes: Uint8Array; mime: string; url: string } | null = null, tinyErr = '';
+  try { tiny = await prepIcon(f); } catch (e: any) { tinyErr = String(e?.message || e); }
+  const p = document.getElementById('tk_prev');
+  if (tiny && p) p.innerHTML = `<img src="${tiny.url}">`;
+  say('Uploading to network storage\u2026');
+  let ipfs = '';
+  try { ipfs = 'ipfs://' + (await ipfsAdd(await bigBlob(f), f.name.replace(/\.[^.]+$/, '') + '.webp')); } catch (e: any) { say(String(e?.message || e) + (tiny ? ' The small on-ledger icon will still be used.' : '')); }
+  if (!tiny && !ipfs) { if (err) err.textContent = tinyErr; if (p) p.innerHTML = '<span class="mut">icon</span>'; return; }
+  ICON = { bytes: tiny ? tiny.bytes : new Uint8Array(0), mime: tiny ? tiny.mime : '', url: tiny ? tiny.url : 'https://ipfs.io/ipfs/' + ipfs.slice(7), ipfs };
+  if (!tiny && p) p.innerHTML = `<img src="${ICON.url}">`;
+  if (ipfs) say('Uploaded. This picture will show for the token everywhere.');
+  if (err) err.textContent = '';
 }
 export async function create(btn: HTMLButtonElement) {
   keepForm();
@@ -212,7 +228,7 @@ export async function create(btn: HTMLButtonElement) {
     btn.disabled = true;
     const steps: [string, string][] = [];
     const draw = () => ctx.modal(`<h2>Creating ${esc(F.name)}</h2><div class="steps">${steps.map(([s, st]) => `<div class="step ${st}"><i>${st === 'ok' ? '✓' : st === 'run' ? '…' : st === 'bad' ? '✕' : '•'}</i>${esc(s)}</div>`).join('')}</div>${steps.some(x => x[1] === 'bad') ? '<button class="grow" onclick="window.closeModal()">Close</button>' : ''}`);
-    const names = ['Create the issuer wallet and keep its key in your vault', `Pay the ${FEE_LUMA} ${ctx.native()} creation fee to the genesis wallet`, 'Fund the issuer wallet', 'Set up the issuer (rippling for pools and trading) and record the token details', ...(ICON ? ['Store the icon on the ledger'] : []), 'Open your trust line to the new token', `Issue ${fmt(supply)} ${F.sym} to your wallet`, ...(F.lock ? ['Lock the supply forever'] : [])];
+    const names = ['Create the issuer wallet and keep its key in your vault', `Pay the ${FEE_LUMA} ${ctx.native()} creation fee to the genesis wallet`, 'Fund the issuer wallet', 'Set up the issuer (rippling for pools and trading) and record the token details', ...(ICON && ICON.bytes.length ? ['Store the icon on the ledger'] : []), 'Open your trust line to the new token', `Issue ${fmt(supply)} ${F.sym} to your wallet`, ...(F.lock ? ['Lock the supply forever'] : [])];
     names.forEach(n => steps.push([n, 'todo']));
     let k = 0;
     const run = async (fn: () => Promise<{ ok: boolean; msg?: string }>) => {
@@ -237,9 +253,9 @@ export async function create(btn: HTMLButtonElement) {
     await run(() => ctx.submit({ TransactionType: 'Payment', Account: acc, Destination: g, Amount: String(FEE_LUMA * 1e6), Memos: [{ Memo: { MemoType: hexOf(T_FEE), MemoData: hexOf(JSON.stringify({ v: 1, c: cur, i: issuer.classicAddress, n: F.name, s: supply })) } }] }));
     await run(() => ctx.submit({ TransactionType: 'Payment', Account: acc, Destination: issuer.classicAddress, Amount: String(Math.round(fund * 1e6)) }));
     await run(() =>
-      ctx.submitAs(issuer.seed as string, { TransactionType: 'AccountSet', Account: issuer.classicAddress, SetFlag: 8, Memos: [{ Memo: { MemoType: hexOf(T_INFO), MemoFormat: hexOf('application/json'), MemoData: hexOf(JSON.stringify({ n: F.name, d: F.desc, w: F.site })) } }] })
+      ctx.submitAs(issuer.seed as string, { TransactionType: 'AccountSet', Account: issuer.classicAddress, SetFlag: 8, Memos: [{ Memo: { MemoType: hexOf(T_INFO), MemoFormat: hexOf('application/json'), MemoData: hexOf(JSON.stringify({ n: F.name, d: F.desc, w: F.site, ...(ICON && ICON.ipfs ? { i: ICON.ipfs } : {}) })) } }] })
     );
-    if (ICON) {
+    if (ICON && ICON.bytes.length) {
       const ic = ICON;
       await run(() => ctx.submitAs(issuer.seed as string, { TransactionType: 'AccountSet', Account: issuer.classicAddress, Memos: [{ Memo: { MemoType: hexOf(T_ICON), MemoFormat: hexOf(ic.mime), MemoData: Array.from(ic.bytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase() } }] }));
     }

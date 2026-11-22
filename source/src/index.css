@@ -1338,3 +1338,10 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 }
 @media(max-width:759px){.top{padding-right:.9rem!important}.top .acrow select{min-width:3.9rem!important;max-width:5rem!important}}
 @media(max-width:390px){.top{padding-left:3.1rem!important;gap:.2rem!important}.top h1{font-size:.72rem!important}.top .sw button{padding:.2rem .34rem!important;font-size:.54rem!important}.top .acrow button{padding:.24rem .3rem!important;font-size:.52rem!important}.top .acrow select{min-width:3.2rem!important;max-width:4rem!important;font-size:.54rem!important}}
+
+/* full-screen page (replaces pop-ups for long forms; scrolls on phones) */
+.modal.pg{display:block!important;place-items:unset;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:0;background:var(--bg,#08030f);backdrop-filter:none;z-index:95}
+.modal.pg .pgbar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:.8rem;padding:calc(.7rem + env(safe-area-inset-top)) 1rem .7rem;background:rgba(8,3,18,.94);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.modal.pg .pgbar button{border:1px solid var(--line);background:transparent;color:inherit;border-radius:.8rem;padding:.4rem .8rem;font-size:.85rem}
+.modal.pg .pgc{width:min(40rem,100%)!important;max-width:none!important;max-height:none!important;overflow:visible!important;margin:0 auto;padding:1rem 1rem calc(3rem + env(safe-area-inset-bottom));border:0;background:transparent;box-shadow:none}
+.modal.pg .pgc input[type=file]{width:100%;font-size:.85rem}

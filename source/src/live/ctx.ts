@@ -16,6 +16,7 @@ export interface Ctx {
   submitAs: (seed: string, tx: any) => Promise<{ ok: boolean; msg?: string; hash?: string }>;
   addWallet: (label: string, seed: string, address: string) => Promise<void>;
   modal: (html: string) => void;
+  page: (html: string, title?: string) => void;
   closeModal: () => void;
   showL: (r: string) => string; // classic -> L/T address of the active LUMA network
   book?: () => Array<{ name: string; addr: string }>; // saved contacts
@@ -41,6 +42,7 @@ export const ctx: Ctx = {
   submitAs: nope as any,
   addWallet: nope as any,
   modal: () => {},
+  page: () => {},
   closeModal: () => {},
   showL: r => r,
   xrpl: () => false,
