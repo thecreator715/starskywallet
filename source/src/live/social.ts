@@ -307,7 +307,7 @@ const rich = (txt: string) => txt.split(TOK).map((part, i) => {
 }).join('');
 const tagsIn = (txt: string) => Array.from(new Set((txt.match(/#[\p{L}\p{N}_]{1,40}/gu) || []).map(x => x.slice(1).toLowerCase())));
 const cashIn = (txt: string) => Array.from(new Set((txt.match(/\$[A-Za-z][A-Za-z0-9]{1,9}/g) || []).map(x => x.toLowerCase())));
-const likeN = (id: string) => (IX.likes.get(id) || new Set()).size, rtN = (id: string) => (IX.rts.get(id) || new Set()).size, repN = (id: string) => (IX.replies.get(id) || []).filter(x => !IX.posts.get(x)?.del && !isMuted(IX.posts.get(x)!.a)).length;
+const likeN = (id: string) => (IX.likes.get(id) || new Set()).size, rtN = (id: string) => (IX.rts.get(id) || new Set()).size, repN = (id: string) => (IX.replies.get(id) || []).filter(x => !IX.posts.get(x)?.del && !isMuted(IX.posts.get(x)!.a)).length + (IX.tipsRef.get(id) || []).length;
 const rxN = (id: string) => (IX.rx.get(id) || new Map()).size;
 const iLike = (id: string) => !!me() && (IX.likes.get(id) || new Set()).has(me()), iRt = (id: string) => !!me() && (IX.rts.get(id) || new Set()).has(me());
 const folN = (a: string) => (IX.followers.get(a) || new Set()).size, fwgN = (a: string) => (IX.follows.get(a) || new Set()).size;
@@ -627,12 +627,13 @@ function nftTab(a: string): string {
   const c = NFTS.get(a); if (!c) { void loadNfts(a).then(() => { paint(); }); return skeleton(2); }
   return `<div style="padding:10px">${a === me() ? '<div class="sc-m" style="margin-bottom:8px">Tap Share to post one of your NFTs with a check that you own it.</div>' : ''}${nftGrid(c.list, false, a === me())}</div>`;
 }
+const tipComment = (tp: Tip): string => `<div class="sc-post" style="display:flex;gap:10px;padding:12px;border-bottom:1px solid var(--sl);background:linear-gradient(90deg,rgba(251,191,36,.10),transparent)">${avatar(tp.by)}<div style="flex:1;min-width:0"><div><b data-act="user" data-v="${tp.by}" style="cursor:pointer">${esc(nameOf(tp.by))}</b> <span class="sc-m">${esc(tagOf(tp.by))} · ${ago(tp.t)}</span></div><div style="color:#fcd34d;font-weight:700;margin-top:2px">${ic('coin', 15)} Tipped ${fmt(tp.v, 4)} ${esc(tokName(tp.c))} to ${esc(nameOf(tp.to))}</div>${tp.m ? `<div style="margin-top:4px;word-break:break-word">${esc(tp.m)}</div>` : ''}</div></div>`;
 function threadView(id: string): string {
   const p = IX.posts.get(id); if (!p) return `<div class="sc-empty">${S.loaded ? 'This post was not found.' : 'Reading the chain…'}</div>`;
   const chain: Post[] = []; let cur: Post | undefined = p; while (cur && cur.r && chain.length < 12) { cur = IX.posts.get(cur.r); if (cur) chain.unshift(cur); }
   const replies = (IX.replies.get(id) || []).map(x => IX.posts.get(x)!).filter(x => x && !x.del && !isMuted(x.a)).sort((a, b) => score(b) - score(a) || b.t - a.t);
   const likers = Array.from(IX.likes.get(id) || []).slice(0, 8), tips = IX.tipsRef.get(id) || [];
-  return `${chain.map(c => postCard(c)).join('')}<div style="border-bottom:1px solid var(--sl)">${postCard(p, { full: true })}${likers.length ? `<div class="sc-m" style="padding:0 12px 14px">Liked by ${likers.map(a => esc(nameOf(a))).join(', ')}${likeN(id) > likers.length ? ' and ' + (likeN(id) - likers.length) + ' more' : ''}</div>` : ''}${tips.length ? `<div class="sc-m" style="padding:0 12px 14px;color:#fcd34d">${ic('coin', 14)} ${totalStr(tips)} tipped by ${new Set(tips.map(t => t.by)).size} people</div>` : ''}</div>${composer({ reply: id })}${replies.length ? replies.map(r => postCard(r)).join('') : '<div class="sc-empty">No replies yet.</div>'}`;
+  return `${chain.map(c => postCard(c)).join('')}<div style="border-bottom:1px solid var(--sl)">${postCard(p, { full: true })}${likers.length ? `<div class="sc-m" style="padding:0 12px 14px">Liked by ${likers.map(a => esc(nameOf(a))).join(', ')}${likeN(id) > likers.length ? ' and ' + (likeN(id) - likers.length) + ' more' : ''}</div>` : ''}${tips.length ? `<div class="sc-m" style="padding:0 12px 14px;color:#fcd34d">${ic('coin', 14)} ${totalStr(tips)} tipped by ${new Set(tips.map(t => t.by)).size} people</div>` : ''}</div>${composer({ reply: id })}${tips.filter(x => !isMuted(x.by)).sort((x, y) => y.t - x.t).map(tipComment).join('')}${replies.length ? replies.map(r => postCard(r)).join('') : (tips.length ? '' : '<div class="sc-empty">No replies yet.</div>')}`;
 }
 function searchView(q: string): string {
   const needle = q.trim().toLowerCase().replace(/^[#@]/, ''); if (!needle) return '<div class="sc-empty">Type something to search.</div>';
