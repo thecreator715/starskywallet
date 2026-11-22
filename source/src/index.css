@@ -1300,3 +1300,6 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 @media(max-width:1099px){.acrow{flex-wrap:wrap;width:100%}}
 @media(min-width:1100px){.top .ts{padding:.2rem .5rem}.top .ts small{font-size:.52rem}.top .ts b{font-size:.8rem}.top .acrow select{max-width:185px;padding:.4rem .6rem;font-size:.8rem}.top .acrow button{padding:.38rem .6rem;font-size:.76rem}.top .pill{padding:.35rem .7rem;font-size:.8rem}.top .sw button{padding:.35rem .8rem}}
 @media(min-width:1100px) and (max-width:1300px){.top .acrow button:nth-child(3){display:none}}
+
+#sc-lbx{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out}#sc-lbx img{max-width:96vw;max-height:92vh;width:auto;height:auto;object-fit:contain;border-radius:10px}
+.sc-lbx-x{all:unset;position:absolute;top:14px;right:14px;width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
