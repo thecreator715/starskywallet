@@ -1385,3 +1385,17 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 .tkl1,.tkl2{font-size:1em}.tkl3{font-size:.78em}.tkl4{font-size:.6em}.tkl5{font-size:.5em}.tkl6{font-size:.43em}
 .dxav2,.dxav,.dxchip,.coinimg+i{overflow:hidden}
 .dxchip .tkl{font-size:inherit}.dxchip .tkl4{font-size:.7em}.dxchip .tkl5{font-size:.6em}.dxchip .tkl6{font-size:.52em}
+/* trade detail: fit any phone width, nothing overlaps or runs off the right edge */
+.hd_ov{box-sizing:border-box;overflow-x:hidden}
+.hd_pg{box-sizing:border-box;width:100%;min-width:0;overflow:hidden}
+.hd_top{gap:.5rem}.hd_top .b{white-space:nowrap}
+.hd_top>span{flex:1 1 0;min-width:0}
+.hd_head{overflow-wrap:anywhere}
+.hd_head>span[style*="font-size"]{font-size:clamp(1.05rem,5.4vw,1.4rem)!important}
+.hd_r{flex-wrap:wrap;align-items:baseline;gap:.2rem .8rem;min-width:0}
+.hd_r>*{min-width:0}
+.hd_r>:first-child{flex:0 0 auto}
+.hd_r b,.hd_r>:last-child{flex:1 1 9rem;text-align:right;overflow-wrap:anywhere;word-break:break-word;min-width:0}
+.hd_r code,.hd_r .mono,.hd_r b.mono{font-size:.78rem;word-break:break-all;overflow-wrap:anywhere}
+.hd_pg .row{flex-wrap:wrap}.hd_pg .row .b{flex:1 1 auto}
+@media(max-width:520px){.hd_ov{padding:.6rem}.hd_pg{padding:.9rem;margin:1vh auto}.hd_r{padding:.55rem 0}.hd_r b,.hd_r>:last-child{flex-basis:100%;text-align:left}}
