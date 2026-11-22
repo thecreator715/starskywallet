@@ -1175,9 +1175,11 @@ const need = (): boolean => { const bl = blocked(); if (bl) { ctx.toast(bl, true
 const go = (v: View) => { hist.push(S.view); if (hist.length > 30) hist.shift(); S.view = v; S.shown = 25; S.err = ''; window.scrollTo({ top: 0 }); paint(); };
 const mcard = (inner: string, w = 400) => `<div class="card" style="width:min(${w}px,92vw);max-width:94vw;max-height:88vh;overflow-y:auto;overflow-x:hidden;box-sizing:border-box">${inner}</div>`;
 const mi = (icon: string, label: string, fn: string, cls = '') => `<button class="sc-mi ${cls}" onclick="${fn}">${ic(icon, 19)}<span>${label}</span></button>`;
-const PRETTY = /(^|\.)starsky-luma\.org$/i.test(location.hostname);
+const LOCALH = /^(localhost|127\.|\[::1\]|0\.0\.0\.0)/i.test(location.hostname) || /\.local$/i.test(location.hostname);
+const PRETTY = !LOCALH;   // shared links always use the official address, whichever address you opened Starsky from
+const SHAREBASE = 'https://www.starsky-luma.org';
 const linkFor = (kind: string, id: string) => {
-  if (PRETTY) { const o = location.origin, k = ({ post: 'p', u: 'u', tag: 't', ref: 'r', l: 'l' } as any)[kind]; if (k) return o + '/' + k + '/' + encodeURIComponent(kind === 'post' ? id.slice(0, 12).toLowerCase() : id); }
+  if (PRETTY) { const o = SHAREBASE, k = ({ post: 'p', u: 'u', tag: 't', ref: 'r', l: 'l' } as any)[kind]; if (k) return o + '/' + k + '/' + encodeURIComponent(kind === 'post' ? id.slice(0, 12).toLowerCase() : id); }
   return location.href.split(/[?#]/)[0] + '?social=' + kind + ':' + encodeURIComponent(id);
 };
 function postMenu(id: string) {
