@@ -2053,13 +2053,13 @@ function renderWalletsView(a: AccountData | undefined, n: NetworkDef) {
       <!-- Wallet List -->
       <div class="tile c7">
         <div class="k">Stored ${isLuma ? 'LUMA' : 'XRPL'} Wallets in Vault</div>
-        <div class="list" style="margin-top:.6rem">
+        <div class="wlist" style="margin-top:.6rem">
           ${
             currentModeAccounts.map(x => {
               const isActive = a && x.id === a.id;
               const displayAddr = isLuma ? showAddr(x.address) : x.address;
               return `
-                <div style="padding:.9rem;border-radius:.9rem;border:1px solid ${isActive ? 'var(--ok)' : 'var(--line)'};background:${isActive ? 'rgba(0,255,140,0.05)' : 'rgba(255,255,255,0.02)'};margin-bottom:.6rem">
+                <div class="wcard" style="padding:.9rem;border-radius:.9rem;border:1px solid ${isActive ? 'var(--ok)' : 'var(--line)'};background:${isActive ? 'rgba(0,255,140,0.05)' : 'rgba(255,255,255,0.02)'};margin-bottom:.6rem">
                   <div class="row">
                     <b style="font-size:1.05rem">${esc(x.label)}</b>
                     ${isActive ? '<span class="chip ok">Active</span>' : ''}
