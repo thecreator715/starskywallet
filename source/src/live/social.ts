@@ -1576,3 +1576,6 @@ export async function mount() {
 }
 function stop() { if (timer) { clearInterval(timer); timer = 0; } if (kd) { document.removeEventListener('keydown', kd); kd = null; } }
 export function unmount() { stop(); bound = null; }
+
+/** Post from another page (e.g. a trade card): text plus one picture link. */
+export async function postExternal(text: string, media: string) { S.draft = text; S.media = media; S.nft = null as any; await doPost('', ''); if (S.err) { const e = S.err; S.err = ''; throw new Error(e); } }

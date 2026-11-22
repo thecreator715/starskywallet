@@ -15,6 +15,7 @@ import { Asset, akey, esc, fmt, fromKey, hexName, isNative, pctHtml, short, usd,
 import { cached, pool as poolMap, tryReq, header } from './chain.ts';
 import { detectGenesis } from './supply.ts';
 import { chartSvg } from './dexchart.ts';
+import { openShare } from './pnlcard.ts';
 
 export const MEMO = 'luma-margin';
 export const FEE_OPEN = 0.0005; // of notional, at open
@@ -586,10 +587,10 @@ export function openRows(list: Live[], actions = true) {
   }</tbody></table>`;
 }
 export function histRows(list: Pos[]) {
-  return `<table class="dxt"><thead><tr><th>Market</th><th>Side</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Exit</th><th>Result</th><th class="r">PnL</th><th class="r">Paid out</th><th class="r">Held</th><th class="r">Closed</th></tr></thead><tbody>${
+  return `<table class="dxt"><thead><tr><th>Market</th><th>Side</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Exit</th><th>Result</th><th class="r">PnL</th><th class="r">Paid out</th><th class="r">Held</th><th class="r">Closed</th><th></th></tr></thead><tbody>${
     list
-      .map(p => `<tr><td><b>${esc(nmS(p.key))}</b></td><td><span class="chip ${sd(p.key, p.long) ? '' : 'bad'}">${sd(p.key, p.long) ? 'LONG' : 'SHORT'} ${p.lev}x</span></td><td class="r">${fmt(p.n)}</td><td class="r mono">${pxk(p.key, p.pe)}</td><td class="r mono">${pxk(p.key, p.px)}</td><td><span class="chip ${p.why === 'liq' ? 'bad' : p.why === 'tp' ? '' : 'b'}">${esc(WHY[p.why] || p.why)}</span></td><td class="r">${p.why === 'reject' ? '–' : pnlTxt(p.pay - p.coll)}</td><td class="r">${fmt(p.pay, 4)}</td><td class="r mut">${dur(p.endMs - p.ms)}</td><td class="r mut">${ago(Date.now() - p.endMs)}</td></tr>`)
-      .join('') || '<tr><td colspan="10" class="mut" style="padding:1rem">No closed positions yet.</td></tr>'
+      .map(p => `<tr><td><b>${esc(nmS(p.key))}</b></td><td><span class="chip ${sd(p.key, p.long) ? '' : 'bad'}">${sd(p.key, p.long) ? 'LONG' : 'SHORT'} ${p.lev}x</span></td><td class="r">${fmt(p.n)}</td><td class="r mono">${pxk(p.key, p.pe)}</td><td class="r mono">${pxk(p.key, p.px)}</td><td><span class="chip ${p.why === 'liq' ? 'bad' : p.why === 'tp' ? '' : 'b'}">${esc(WHY[p.why] || p.why)}</span></td><td class="r">${p.why === 'reject' ? '–' : pnlTxt(p.pay - p.coll)}</td><td class="r">${fmt(p.pay, 4)}</td><td class="r mut">${dur(p.endMs - p.ms)}</td><td class="r mut">${ago(Date.now() - p.endMs)}</td><td>${p.why === 'reject' ? '' : `<button class="sm" onclick="window.mg.share('${p.id}')">Share</button>`}</td></tr>`)
+      .join('') || '<tr><td colspan="11" class="mut" style="padding:1rem">No closed positions yet.</td></tr>'
   }</tbody></table>`;
 }
 const stats = (live: Live[], closed: Pos[]) => {
@@ -748,6 +749,11 @@ export function ticketHtml(key: string, asLong: boolean, label: string) {
     <div class="mut" style="font-size:.72rem;margin-top:.4rem">Margin is sent to the genesis wallet. The operator settles stop loss, take profit, liquidation and closes. You cannot lose more than your margin.</div></div>`;
 }
 export const mgApi: any = {
+  share(id: string) {
+    const p: Pos | undefined = MG.mine.find((x: Pos) => x.id === id); if (!p) return;
+    const pnl = p.pay - p.coll, long = sd(p.key, p.long);
+    void openShare({ market: nmS(p.key), long, lev: p.lev, entry: pxk(p.key, p.pe), exit: pxk(p.key, p.px), size: p.n, margin: p.coll, pnl, roe: p.coll ? pnl / p.coll : 0, held: dur(p.endMs - p.ms), result: WHY[p.why] || p.why, when: p.endMs || Date.now(), unit: nat() });
+  },
   chartPair(k: string) { CH.key = k; CH.ck = ''; drawChart(); },
   chartRange(r: string) { CH.range = r; CH.ck = ''; drawChart(); },
   recall() { return recall(); },
