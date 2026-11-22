@@ -372,13 +372,13 @@ const totalStr = (list: Tip[], max = 3) => { const t = totals(list), s = t.slice
 // ---------- sending ----------
 function memoFor(d: any) { return [{ Memo: { MemoType: toHex(MT), MemoData: toHex(JSON.stringify({ v: 1, ...d })) } }]; }
 const drops = (n: number) => String(Math.max(1, Math.round(n * 1e6)));
-async function pay(dest: string, amount: any, d: any, label: string): Promise<{ ok: boolean; hash?: string; msg?: string }> {
+async function pay(dest: string, amount: any, d: any, label: string, extra: any = {}): Promise<{ ok: boolean; hash?: string; msg?: string }> {
   if (ctx.xrpl()) return { ok: false, msg: 'LUMA Social works with your LUMA wallet. Switch the wallet type to LUMA.' };
   if (!me()) return { ok: false, msg: 'Create or open a LUMA wallet first.' };
   if (!dest) return { ok: false, msg: 'The Social hub address is not set.' };
   const json = JSON.stringify({ v: 1, ...d }); if (enc.encode(json).length > MAXMEMO) return { ok: false, msg: 'That is too long to store in one transaction. Shorten the text or remove a link.' };
   S.busy = true; S.step = label; paint();
-  try { return await ctx.submit({ TransactionType: 'Payment', Account: me(), Destination: dest, Amount: amount, Memos: memoFor(d) }); }
+  try { return await ctx.submit({ TransactionType: 'Payment', Account: me(), Destination: dest, Amount: amount, ...extra, Memos: memoFor(d) }); }
   catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
   finally { S.busy = false; S.step = ''; }
 }
@@ -1246,12 +1246,28 @@ function keysModal() {
 // ---------- tipping: any amount, any token you hold ----------
 interface TipOpt { c: string; i: string; name: string; bal: number; ok: boolean }
 let TS: { ref: string; to: string; opts: TipOpt[]; sel: number; amt: string; note: string; load: boolean; err: string; busy: boolean } | null = null;
+async function allLines(acct: string): Promise<any[]> {
+  const out: any[] = []; let marker: any;
+  for (let i = 0; i < 6; i++) { const r = await ctx.req('account_lines', { account: acct, ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) }).catch(() => null); if (!r) break; out.push(...(r.lines || [])); marker = r.marker; if (!marker) break; }
+  return out;
+}
+const RATES = new Map<string, { r: number; at: number }>();
+/** the issuer's transfer fee as a multiplier (1 = no fee). A holder paying a token that has a fee must allow for it with SendMax, or the payment fails. */
+async function rateOf(issuer: string): Promise<number> {
+  const c = RATES.get(issuer); if (c && Date.now() - c.at < 300000) return c.r;
+  let r = 1; try { const i = await ctx.req('account_info', { account: issuer, ledger_index: 'validated' }); const tr = Number(i?.account_data?.TransferRate || 0); if (tr > 1e9) r = tr / 1e9; } catch { /* assume no fee */ }
+  RATES.set(issuer, { r, at: Date.now() }); return r;
+}
 async function loadHold(to: string): Promise<TipOpt[]> {
   const m = me(), out: TipOpt[] = [];
-  const [ai, al, bl] = await Promise.all([ctx.req('account_info', { account: m, ledger_index: 'validated' }).catch(() => null), ctx.req('account_lines', { account: m, ledger_index: 'validated', limit: 400 }).catch(() => ({ lines: [] })), ctx.req('account_lines', { account: to, ledger_index: 'validated', limit: 400 }).catch(() => ({ lines: [] }))]);
+  const [ai, al, bl] = await Promise.all([ctx.req('account_info', { account: m, ledger_index: 'validated' }).catch(() => null), allLines(m), allLines(to)]);
   const lum = ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0; out.push({ c: 'LUMA', i: '', name: 'LUMA', bal: lum, ok: true });
-  const theirs = new Set(((bl && bl.lines) || []).map((l: any) => l.currency + '|' + l.account));
-  for (const l of (al && al.lines) || []) { const bal = Number(l.balance); if (!(bal > 0)) continue; out.push({ c: l.currency, i: l.account, name: hexName(l.currency), bal, ok: l.account === to || theirs.has(l.currency + '|' + l.account) }); }
+  const theirs = new Set(bl.map((l: any) => l.currency + '|' + l.account));
+  const mine = al.filter((l: any) => Number(l.balance) > 0), iss = Array.from(new Set(mine.map((l: any) => String(l.account)))).filter(x => x !== m && x !== to).slice(0, 40);
+  const rates = new Map<string, number>(); await Promise.all(iss.map(async x => { rates.set(x, await rateOf(x)); }));
+  for (const l of mine) { const bal = Number(l.balance), rate = l.account === to ? 1 : rates.get(l.account) || 1; out.push({ c: l.currency, i: l.account, name: hexName(l.currency), bal, rate, ok: l.account === to || theirs.has(l.currency + '|' + l.account) } as any); }
+  // the wallet that issued tokens (the Genesis wallet) holds none of its own: it can send as much as it likes, so list what it issued
+  try { const gb = await ctx.req('gateway_balances', { account: m, ledger_index: 'validated' }); for (const [cur, v] of Object.entries((gb && gb.obligations) || {})) { const tot = Number(v); if (tot > 0) out.push({ c: cur, i: m, name: hexName(cur), bal: Math.max(tot * 1000, 1e12), rate: 1, ok: theirs.has(cur + '|' + m) } as any); } } catch { /* not an issuer */ }
   return out.sort((a, b) => (a.name === 'LUMA' ? -1 : b.name === 'LUMA' ? 1 : Number(b.ok) - Number(a.ok) || a.name.localeCompare(b.name)));
 }
 function tipModal(ref: string, to: string) {
@@ -1260,7 +1276,7 @@ function tipModal(ref: string, to: string) {
   TS = { ref: to ? '' : ref, to: a, opts: [], sel: 0, amt: '1', note: '', load: true, err: '', busy: false }; renderTip();
   void loadHold(a).then(o => { if (!TS || TS.to !== a) return; TS.opts = o; TS.load = false; renderTip(); }).catch(() => { if (TS) { TS.load = false; TS.opts = [{ c: 'LUMA', i: '', name: 'LUMA', bal: 0, ok: true }]; renderTip(); } });
 }
-const pres = (o: TipOpt) => (o.name === 'LUMA' ? [1, 5, 25, 100].map(n => ({ l: String(n), v: String(n) })) : [0.1, 0.25, 0.5, 1].map(f => ({ l: f === 1 ? 'Max' : f * 100 + '%', v: String(Number((o.bal * f).toPrecision(6))) })));
+const pres = (o: TipOpt) => (o.name === 'LUMA' ? [1, 5, 25, 100].map(n => ({ l: String(n), v: String(n) })) : [0.1, 0.25, 0.5, 1].map(f => ({ l: f === 1 ? 'Max' : f * 100 + '%', v: String(Number((o.bal / ((o as any).rate || 1) * f).toPrecision(6))) })));
 function renderTip() {
   const t = TS; if (!t) return; const o = t.opts[t.sel], a = t.to;
   ctx.modal(mcard(`<div class="k">Send a tip</div><div class="sc-row" style="margin:10px 0">${avatar(a, 42)}<div><b>${esc(nameOf(a))}</b>${badge(a)}<div class="sc-m">${esc(tagOf(a))}${t.ref ? ' · for this post' : ''}</div></div></div>
@@ -1274,11 +1290,12 @@ function renderTip() {
 async function tipSend() {
   const t = TS; if (!t || t.busy) return; const o = t.opts[t.sel]; if (!o || !o.ok) return; sc.tipUpd();
   const n = Number(t.amt); if (!(n > 0) || !isFinite(n)) { t.err = 'Enter an amount above zero.'; renderTip(); return; }
-  if (n > o.bal) { t.err = `You only hold ${fmt(o.bal, 6)} ${o.name}.`; renderTip(); return; }
+  const rate: number = (o as any).rate || 1; if (n * rate > o.bal * 1.0000001) { t.err = rate > 1 ? `This token has a ${((rate - 1) * 100).toFixed(2)}% transfer fee, so the most you can send is ${fmt(o.bal / rate, 6)} ${o.name}.` : `You only hold ${fmt(o.bal, 6)} ${o.name}.`; renderTip(); return; }
   let amount: any; try { amount = amtTx(o.name === 'LUMA' ? { c: 'native', i: '' } : { c: o.c, i: o.i }, n); } catch (e: any) { t.err = String(e?.message || e); renderTip(); return; }
   t.busy = true; t.err = ''; renderTip();
   const note = t.note.trim().slice(0, 60), memo: any = { t: 'tip' }; if (t.ref) memo.ref = t.ref; if (note) memo.m = note;
-  const r = await pay(t.to, amount, memo, 'Sending tip…');
+  const sm = rate > 1 && o.name !== 'LUMA' ? { SendMax: { currency: o.c, issuer: o.i, value: String(Number((n * rate * 1.000001).toPrecision(15))) } } : {};
+  const r = await pay(t.to, amount, memo, 'Sending tip…', sm);
   if (!r.ok || !r.hash) { t.busy = false; t.err = r.msg || 'The tip was not sent.'; renderTip(); return; }
   const to = t.to, ref = t.ref; TS = null; ctx.closeModal();
   const th = r.hash.toUpperCase(); TV[th] = { by: me(), to, c: o.name === 'LUMA' ? 'LUMA' : o.c, i: o.i, v: n };
