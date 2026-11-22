@@ -1191,6 +1191,7 @@ export const sc: any = {
   dtog(id: string) { const c = dashCfg(), i = c.off.indexOf(id); if (i >= 0) c.off.splice(i, 1); else c.off.push(id); saveDash(c); paint(); custModal(); },
   dmove(id: string, d: number) { const c = dashCfg(), i = c.order.indexOf(id), j = i + d; if (i < 0 || j < 0 || j >= c.order.length) return; c.order.splice(j, 0, c.order.splice(i, 1)[0]); saveDash(c); paint(); custModal(); },
   dreset() { LS.set(dashKey(), {}); paint(); custModal(); },
+  shareNft(id: string) { const el = document.createElement('i'); el.dataset.act = 'nftshare'; el.dataset.v = id; void onClick(el, new Event('click')); },
   async upload(inp: HTMLInputElement, kind: string) {
     const files = inp.files; if (!files || !files.length || UP || !need()) { inp.value = ''; return; } UP = true;
     try {

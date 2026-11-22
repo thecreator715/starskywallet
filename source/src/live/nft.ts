@@ -1154,8 +1154,10 @@ const nsApi: any = {
       await refresh(true);
       ST.busy = false;
       const key = me() + ':' + taxon;
+      const shareId: string = (ST.coverId && ST.coverId !== 'minted' ? ST.coverId : '') || (ST.items.find((x: any) => x.id) || {}).id || '', shareName: string = ST.items[0] ? ST.items[0].name : (ST.coll || 'NFT');
       ST.items = []; ST.cover = null; ST.coverId = ''; ST.coverUri = ''; ST.coverUrl = ''; ST.log = ''; ST.prog = 0;
       if (coll) collPage(key); else (window as any).goTab('nfts');
+      if (shareId && (window as any).sc && !xr()) setTimeout(() => ctx.modal(`<h2>Minted!</h2><p class="mut">Share <b>${esc(shareName)}</b> on your LUMA Social profile? Followers will see it with a check that you own it.</p><div class="row" style="gap:.5rem"><button class="pri acc grow" onclick="window.nm.shareSoc('${shareId}')">Share to my profile</button><button class="grow" onclick="window.nm.shareSoc('')">Not now</button></div>`), 400);
     } catch (e: any) {
       ST.busy = false;
       msg(String(e?.message || e));
@@ -1265,6 +1267,7 @@ const cpApi: any = {
 (window as any).cp = cpApi;
 
 export const nmApi = {
+  shareSoc(id: string) { ctx.closeModal(); if (id) (window as any).sc.shareNft(id); },
   tab(k: string) { NF.tab = k; NF.page = 0; paint(); },
   search(v: string) { NF.q = v; NF.page = 0; paintMarket(); },
   sort(v: string) { const [k, d] = v.split(':'); NF.sort = k; NF.sdir = +d || 1; NF.page = 0; paintMarket(); },
