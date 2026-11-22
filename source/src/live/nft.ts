@@ -5,6 +5,7 @@ import { ctx } from './ctx.ts';
 import * as M from './market.ts';
 import { Asset, akey, esc, fmt, hexName, rippleToMs, short, usd, ago } from './util.ts';
 import { cached, pool as poolMap, tryReq, info } from './chain.ts';
+import * as NP from './nftplus.ts';
 
 const $ = (id: string) => document.getElementById(id);
 const setHtml = (id: string, h: string) => {
@@ -554,12 +555,16 @@ async function refresh(force: boolean) {
 const priceCell = (o: Offer | null) => (o ? `<b>${esc(priceTxt(o.amt))}</b> <small class="mut">${usdTxt(priceN(o.amt))}</small>` : '<span class="mut">not listed</span>');
 const card = (i: Item) => {
   const o = listingOf(i.id);
-  return `<div class="nfcard" onclick="window.nm.open('${i.id}')">${img(i)}<div class="nfb"><b>${esc(nameOf(i))}</b><small class="mut">${esc(collName(NF.items.filter((x: Item) => collKey(x) === collKey(i))))}</small><div class="nfp">${priceCell(o)}</div></div></div>`;
+  const rk = RAR().get(i.id), fv = favs().includes(i.id), us = o ? usdTxt(priceN(o.amt)) : '';
+  void us;
+  return `<div class="nfcard" onclick="window.nm.open('${i.id}')"><div class="nfimgw">${img(i)}<button class="nffav ${fv ? 'on' : ''}" title="${fv ? 'Remove from favorites' : 'Add to favorites'}" onclick="event.stopPropagation();window.nm.fav('${i.id}')">${fv ? '♥' : '♡'}</button>${rk && rk.pct <= 10 ? `<span class="nfrar">Top ${Math.max(1, Math.round(rk.pct))}%</span>` : ''}${o ? '<span class="nfsale">For sale</span>' : ''}</div><div class="nfb"><b>${esc(nameOf(i))}</b><small class="mut">${esc(collName(NF.items.filter((x: Item) => collKey(x) === collKey(i))))}</small><div class="nfp">${priceCell(o)}</div></div></div>`;
 };
 function filtered(): Item[] {
   const q = NF.q.trim().toLowerCase();
   let l: Item[] = visItems().filter((i: Item) => !NF.coll || collKey(i) === NF.coll);
   if (q) l = l.filter(i => { const o = listingOf(i.id); return (nameOf(i) + ' ' + collName(NF.items.filter((x: Item) => collKey(x) === collKey(i))) + ' ' + i.id + ' ' + i.owner + ' ' + (o ? o.amt.cur + ' ' + o.amt.v : 'not listed')).toLowerCase().includes(q); });
+  if (NF.st === 'fav') l = l.filter(i => favs().includes(i.id));
+  if (NF.traits && Object.keys(NF.traits).length) { const want: Record<string, string[]> = NF.traits; l = l.filter(i => Object.entries(want).every(([k, vs]) => !vs.length || ((NF.meta.get(i.id) as Meta | null)?.attrs || []).some(a => a.k === k && vs.includes(a.v)))); }
   if (NF.st === 'listed') l = l.filter(i => !!listingOf(i.id)); else if (NF.st === 'unlisted') l = l.filter(i => !listingOf(i.id)); else if (NF.st === 'mine') l = l.filter(i => i.owner === me());
   const lo = parseFloat(NF.pmin), hi = parseFloat(NF.pmax);
   if (lo >= 0 || hi >= 0) l = l.filter(i => { const o = listingOf(i.id), p = o ? priceN(o.amt) : null; return p != null && (!(lo >= 0) || p >= lo) && (!(hi >= 0) || p <= hi); });
@@ -574,6 +579,7 @@ function filtered(): Item[] {
       case 'tok': return o ? o.amt.cur : null;
       case 'owner': return i.owner;
       case 'roy': return i.fee;
+      case 'rarity': return RAR().get(i.id)?.rank ?? 1e9;
       default: return i.serial;
     }
   };
@@ -624,6 +630,7 @@ const i2 = (a: string) => (a === me() ? 'you' : esc(sh(a)));
 export function marketShell() {
   return `<div id="nm" class="nwpage nmpro">
     <div id="nm_stats" class="pgrid nwk" style="margin-bottom:1rem"></div>
+    <div id="nm_pro"></div>
     <div id="nm_diag"></div>
     <div id="nm_hero"><div class="mut" style="padding:1rem">Reading NFTs from the ledger…</div></div>
     <div class="nmh"><h3>Trending now</h3><small class="mut">listed pieces, highest first</small></div><div id="nm_four" class="nf4"></div>
@@ -634,15 +641,15 @@ export function marketShell() {
         <div class="seg" id="nm_tabs" style="flex:none">${[['items', 'All NFTs'], ['collections', 'Collections'], ['activity', 'Sales & activity']].map(([k, l]) => `<button data-k="${k}" class="${NF.tab === k ? 'on' : ''}" onclick="window.nm.tab('${k}')">${l}</button>`).join('')}</div>
         <input id="nm_q" placeholder="Search name, collection, ID, owner" value="${esc(NF.q)}" oninput="window.nm.search(this.value)" style="flex:1 1 11rem;min-width:9rem">
         <span id="nm_flt" style="display:contents">
-          <select id="nm_st" title="Status" onchange="window.nm.fl('st',this.value)" style="flex:none">${[['all', 'All items'], ['listed', 'Listed'], ['unlisted', 'Not listed'], ['mine', 'Mine']].map(([k, t]) => `<option value="${k}" ${NF.st === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+          <select id="nm_st" title="Status" onchange="window.nm.fl('st',this.value)" style="flex:none">${[['all', 'All items'], ['listed', 'Listed'], ['unlisted', 'Not listed'], ['mine', 'Mine'], ['fav', 'Favorites']].map(([k, t]) => `<option value="${k}" ${NF.st === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <input id="nm_pmin" placeholder="Min" value="${esc(NF.pmin)}" inputmode="decimal" style="width:4.2rem;flex:none" onchange="window.nm.fl('pmin',this.value)"><input id="nm_pmax" placeholder="Max" value="${esc(NF.pmax)}" inputmode="decimal" style="width:4.2rem;flex:none" onchange="window.nm.fl('pmax',this.value)">
           <select id="nm_per" title="Rows per page" onchange="window.nm.fl('per',this.value)" style="flex:none">${[25, 50, 100, 200].map(n => `<option value="${n}" ${+NF.per === n ? 'selected' : ''}>${n}/page</option>`).join('')}</select>
         </span>
-        <select title="Sort" onchange="window.nm.sort(this.value)" style="flex:none">${[['new:-1', 'Newest'], ['new:1', 'Oldest'], ['price:1', 'Price ↑'], ['price:-1', 'Price ↓'], ['name:1', 'Name A–Z']].map(([k, l]) => `<option value="${k}" ${NF.sort + ':' + NF.sdir === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <span id="nm_vt" style="flex:none">${viewToggle()}</span>
+        <select title="Sort" onchange="window.nm.sort(this.value)" style="flex:none">${[['new:-1', 'Newest'], ['new:1', 'Oldest'], ['price:1', 'Price ↑'], ['price:-1', 'Price ↓'], ['name:1', 'Name A–Z'], ['rarity:1', 'Rarest first']].map(([k, l]) => `<option value="${k}" ${NF.sort + ':' + NF.sdir === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <span id="nm_vt" style="flex:none">${viewToggle()}</span><input type="range" min="150" max="320" step="10" value="${NF.dens || 200}" title="Card size" style="width:80px;flex:none" oninput="window.nm.dens(this.value)">
         <button class="sm ghost" style="flex:none" title="Export the filtered list as CSV" onclick="window.nm.csv()">⇩ CSV</button><button class="sm ghost" style="flex:none" onclick="window.nm.reset()">Reset</button>
         <button class="sm ghost" style="flex:none" onclick="window.nm.refresh()">Refresh</button><button class="sm pri acc" style="flex:none" onclick="window.nm.mint()">+ Mint</button></div>
-      <div id="nm_list" style="margin-top:.8rem"></div><div id="nm_pager" class="nmpg"></div></div></div>`;
+      <div id="nm_tr"></div><div id="nm_list" style="margin-top:.8rem"></div><div id="nm_pager" class="nmpg"></div></div></div>`;
 }
 export function marketMount() {
   clearInterval(NF.timer);
@@ -733,6 +740,7 @@ function paintMarket() {
     setHtml('nm_list', `<div style="overflow:auto">${actTable(NF.act.slice(0, 200))}</div>`);
   }
   setHtml('nm_pager', pager);
+  proEnhance();
 }
 
 /* ------------------------------ NFT detail: full page ------------------------------ */
@@ -1266,8 +1274,40 @@ const cpApi: any = {
 };
 (window as any).cp = cpApi;
 
+
+/* ------------------------------ marketplace pro layer: ticker, chips, traits, favorites, rarity ------------------------------ */
+const favs = (): string[] => { try { return JSON.parse(localStorage.getItem('nm.fav') || '[]') || []; } catch { return []; } };
+let RARC: { n: number; m: Map<string, { score: number; rank: number; pct: number }> } | null = null;
+const RAR = (): Map<string, { score: number; rank: number; pct: number }> => {
+  const items = visItems(), key = items.length + ':' + NF.meta.size;
+  if (RARC && (RARC as any).key === key) return RARC.m;
+  const g = new Map<string, Item[]>(); for (const i of items) (g.get(collKey(i)) || g.set(collKey(i), []).get(collKey(i))!).push(i);
+  const out = new Map<string, { score: number; rank: number; pct: number }>();
+  for (const [, l] of g) { if (l.length < 5) continue; const r = NP.rarity(l.map(i => ({ id: i.id, meta: { attrs: ((NF.meta.get(i.id) as Meta | null)?.attrs || []).map(a => ({ trait_type: a.k, value: a.v })) } }))); if (![...r.values()].some(x => x.score !== l.length)) continue; for (const [id, v] of r) out.set(id, v); }
+  RARC = { n: items.length, m: out }; (RARC as any).key = key; return out;
+};
+function proEnhance() {
+  try { const d = localStorage.getItem('nm.dens'); if (d && !NF.dens) { NF.dens = +d; document.documentElement.style.setProperty('--nfmin', d + 'px'); } } catch {}
+  const items = visItems(), sales: Act[] = (NF.act as Act[]).filter(a => a.sale).slice(0, 14), cols = collections().sort((a, b) => b.vol - a.vol || b.list.length - a.list.length).slice(0, 12), by = new Map(items.map(i => [i.id, i] as const));
+  const tick = sales.length ? `<div class="nftick"><span class="nftk_l">LIVE SALES</span><div class="nftk_r"><div class="nftk_t">${[...sales, ...sales].map(s => { const it = by.get(s.nft); return `<span class="nftk_i" onclick="window.nm.open('${s.nft}')"><b>${esc(it ? nameOf(it) : 'NFT')}</b> sold for <b>${esc(s.amt)}</b> <small class="mut">${ago(s.ms)}</small></span>`; }).join('')}</div></div></div>` : '';
+  const chips = `<div class="nfchips"><button class="${!NF.coll ? 'on' : ''}" onclick="window.nm.collf('')">All collections</button>${cols.map(c => `<button class="${NF.coll === c.k ? 'on' : ''}" onclick="window.nm.collf('${esc(c.k)}')">${esc(c.name)}<small>${c.list.length}</small></button>`).join('')}</div>`;
+  let bar = '';
+  if (NF.coll) { const c = collections().find(x => x.k === NF.coll); if (c) bar = `<div class="nfcbar"><div class="nfcb_i">${img(c.cover)}</div><div><b style="font-size:1.15rem">${esc(c.name)}</b><div class="nfcb_s"><span><small>Floor</small><b>${c.floor != null ? esc(fmt(c.floor)) + ' ' + esc(nat()) : '–'}</b></span><span><small>Items</small><b>${c.list.length}</b></span><span><small>Owners</small><b>${c.owners}</b></span><span><small>Listed</small><b>${c.listed}</b></span><span><small>Volume</small><b>${c.vol ? esc(fmt(c.vol)) : '–'}</b></span><span><small>Sales</small><b>${c.sales}</b></span></div></div></div>`; }
+  setHtml('nm_pro', tick + chips + bar);
+  const tr = $('nm_tr'); if (!tr) return;
+  const pool = items.filter(i => !NF.coll || collKey(i) === NF.coll), tc = NP.traitCounts(pool.map(i => ({ id: i.id, meta: { attrs: ((NF.meta.get(i.id) as Meta | null)?.attrs || []).map(a => ({ trait_type: a.k, value: a.v })) } })));
+  const keys = Object.keys(tc).filter(k => k && Object.keys(tc[k]).length > 1).slice(0, 12), act = Object.values(NF.traits || {}).reduce((n: number, a: any) => n + a.length, 0);
+  if (NF.tab !== 'items' || !keys.length) { setHtml('nm_tr', ''); return; }
+  setHtml('nm_tr', `<div style="margin-top:.7rem"><button class="sm ghost" onclick="window.nm.trOpen()">Traits${act ? ' (' + act + ')' : ''} ${NF.trOpen ? '▴' : '▾'}</button>${act ? '<button class="sm ghost" style="margin-left:.4rem" onclick="window.nm.traitsClear()">Clear traits</button>' : ''}${NF.trOpen ? `<div class="nftr">${keys.map(k => `<div><div class="k">${esc(k)}</div><div class="nftr_v">${Object.entries(tc[k]).sort((a, b) => b[1] - a[1]).slice(0, 14).map(([v, n]) => `<button class="${((NF.traits || {})[k] || []).includes(v) ? 'on' : ''}" onclick="window.nm.trait(${JSON.stringify(k).replace(/"/g, '&quot;')},${JSON.stringify(v).replace(/"/g, '&quot;')})">${esc(v)}<small>${n}</small></button>`).join('')}</div></div>`).join('')}</div>` : ''}</div>`);
+}
 export const nmApi = {
   shareSoc(id: string) { ctx.closeModal(); if (id) (window as any).sc.shareNft(id); },
+  fav(id: string) { const f = favs(), i = f.indexOf(id); if (i >= 0) f.splice(i, 1); else f.unshift(id); try { localStorage.setItem('nm.fav', JSON.stringify(f.slice(0, 500))); } catch {} paintMarket(); },
+  trait(k: string, v: string) { const w: Record<string, string[]> = (NF.traits = NF.traits || {}); const a = w[k] || (w[k] = []), i = a.indexOf(v); if (i >= 0) a.splice(i, 1); else a.push(v); if (!a.length) delete w[k]; NF.page = 0; paintMarket(); },
+  traitsClear() { NF.traits = {}; NF.page = 0; paintMarket(); },
+  trOpen() { NF.trOpen = !NF.trOpen; paintMarket(); },
+  collf(k: string) { NF.coll = NF.coll === k ? '' : k; NF.traits = {}; NF.tab = 'items'; NF.page = 0; paintMarket(); },
+  dens(v: string) { NF.dens = +v; try { localStorage.setItem('nm.dens', v); } catch {} document.documentElement.style.setProperty('--nfmin', v + 'px'); },
   tab(k: string) { NF.tab = k; NF.page = 0; paint(); },
   search(v: string) { NF.q = v; NF.page = 0; paintMarket(); },
   sort(v: string) { const [k, d] = v.split(':'); NF.sort = k; NF.sdir = +d || 1; NF.page = 0; paintMarket(); },
