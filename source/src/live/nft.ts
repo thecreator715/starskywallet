@@ -1361,3 +1361,12 @@ export async function ipfsAdd(blob: Blob, name: string): Promise<string> {
   const lines = (await r.text()).trim().split('\n'); const h = JSON.parse(lines[lines.length - 1]).Hash;
   if (!h) throw new Error('Picture storage did not return an address.'); return String(h);
 }
+
+/** open the mint studio with one image already loaded (used by Social: "Mint this picture as an NFT") */
+export async function mintFromImage(file: File, name: string, back = 'social') {
+  (window as any).goTab('nfts');
+  for (let i = 0; i < 30 && !($('nm') || $('mn') || $('nms')); i++) await new Promise(r => setTimeout(r, 100));
+  nsApi.open(back);
+  ST.coll = ''; ST.pat = name || '{coll} {n}';
+  await nsApi.add({ 0: file, length: 1, item: (k: number) => (k ? null : file), [Symbol.iterator]: function* () { yield file; } } as any);
+}

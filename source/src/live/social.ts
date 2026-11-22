@@ -5,7 +5,7 @@
 // No company server holds anything. Anyone can rebuild the same network from the chain, and nobody can post as you without your key.
 import { ctx } from './ctx.ts';
 import { amtTx, esc, fmt, hexName } from './util.ts';
-import { ipfsAdd } from './nft.ts';
+import { ipfsAdd, mintFromImage } from './nft.ts';
 import { base } from './nodelink.ts';
 
 const MT = 'luma-social';
@@ -443,7 +443,7 @@ function postCard(p: Post, opts: { quoted?: boolean; rtBy?: string; pinned?: boo
   if (!p) return '';
   if (p.del) { const w = p.mod ? 'This post was removed by the network moderators.' : 'This post was deleted.'; return opts.quoted ? `<div class="sc-quote sc-m">${w}</div>` : `<div class="sc-post" style="cursor:default"><div class="sc-m">${w}</div></div>`; }
   const imgs = p.m.filter(okImg), blur = POL.blurMedia && !LS.get('sc.noblur', false) && !S.rev.has(p.id);
-  const nftBar = p.n ? nftBadge(p) : '';
+  const nftBar = p.n ? nftBadge(p) : (p.a === me() && p.m.some(u => /^ipfs:\/\//.test(u)) && !opts.quoted ? `<div class="sc-m" style="margin:6px 0;display:flex;align-items:center;gap:8px">${ic('image', 14)} Only you see this: <button class="sc-btn" data-act="mintnft" data-v="${p.id}" style="padding:4px 10px">Mint this picture as an NFT</button></div>` : '');
   const media = imgs.length ? `${nftBar}<div class="sc-media n${imgs.length} ${blur ? 'blurred' : ''}">${blur ? `<button class="sc-reveal" data-act="reveal" data-v="${p.id}">${ic('eye', 18)}Show image</button>` : ''}${imgs.map(u => `<img src="${esc(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-act="img" data-v="${esc(u)}" onerror="this.remove()">`).join('')}</div>` : (p.m.length && !imgs.length ? `<div class="sc-m" style="margin:6px 0">${ic('image', 14)} Image hidden: this network only allows ${POL.imageMode === 'off' ? 'no images' : 'images from approved sources'}.</div>` : '');
   const q = p.q && IX.posts.get(p.q) && !opts.quoted ? `<div class="sc-quote" data-act="open" data-v="${p.q}">${postCard(IX.posts.get(p.q)!, { quoted: true })}</div>` : '';
   let poll = '';
@@ -1169,6 +1169,7 @@ export const sc: any = {
       case 'report': if (need()) reportModal(id); break;
       case 'react': if (need()) reactModal(id); break;
       case 'edit': if (need()) editPostModal(id); break;
+      case 'mintnft': { const p = IX.posts.get(id), u = p && p.m.find(x => /^ipfs:\/\//.test(x)); if (!p || !u || !need()) break; ctx.toast('Loading your picture…'); fetch(safeUrl(u)).then(r => r.blob()).then(bl => mintFromImage(new File([bl], 'post-' + String(id).slice(0, 6) + '.' + ((bl.type.split('/')[1] || 'png').replace('+xml', '')), { type: bl.type }), (p.t || '').slice(0, 40) || 'My NFT')).catch(() => ctx.toast('Could not load the picture to mint it.', true)); break; }
       case 'pin': if (need() && !S.busy) void act({ t: 'pin', ref: id }, 'Pinning…', 'Pinned to your profile'); break;
       case 'unpin': if (need() && !S.busy) void act({ t: 'pin', ref: '' }, 'Unpinning…', 'Unpinned'); break;
       case 'del': if (need() && !S.busy && confirm('Delete this post? It stays in the chain history but disappears from LUMA Social.')) void act({ t: 'del', ref: id }, 'Deleting…', 'Deleted'); break;
