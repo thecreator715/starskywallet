@@ -6,7 +6,10 @@ import * as M from './market.ts';
 import { Asset, NATIVE, akey, esc, fmt, hexName, nameToCur, short } from './util.ts';
 import { cached, clearCache, info, tryReq } from './chain.ts';
 
-export const FEE_LUMA = 10;
+export const FEE_LUMA = 10; // legacy fee (v1 tokens)
+export const FEE_USD = 100; // creation fee: $100 worth, paid in LUMA or any LUMA ecosystem token minted from the Genesis wallet
+const FEE_SLACK = 1.02; // pay 2% extra so a small price move before confirmation never leaves the fee short
+const FEE_MIN_USD = 95; // the registry accepts a v2 fee worth at least this much at the price recorded in the payment
 const T_FEE = 'luma-token-fee',
   T_INFO = 'luma-token-info',
   T_ICON = 'luma-token-icon';
@@ -19,6 +22,9 @@ export interface TokenMeta {
   site: string;
   icon: string; // data URL or ''
   img?: string; // full-size picture on network storage (https gateway URL) or ''
+  links?: { x?: string; tg?: string; dc?: string; cat?: string };
+  tf?: number; // transfer fee percent
+  feeKey?: string; // asset the creation fee was paid in ('native' or key)
   ms: number;
   hash: string;
   supply0: number;
@@ -61,16 +67,22 @@ export async function registry(): Promise<TokenMeta[]> {
       for (const x of r.transactions || []) {
         const t = x.tx || x.tx_json || {};
         if (t.TransactionType !== 'Payment' || t.Destination !== g || !okMeta(x)) continue;
-        const paid = Number(((x.meta || x.metaData || {}).delivered_amount ?? t.Amount) || 0) / 1e6;
-        if (paid + 1e-9 < FEE_LUMA) continue;
+        const dl = (x.meta || x.metaData || {}).delivered_amount ?? t.Amount;
         const mm = memos(t).find(m => m.type === T_FEE);
         if (!mm) continue;
         try {
           const j = JSON.parse(textOf(mm.data));
           if (!j.c || !j.i) continue;
+          let feeKey = 'native';
+          if (Number(j.v) >= 2) {
+            // v2: $100 worth in LUMA or a Genesis-minted ecosystem token, valued at the price written in the payment
+            const amt = typeof dl === 'object' ? Number((dl as any).value || 0) : Number(dl || 0) / 1e6, px = Number(j.p || 0);
+            if (!(amt > 0 && px > 0 && amt * px + 1e-9 >= FEE_MIN_USD)) continue;
+            if (typeof dl === 'object') feeKey = akey({ c: (dl as any).currency, i: (dl as any).issuer });
+          } else if (typeof dl === 'object' || Number(dl || 0) / 1e6 + 1e-9 < FEE_LUMA) continue;
           const key = akey({ c: j.c, i: j.i });
           if (out.some(o => o.key === key)) continue;
-          out.push({ key, a: { c: j.c, i: j.i }, name: String(j.n || hexName(j.c)).slice(0, 24), creator: t.Account, desc: '', site: '', icon: '', ms: t.date ? (t.date + 946684800) * 1000 : 0, hash: t.hash || x.hash || '', supply0: Number(j.s || 0) });
+          out.push({ key, feeKey, a: { c: j.c, i: j.i }, name: String(j.n || hexName(j.c)).slice(0, 24), creator: t.Account, desc: '', site: '', icon: '', ms: t.date ? (t.date + 946684800) * 1000 : 0, hash: t.hash || x.hash || '', supply0: Number(j.s || 0) });
         } catch {}
       }
       marker = r.marker;
@@ -89,6 +101,7 @@ export async function registry(): Promise<TokenMeta[]> {
                 const j = JSON.parse(textOf(mm.data));
                 m.desc = String(j.d || '').slice(0, 280);
                 m.site = /^https?:\/\//.test(j.w || '') ? String(j.w).slice(0, 120) : '';
+                m.links = { x: j.x || '', tg: j.tg || '', dc: j.dc || '', cat: j.cat || '' };
                 if (/^ipfs:\/\/[A-Za-z0-9]{20,100}$/.test(j.i || '')) m.img = 'https://ipfs.io/ipfs/' + String(j.i).slice(7);
               } catch {}
             }
@@ -98,6 +111,8 @@ export async function registry(): Promise<TokenMeta[]> {
       })
     );
     for (const m of out) if (!m.icon && m.img) m.icon = m.img;
+    const made = new Set(out.map(o => o.key));
+    for (let n = out.length - 1; n >= 0; n--) if (out[n].feeKey && out[n].feeKey !== 'native' && made.has(out[n].feeKey as string)) out.splice(n, 1);
     out.sort((a, b) => b.ms - a.ms);
     return (regCache = out);
   });
@@ -135,8 +150,47 @@ interface Form {
   desc: string;
   site: string;
   lock: boolean;
+  x: string;
+  tg: string;
+  dc: string;
+  cat: string;
+  tf: string;
+  nf: boolean;
+  pay: string;
 }
-let F: Form = { name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false };
+const F0 = (): Form => ({ name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false, x: '', tg: '', dc: '', cat: '', tf: '', nf: false, pay: 'native' });
+let F: Form = F0();
+/** what the $100 creation fee can be paid in: LUMA, or a LUMA ecosystem token minted from the Genesis wallet (never a token made in Starsky) */
+interface FeeOpt { key: string; sym: string; cur?: string; iss?: string; px: number; need: number; have: number; ok: boolean; why: string }
+let OPTS: FeeOpt[] = [];
+async function feeOptions(acc: string, g: string, extra: number): Promise<FeeOpt[]> {
+  const out: FeeOpt[] = [];
+  const [snap, reg, lines, ai, gl] = await Promise.all([
+    M.snapshot().catch(() => null),
+    registry().catch(() => [] as TokenMeta[]),
+    ctx.req('account_lines', { account: acc, ledger_index: 'validated', limit: 400 }).catch(() => null),
+    ctx.req('account_info', { account: acc, ledger_index: 'validated' }).catch(() => null),
+    g ? ctx.req('account_lines', { account: g, ledger_index: 'validated', limit: 400 }).catch(() => null) : Promise.resolve(null),
+  ]);
+  const made = new Set(reg.map(r => r.key));
+  const usd = (k: string): number | null => (snap ? usdPxOf(snap, k) : null);
+  const nat = snap && (snap as any).usdPerNative ? Number((snap as any).usdPerNative) : 0;
+  const nb = ai && ai.account_data ? Number(ai.account_data.Balance || 0) / 1e6 : 0;
+  const reserve = 2 + extra; // keep the wallet reserve and the funds that go to the new issuer wallet
+  if (nat > 0) { const need = (FEE_USD * FEE_SLACK) / nat; out.push({ key: 'native', sym: ctx.native(), px: nat, need, have: nb, ok: nb - reserve >= need, why: nb - reserve >= need ? '' : 'not enough ' + ctx.native() }); }
+  const gset = new Set(((gl && gl.lines) || []).map((l: any) => akey({ c: l.currency, i: l.account })));
+  for (const l of (lines && lines.lines) || []) {
+    const bal = Number(l.balance || 0); if (!(bal > 0)) continue;
+    const key = akey({ c: l.currency, i: l.account });
+    if (made.has(key)) continue; // tokens made in Starsky can never pay for another token
+    const px = usd(key); if (!px || !(px > 0)) continue;
+    const need = (FEE_USD * FEE_SLACK) / px;
+    const hasLine = gset.has(key) || l.account === g;
+    out.push({ key, sym: hexName(l.currency), cur: l.currency, iss: l.account, px, need, have: bal, ok: bal >= need && hasLine, why: !hasLine ? 'the Genesis wallet has no trust line for it yet' : bal < need ? 'not enough balance' : '' });
+  }
+  return out;
+}
+const usdPxOf = (s: any, k: string): number | null => (s.usdPerNative == null ? null : s.px.has(k) ? (s.px.get(k) as number) * s.usdPerNative : null);
 let ICON: { bytes: Uint8Array; mime: string; url: string; ipfs?: string } | null = null;
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement | null;
 const val = (id: string) => ($(id)?.value || '').trim();
@@ -152,6 +206,8 @@ export async function openCreate() {
       cand = top.top[0] ? top.top[0].addr : '';
     } catch {}
   }
+  OPTS = await feeOptions(ctx.account() as string, g || cand, reserve).catch(() => []);
+  if (!OPTS.some(o => o.key === F.pay && o.ok)) F.pay = (OPTS.find(o => o.ok) || OPTS[0] || { key: 'native' }).key;
   ctx.page(`<h2>Create a token</h2>
     <p class="mut" style="margin:.2rem 0 .6rem;font-size:.85rem">Creates a new issuer wallet for your token, issues the supply to <b>this wallet</b>, and records the token on the network so it appears under Others with trading and pools.</p>
     <div class="fgrid">
@@ -165,14 +221,25 @@ export async function openCreate() {
       <div><input id="tk_file" type="file" accept="image/png,image/jpeg,image/webp" onchange="window.tk.icon(this)"><div id="tk_ist" class="mut" style="font-size:.75rem">Uploaded to the network picture storage (IPFS) like Social pictures, plus a tiny copy stored on the ledger so the icon shows everywhere, even if storage is offline.</div></div></div>
     <label class="mut" style="display:block;margin:.6rem 0;font-size:.82rem"><input id="tk_lock" type="checkbox" ${F.lock ? 'checked' : ''}> Lock the supply forever (disables the issuer key so nobody can ever issue more. Cannot be undone.)</label>
     ${g ? '' : `<div class="lpcard" style="margin:.5rem 0"><div class="k">Genesis wallet (receives the creation fee)</div><input id="tk_gen" style="width:100%" placeholder="Genesis address (L… / T…)" value="${esc(cand ? ctx.showL(cand) : '')}"><div class="mut" style="font-size:.74rem">${cand ? 'Filled with the largest holder of the native coin, which is normally the genesis wallet. Check it, it is saved for this network.' : 'Paste the genesis address from the control panel.'}</div></div>`}
-    <div class="lpcard"><div class="dxkv"><span class="mut">Creation fee to genesis</span><b>${FEE_LUMA} ${esc(ctx.native())}</b></div>
+    <div class="lpcard" style="margin-top:.6rem"><div class="k">More options</div>
+      <div class="fgrid" style="margin-top:.4rem">
+        <input id="tk_x" placeholder="X / Twitter link (optional)" value="${esc(F.x)}"><input id="tk_tg" placeholder="Telegram link (optional)" value="${esc(F.tg)}">
+        <input id="tk_dc" placeholder="Discord link (optional)" value="${esc(F.dc)}">
+        <select id="tk_cat"><option value="">Category (optional)</option>${['Meme', 'Utility', 'Gaming', 'Community', 'DeFi', 'Art', 'Real world'].map(c => `<option ${F.cat === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
+        <input id="tk_tf" placeholder="Transfer fee % on every send (0 to 5, optional)" inputmode="decimal" value="${esc(F.tf)}">
+      </div>
+      <label class="mut" style="display:block;margin:.5rem 0 0;font-size:.82rem"><input id="tk_nf" type="checkbox" ${F.nf ? 'checked' : ''}> Give up the right to freeze any holder (cannot be undone). Builds trust with buyers.</label></div>
+    <div class="lpcard" style="margin-top:.6rem"><div class="k">Creation fee: $${FEE_USD} worth, paid to the Genesis wallet</div>
+      <div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Pay in ${esc(ctx.native())} or any LUMA ecosystem token that was minted from the Genesis wallet and has a price. Tokens made in Starsky cannot be used to pay for a new token.</div>
+      <select id="tk_pay" style="width:100%" onchange="window.tk.pay(this.value)">${OPTS.map(o => `<option value="${esc(o.key)}" ${o.key === F.pay ? 'selected' : ''} ${o.ok ? '' : 'disabled'}>${esc(o.sym)}: ${fmt(o.need)} ${o.ok ? '' : '(' + esc(o.why) + ')'}</option>`).join('') || '<option value="native">' + esc(ctx.native()) + '</option>'}</select>
+      <div id="tk_payx" class="mut" style="font-size:.78rem;margin-top:.3rem"></div>
       <div class="dxkv"><span class="mut">Funds for the new issuer wallet (reserve and fees)</span><b>about ${fmt(reserve)} ${esc(ctx.native())}</b></div>
       <div class="dxkv"><span class="mut">Paid from</span><span class="mono">${esc(short(ctx.showL(ctx.account() as string), 8, 6))}</span></div></div>
     <div id="tk_err" class="crit" style="min-height:1.2rem;font-size:.82rem;margin-top:.4rem"></div>
     <div class="row"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" id="tk_go" onclick="window.tk.create(this)">Create token</button></div>`, 'Create a token');
 }
 const keepForm = () => {
-  F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked };
+  F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked, x: val('tk_x'), tg: val('tk_tg'), dc: val('tk_dc'), cat: val('tk_cat'), tf: val('tk_tf'), nf: !!$('tk_nf')?.checked, pay: val('tk_pay') || F.pay };
 };
 async function bigBlob(file: File): Promise<Blob> {
   const bmp = await createImageBitmap(file), k = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
@@ -223,12 +290,22 @@ export async function create(btn: HTMLButtonElement) {
     const taken = (await registry().catch(() => [])).find(t => t.name.toLowerCase() === F.name.toLowerCase() || hexName(t.a.c).toLowerCase() === F.sym.toLowerCase());
     if (taken && !confirm(`A token called ${taken.name} already exists on this network. Create another one with the same name?`)) return;
     if (F.lock && !confirm('Locking the supply is permanent: the issuer key is disabled and nobody can ever issue more. Continue?')) return;
+    for (const [k, v] of [['X link', F.x], ['Telegram link', F.tg], ['Discord link', F.dc]] as const) if (v && !/^https?:\/\//.test(v)) throw new Error(k + ' must start with https://');
+    const tfp = F.tf === '' ? 0 : parseFloat(F.tf);
+    if (!(tfp >= 0 && tfp <= 5)) throw new Error('The transfer fee must be between 0 and 5 percent.');
+    if (F.nf && !confirm('Giving up the freeze right is permanent. Continue?')) return;
     const i = await info();
     const fund = i.reserveBase + 2 * i.reserveInc + 1;
+    // re-price the fee right now so it is worth $100 when it lands
+    const fresh = await feeOptions(acc, g, fund);
+    const po = fresh.find(o => o.key === F.pay);
+    if (!po || !po.ok) throw new Error('The chosen fee token cannot cover $' + FEE_USD + ' right now' + (po && po.why ? ' (' + po.why + ')' : '') + '. Pick another one.');
+    const feeVal = po.key === 'native' ? String(Math.ceil(po.need * 1e6)) : String(Math.ceil(po.need * 1e6) / 1e6);
+    const feeAmt: any = po.key === 'native' ? feeVal : { currency: po.cur, issuer: po.iss, value: feeVal };
     btn.disabled = true;
     const steps: [string, string][] = [];
     const draw = () => ctx.modal(`<h2>Creating ${esc(F.name)}</h2><div class="steps">${steps.map(([s, st]) => `<div class="step ${st}"><i>${st === 'ok' ? '✓' : st === 'run' ? '…' : st === 'bad' ? '✕' : '•'}</i>${esc(s)}</div>`).join('')}</div>${steps.some(x => x[1] === 'bad') ? '<button class="grow" onclick="window.closeModal()">Close</button>' : ''}`);
-    const names = ['Create the issuer wallet and keep its key in your vault', `Pay the ${FEE_LUMA} ${ctx.native()} creation fee to the genesis wallet`, 'Fund the issuer wallet', 'Set up the issuer (rippling for pools and trading) and record the token details', ...(ICON && ICON.bytes.length ? ['Store the icon on the ledger'] : []), 'Open your trust line to the new token', `Issue ${fmt(supply)} ${F.sym} to your wallet`, ...(F.lock ? ['Lock the supply forever'] : [])];
+    const names = ['Create the issuer wallet and keep its key in your vault', `Pay the $${FEE_USD} creation fee (${fmt(po.need)} ${po.sym}) to the genesis wallet`, 'Fund the issuer wallet', 'Set up the issuer (rippling for pools and trading) and record the token details', ...(ICON && ICON.bytes.length ? ['Store the icon on the ledger'] : []), 'Open your trust line to the new token', `Issue ${fmt(supply)} ${F.sym} to your wallet`, ...(F.lock ? ['Lock the supply forever'] : [])];
     names.forEach(n => steps.push([n, 'todo']));
     let k = 0;
     const run = async (fn: () => Promise<{ ok: boolean; msg?: string }>) => {
@@ -250,10 +327,10 @@ export async function create(btn: HTMLButtonElement) {
       await ctx.addWallet('Issuer: ' + F.name, issuer.seed as string, issuer.classicAddress);
       return { ok: true };
     });
-    await run(() => ctx.submit({ TransactionType: 'Payment', Account: acc, Destination: g, Amount: String(FEE_LUMA * 1e6), Memos: [{ Memo: { MemoType: hexOf(T_FEE), MemoData: hexOf(JSON.stringify({ v: 1, c: cur, i: issuer.classicAddress, n: F.name, s: supply })) } }] }));
+    await run(() => ctx.submit({ TransactionType: 'Payment', Account: acc, Destination: g, Amount: feeAmt, Memos: [{ Memo: { MemoType: hexOf(T_FEE), MemoData: hexOf(JSON.stringify({ v: 2, c: cur, i: issuer.classicAddress, n: F.name, s: supply, u: FEE_USD, p: po.px })) } }] }));
     await run(() => ctx.submit({ TransactionType: 'Payment', Account: acc, Destination: issuer.classicAddress, Amount: String(Math.round(fund * 1e6)) }));
     await run(() =>
-      ctx.submitAs(issuer.seed as string, { TransactionType: 'AccountSet', Account: issuer.classicAddress, SetFlag: 8, Memos: [{ Memo: { MemoType: hexOf(T_INFO), MemoFormat: hexOf('application/json'), MemoData: hexOf(JSON.stringify({ n: F.name, d: F.desc, w: F.site, ...(ICON && ICON.ipfs ? { i: ICON.ipfs } : {}) })) } }] })
+      ctx.submitAs(issuer.seed as string, { TransactionType: 'AccountSet', Account: issuer.classicAddress, SetFlag: 8, ...(tfp > 0 ? { TransferRate: Math.round((1 + tfp / 100) * 1e9) } : {}), Memos: [{ Memo: { MemoType: hexOf(T_INFO), MemoFormat: hexOf('application/json'), MemoData: hexOf(JSON.stringify({ n: F.name, d: F.desc, w: F.site, ...(ICON && ICON.ipfs ? { i: ICON.ipfs } : {}), ...(F.x ? { x: F.x } : {}), ...(F.tg ? { tg: F.tg } : {}), ...(F.dc ? { dc: F.dc } : {}), ...(F.cat ? { cat: F.cat } : {}) })) } }] })
     );
     if (ICON && ICON.bytes.length) {
       const ic = ICON;
@@ -261,6 +338,7 @@ export async function create(btn: HTMLButtonElement) {
     }
     await run(() => ctx.submit({ TransactionType: 'TrustSet', Account: acc, LimitAmount: { currency: cur, issuer: issuer.classicAddress, value: String(supply) } }));
     await run(() => ctx.submitAs(issuer.seed as string, { TransactionType: 'Payment', Account: issuer.classicAddress, Destination: acc, Amount: { currency: cur, issuer: issuer.classicAddress, value: String(supply) } }));
+    if (F.nf) await run(() => ctx.submitAs(issuer.seed as string, { TransactionType: 'AccountSet', Account: issuer.classicAddress, SetFlag: 6 }));
     if (F.lock) {
       await run(async () => {
         const a = await ctx.submitAs(issuer.seed as string, { TransactionType: 'SetRegularKey', Account: issuer.classicAddress, RegularKey: 'rrrrrrrrrrrrrrrrrrrrBZbvji' });
@@ -272,7 +350,7 @@ export async function create(btn: HTMLButtonElement) {
     clearCache();
     const key = akey({ c: cur, i: issuer.classicAddress });
     ICON = null;
-    F = { name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false };
+    F = F0();
     ctx.modal(`<h2>${esc(steps.length ? 'Token created' : '')}</h2><p>Your token is live and appears under <b>Others</b>. The supply is in your wallet.</p><div class="row" style="gap:.5rem;flex-wrap:wrap"><button class="pri acc grow" onclick="window.closeModal();window.tk.openPool('${esc(key)}')">Create a liquidity pool</button><button class="grow" onclick="window.closeModal();window.pa.trade('${esc(key)}')">Open in the DEX</button><button class="grow" onclick="window.closeModal();window.pa.reload()">Done</button></div>`);
     ctx.rerender();
   } catch (e: any) {
