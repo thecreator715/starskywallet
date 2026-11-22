@@ -360,6 +360,18 @@ const CSS = `
 @media(max-width:720px){.sc{grid-template-columns:minmax(0,1fr)}.sc-brand{display:none}.sc-nav{position:fixed;left:0;right:0;bottom:0;top:auto;flex-direction:row;justify-content:space-around;background:rgba(10,12,22,.92);backdrop-filter:blur(14px);border-top:1px solid var(--sl);z-index:30;padding:4px 2px;gap:0}.sc-nav .sc-big{margin:0;padding:10px 14px}.sc-nav button{padding:10px 8px}.sc-col{padding-bottom:76px}.sc-acts{max-width:none}.sc-nav button.on:before{display:none}}
 `;
 
+const CSS3 = `
+#sc.sc{grid-template-columns:minmax(0,640px) 340px;gap:28px;max-width:1080px}
+.sc-rail{position:sticky;top:14px;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 28px);overflow-y:auto;scrollbar-width:none;padding-bottom:6px}.sc-rail::-webkit-scrollbar{display:none}
+.sc-rail .sc-brand{padding:2px 8px}.sc-mini{border:1px solid var(--sl);border-radius:18px;padding:14px;background:var(--card2,rgba(255,255,255,.03))}
+.sc-mst{display:flex;justify-content:space-between;margin-top:12px}.sc-mst button{all:unset;cursor:pointer;display:flex;flex-direction:column;align-items:center;flex:1;font-size:.76rem;color:var(--mut);padding:4px 0;border-radius:8px}.sc-mst button:hover{background:var(--sh)}.sc-mst b{font-size:1.05rem;color:var(--tx)}
+.sc-rail .sc-nav button{padding:9px 14px}.mk-mi{position:relative;width:38px;height:38px;border-radius:10px;overflow:hidden;background:linear-gradient(135deg,#1b1f3a,#0e7490);display:flex;align-items:center;justify-content:center;flex:none;color:rgba(255,255,255,.6)}.mk-mi img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.sc-dsh{margin:12px 10px;padding:16px;border-radius:20px;border:1px solid var(--sl);background:linear-gradient(135deg,rgba(139,92,246,.16),rgba(34,211,238,.07) 70%),rgba(255,255,255,.02)}.sc-dhi{font-size:1.35rem;font-weight:900;letter-spacing:-.03em}
+.sc-dg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.sc-dt{all:unset;cursor:pointer;display:flex;flex-direction:column;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid var(--sl)}.sc-dt:hover{border-color:var(--sa)}.sc-dt b{font-size:1.3rem;font-weight:900}.sc-dt span{font-size:.78rem;color:var(--mut)}
+@media(min-width:721px){.sc-rail .sc-nav{position:static}.sc-rail .sc-side{position:static}}
+@media(min-width:721px) and (max-width:1180px){#sc.sc{grid-template-columns:minmax(0,1fr) 72px;gap:16px}.sc-rail .sc-side,.sc-rail .sc-mini{display:none}.sc-rail .sc-brand span{display:none}.sc-rail .sc-nav button span.t{display:none}.sc-rail .sc-nav button{justify-content:center;padding:12px}.sc-rail .sc-nav .sc-badge{position:absolute;top:2px;right:2px;margin:0}}
+@media(max-width:720px){#sc.sc{grid-template-columns:minmax(0,1fr)}.sc-rail{position:static;max-height:none;overflow:visible;display:block}.sc-rail .sc-brand,.sc-rail .sc-mini,.sc-rail .sc-side{display:none}.sc-dg{grid-template-columns:repeat(2,1fr)}.sc-dsh{margin:8px 0}}
+`;
 const CSS2 = `
 .mk-top{padding:12px 10px;display:flex;flex-direction:column;gap:10px}.mk-cats{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}.mk-cats button{all:unset;cursor:pointer;white-space:nowrap;padding:6px 14px;border-radius:999px;border:1px solid var(--sl);font-weight:700;font-size:.86rem;color:var(--mut)}.mk-cats button.on{background:var(--sg);color:#fff;border-color:transparent}
 .mk-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:14px;padding:6px 10px 14px}.mk-c{cursor:pointer;border-radius:14px;transition:transform .15s}.mk-c:hover{transform:translateY(-2px)}.mk-i{position:relative;aspect-ratio:1;border-radius:14px;overflow:hidden;background:linear-gradient(135deg,#1b1f3a,#0e7490 140%);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.5);border:1px solid var(--sl)}.mk-i img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
@@ -484,13 +496,18 @@ function sidebar(): string {
   const fill = who.length < 4 ? Array.from(new Set(IX.order.map(i => IX.posts.get(i)!.a))).filter(a => a !== m && !iFollow(a) && !who.includes(a) && !isMuted(a)).slice(-(4 - who.length)) : [];
   const tt = topTipped();
   const userRow = (a: string, right: string) => `<div class="sc-user"><span data-act="user" data-v="${a}" style="cursor:pointer">${avatar(a, 38)}</span><div class="sc-who"><b data-act="user" data-v="${a}">${esc(nameOf(a))}${badge(a)}</b><span class="sc-m">${esc(tagOf(a))}</span></div>${right}</div>`;
-  return `<div class="sc-side"><div class="sc-box" style="padding:10px"><input class="sc-in" id="sc-q" placeholder="Search posts, #tags, $tokens, @people" value="${esc(S.q)}" style="margin:0"></div>
-  ${me() ? `<div class="sc-box"><h4>${ic('trend', 17)}Daily check-in</h4><div class="sc-row" style="justify-content:space-between"><div><b style="font-size:1.3rem">${streak(me())}</b> <span class="sc-m">day streak</span></div>${(IX.chk.get(me()) || new Set()).has(today()) ? '<span class="sc-m">Checked in today</span>' : `<button class="sc-btn sm" data-act="chk">Check in</button>`}</div><div class="sc-row" style="margin-top:10px;justify-content:space-between"><span class="sc-m">Reputation <b style="color:#fff">${reputation(me())}</b> · ${invited(me())} invited</span><button class="sc-btn sm ghost" data-act="invite">Invite friends</button></div><button class="sc-btn sm ghost" style="margin-top:8px" data-act="nav" data-v="stats">${ic('chart', 15)}Network stats</button></div>` : ''}
-  <div class="sc-box"><h4>${ic('trend', 17)}Trending tokens</h4>${coins.length ? coins.map(([t, n]) => `<a class="sc-tag" data-act="tag" data-v="${esc(t)}"><b class="sc-cash">${esc(t.toUpperCase())}</b><div class="sc-m">${n} mention${n === 1 ? '' : 's'} and tips</div></a>`).join('') : '<div class="sc-m">Write $USD or $LUMA in a post and the token shows up here.</div>'}</div>
-  <div class="sc-box"><h4>${ic('chart', 17)}Trending topics</h4>${trends.length ? trends.map(([t, n]) => `<a class="sc-tag" data-act="tag" data-v="${esc(t)}"><b>#${esc(t)}</b><div class="sc-m">${n} post${n === 1 ? '' : 's'}</div></a>`).join('') : '<div class="sc-m">Tags show up here when people use them.</div>'}</div>
-  ${tt.length ? `<div class="sc-box"><h4>${ic('coin', 17)}Most tipped this week</h4>${tt.map(([a, n]) => userRow(a, `<span class="sc-m">${n} tip${n === 1 ? '' : 's'}</span>`)).join('')}</div>` : ''}
-  <div class="sc-box"><h4>${ic('user', 17)}Who to follow</h4>${[...who, ...fill].length ? [...who, ...fill].map(a => userRow(a, `<button class="sc-btn sm" data-act="follow" data-v="${a}">Follow</button>`)).join('') : '<div class="sc-m">No one yet. Invite your friends.</div>'}</div>
-  <div class="sc-m" style="padding:0 6px;line-height:1.55;font-size:.8rem">Everything here is stored on the LUMA chain. You own your account, your posts and your followers. Actions cost a fraction of a cent of LUMA. Tips, in any token, go 100% to the person tipped.</div></div>`;
+  const W: Record<string, string> = {
+    search: `<div class="sc-box" style="padding:10px"><input class="sc-in" id="sc-q" placeholder="Search posts, #tags, $tokens, @people" value="${esc(S.q)}" style="margin:0"></div>`,
+    checkin: `${me() ? `<div class="sc-box"><h4>${ic('trend', 17)}Daily check-in</h4><div class="sc-row" style="justify-content:space-between"><div><b style="font-size:1.3rem">${streak(me())}</b> <span class="sc-m">day streak</span></div>${(IX.chk.get(me()) || new Set()).has(today()) ? '<span class="sc-m">Checked in today</span>' : `<button class="sc-btn sm" data-act="chk">Check in</button>`}</div><div class="sc-row" style="margin-top:10px;justify-content:space-between"><span class="sc-m">Reputation <b style="color:#fff">${reputation(me())}</b> · ${invited(me())} invited</span><button class="sc-btn sm ghost" data-act="invite">Invite friends</button></div><button class="sc-btn sm ghost" style="margin-top:8px" data-act="nav" data-v="stats">${ic('chart', 15)}Network stats</button></div>` : ''}`,
+    market: `${(() => { const l = visible().filter(x => !isSold(x)).sort((a, b) => b.t - a.t).slice(0, 3); return `<div class="sc-box"><h4>${ic('shop', 17)}Fresh in the marketplace</h4>${l.length ? l.map(x => `<div class="sc-user" style="cursor:pointer" data-act="lopen" data-v="${x.id}"><span class="mk-mi">${x.m.find(okImg) ? `<img src="${esc(x.m.find(okImg)!)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ic('shop', 18)}</span><div class="sc-who"><b>${esc(x.ti)}</b><span class="sc-m">${esc(priceStr(x))}</span></div></div>`).join('') : '<div class="sc-m">Nothing listed yet.</div>'}<button class="sc-btn sm ghost" style="margin-top:8px" data-act="nav" data-v="market">Open marketplace</button></div>`; })()}`,
+    tokens: `<div class="sc-box"><h4>${ic('trend', 17)}Trending tokens</h4>${coins.length ? coins.map(([t, n]) => `<a class="sc-tag" data-act="tag" data-v="${esc(t)}"><b class="sc-cash">${esc(t.toUpperCase())}</b><div class="sc-m">${n} mention${n === 1 ? '' : 's'} and tips</div></a>`).join('') : '<div class="sc-m">Write $USD or $LUMA in a post and the token shows up here.</div>'}</div>`,
+    topics: `<div class="sc-box"><h4>${ic('chart', 17)}Trending topics</h4>${trends.length ? trends.map(([t, n]) => `<a class="sc-tag" data-act="tag" data-v="${esc(t)}"><b>#${esc(t)}</b><div class="sc-m">${n} post${n === 1 ? '' : 's'}</div></a>`).join('') : '<div class="sc-m">Tags show up here when people use them.</div>'}</div>`,
+    tipped: `${tt.length ? `<div class="sc-box"><h4>${ic('coin', 17)}Most tipped this week</h4>${tt.map(([a, n]) => userRow(a, `<span class="sc-m">${n} tip${n === 1 ? '' : 's'}</span>`)).join('')}</div>` : ''}`,
+    follow: `<div class="sc-box"><h4>${ic('user', 17)}Who to follow</h4>${[...who, ...fill].length ? [...who, ...fill].map(a => userRow(a, `<button class="sc-btn sm" data-act="follow" data-v="${a}">Follow</button>`)).join('') : '<div class="sc-m">No one yet. Invite your friends.</div>'}</div>`,
+    foot: `<div class="sc-m" style="padding:0 6px;line-height:1.55;font-size:.8rem">Everything here is stored on the LUMA chain. You own your account, your posts and your followers. Actions cost a fraction of a cent of LUMA. Tips, in any token, go 100% to the person tipped.</div></div>`,
+  };
+  const cfg = dashCfg();
+  return `<div class="sc-side">${W.search}${cfg.order.filter(id => !cfg.off.includes(id)).map(id => W[id] || '').join('')}${W.foot}</div>`;
 }
 
 function notifications(): Array<{ t: number; ic: string; col: string; html: string }> {
@@ -584,7 +601,7 @@ function center(): string {
   const v = S.view, back = `<button class="sc-ib" data-act="back" title="Back">${ic('back')}</button>`;
   if (v.k === 'home') {
     const fl = S.tab === 'following' ? topLevel(p => p.a === me() || (IX.follows.get(me()) || new Set()).has(p.a)).sort((a, b) => b.t - a.t) : topLevel(() => true).sort((a, b) => score(b.p) - score(a.p) || b.t - a.t);
-    return `<div class="sc-head">Home</div><div class="sc-tabs"><button class="${S.tab === 'foryou' ? 'on' : ''}" data-act="tab" data-v="foryou">For you</button><button class="${S.tab === 'following' ? 'on' : ''}" data-act="tab" data-v="following">Following</button></div>${composer({ quote: S.quote || undefined })}${feedList(fl.slice(0, S.shown), fl.length > S.shown, S.tab === 'following' ? 'Follow people and their posts will show up here.' : undefined)}`;
+    return `<div class="sc-head">Home</div>${dashStrip()}<div class="sc-tabs"><button class="${S.tab === 'foryou' ? 'on' : ''}" data-act="tab" data-v="foryou">For you</button><button class="${S.tab === 'following' ? 'on' : ''}" data-act="tab" data-v="following">Following</button></div>${composer({ quote: S.quote || undefined })}${feedList(fl.slice(0, S.shown), fl.length > S.shown, S.tab === 'following' ? 'Follow people and their posts will show up here.' : undefined)}`;
   }
   if (v.k === 'explore') {
     const all = topLevel(() => true), tipped = (p: Post) => totals(IX.tipsRef.get(p.id) || []).length ? (IX.tipsRef.get(p.id) || []).length : 0;
@@ -607,15 +624,14 @@ function center(): string {
   return `<div class="sc-head">${back}Search</div>${searchView(v.q)}`;
 }
 
-export function shell() { return `<div id="sc-root"><style>${CSS}${CSS2}</style><div class="sc" id="sc"></div></div>`; }
+export function shell() { return `<div id="sc-root"><style>${CSS}${CSS2}${CSS3}</style><div class="sc" id="sc"></div></div>`; }
 function paint() {
   const root = document.getElementById('sc'); if (!root) return;
   if (ctx.xrpl()) { root.innerHTML = `<div class="sc-box" style="grid-column:1/-1">LUMA Social runs on the LUMA chain. Switch the wallet type to LUMA to use it.</div>`; return; }
   const keep = document.activeElement as HTMLElement | null, kid = keep && keep.id, ss = (keep as any)?.selectionStart;
   const un = unread(), v = S.view, on = (x: string) => (v.k === x ? 'on' : '');
   const nb = (id: string, icon: string, label: string, extra = '', cls = '') => `<button class="${cls}" data-act="nav" data-v="${id}" aria-label="${label}">${ic(icon, 21)}<span class="t">${label}</span>${extra}</button>`;
-  root.innerHTML = `<div class="sc-nav"><div class="sc-brand">${LOGO}<span>LUMA Social<small>on-chain, owned by you</small></span></div>${nb('home', 'home', 'Home', '', on('home'))}${nb('explore', 'search', 'Explore', '', on('explore') || on('search') || on('tag'))}${nb('notif', 'bell', 'Notifications', un ? `<span class="sc-badge">${un > 99 ? '99+' : un}</span>` : '', on('notif'))}${nb('bm', 'bm', 'Bookmarks', '', on('bm'))}${nb('market', 'shop', 'Marketplace', '', on('market') || on('listing'))}${nb('dash', 'chart', 'Creator', '', on('dash'))}${nb('me', 'user', 'Profile', '', v.k === 'profile' && v.a === me() ? 'on' : '')}${nb('compose', 'pen', 'Post', '', 'sc-big')}</div>
-  <div class="sc-col">${POL.banner ? `<div class="sc-note">${esc(POL.banner)}</div>` : ''}${S.hubErr ? `<div class="sc-warn">${esc(S.hubErr)}</div>` : ''}${S.err ? `<div class="sc-warn">${esc(S.err)}</div>` : ''}${center()}</div>${sidebar()}`;
+  root.innerHTML = `<div class="sc-col">${POL.banner ? `<div class="sc-note">${esc(POL.banner)}</div>` : ''}${S.hubErr ? `<div class="sc-warn">${esc(S.hubErr)}</div>` : ''}${S.err ? `<div class="sc-warn">${esc(S.err)}</div>` : ''}${center()}</div><div class="sc-rail"><div class="sc-brand">${LOGO}<span>LUMA Social<small>on-chain, owned by you</small></span></div>${miniProfile()}<div class="sc-nav">${nb('home', 'home', 'Home', '', on('home'))}${nb('explore', 'search', 'Explore', '', on('explore') || on('search') || on('tag'))}${nb('notif', 'bell', 'Notifications', un ? `<span class="sc-badge">${un > 99 ? '99+' : un}</span>` : '', on('notif'))}${nb('bm', 'bm', 'Bookmarks', '', on('bm'))}${nb('market', 'shop', 'Marketplace', '', on('market') || on('listing'))}${nb('dash', 'chart', 'Creator', '', on('dash'))}${nb('me', 'user', 'Profile', '', v.k === 'profile' && v.a === me() ? 'on' : '')}${nb('compose', 'pen', 'Post', '', 'sc-big')}</div>${sidebar()}</div>`;
   const ta = document.getElementById('sc-txt') as HTMLTextAreaElement | null; if (ta) grow(ta); void fillNft();
   if (kid) { const el = document.getElementById(kid) as HTMLInputElement | null; if (el) { el.focus(); try { if (ss != null) el.setSelectionRange(ss, ss); } catch {} } }
 }
@@ -834,6 +850,35 @@ function exportMine() {
   const a = me(), data = { exportedAt: new Date().toISOString(), account: a, network: net(), hub: hub(), events: EV.filter(e => e.a === a).map(e => ({ tx: e.h, time: e.t, paid: e.v, data: e.d })), tipsSent: (IX.tipsBy.get(a) || []), tipsReceived: (IX.tipsTo.get(a) || []) };
   const b = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), u = URL.createObjectURL(b), l = document.createElement('a'); l.href = u; l.download = 'luma-social-' + net() + '-export.json'; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); ctx.toast('Your data was exported');
 }
+// ---------- your dashboard ----------
+const DASH_IDS: Array<[string, string]> = [['checkin', 'Check-in and reputation'], ['market', 'Fresh in the marketplace'], ['tokens', 'Trending tokens'], ['topics', 'Trending topics'], ['tipped', 'Most tipped'], ['follow', 'Who to follow']];
+const dashKey = () => 'sc.dash.' + net();
+function dashCfg(): { order: string[]; off: string[]; strip: boolean } {
+  const c = LS.get(dashKey(), {}) as any, ids = DASH_IDS.map(x => x[0]), ord: string[] = (Array.isArray(c.order) ? c.order : []).filter((x: string) => ids.includes(x));
+  for (const id of ids) if (!ord.includes(id)) ord.push(id); return { order: ord, off: (Array.isArray(c.off) ? c.off : []).filter((x: string) => ids.includes(x)), strip: c.strip !== false };
+}
+const saveDash = (c: { order: string[]; off: string[]; strip: boolean }) => LS.set(dashKey(), c);
+function miniProfile(): string {
+  const a = me(); if (!a) return '';
+  const h = handleOf(a), posts = IX.order.filter(i => { const p = IX.posts.get(i)!; return p.a === a && !p.del; }).length;
+  return `<div class="sc-mini"><div class="sc-row" style="flex-wrap:nowrap;cursor:pointer" data-act="user" data-v="${a}">${avatar(a, 46)}<div class="sc-who" style="flex-direction:column;align-items:flex-start;gap:0;min-width:0"><b>${esc(nameOf(a))}${badge(a)}</b><span class="sc-m">${h ? '@' + esc(h) : esc(ctx.showL(a).slice(0, 8) + '…')}</span></div></div>
+  <div class="sc-mst"><button data-act="flist" data-v="${a}" data-k="following"><b>${fwgN(a)}</b>Following</button><button data-act="flist" data-v="${a}" data-k="followers"><b>${folN(a)}</b>Followers</button><button data-act="user" data-v="${a}"><b>${posts}</b>Posts</button></div></div>`;
+}
+function dashStrip(): string {
+  const a = me(), cfg = dashCfg(); if (!a || !cfg.strip) return '';
+  const hr = new Date().getHours(), hi = hr < 5 ? 'Still up' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening', got = IX.tipsTo.get(a) || [], tile = (n: string | number, l: string, act: string, v = '') => `<button class="sc-dt" data-act="${act}" data-v="${v}"><b>${n}</b><span>${l}</span></button>`;
+  const first = ((IX.prof.get(a) || {}).n || handleOf(a) || '').split(' ')[0], checked = (IX.chk.get(a) || new Set()).has(today());
+  return `<div class="sc-dsh"><div class="sc-row" style="justify-content:space-between;align-items:flex-start"><div><div class="sc-dhi">${hi}${first ? ', ' + esc(first) : ''}</div><div class="sc-m">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div></div><button class="sc-btn sm ghost" data-act="dcust">${ic('pen', 14)}Customize</button></div>
+  <div class="sc-dg">${tile(reputation(a), 'Reputation', 'nav', 'stats')}${tile(folN(a), 'Followers', 'flist', a)}${tile(got.length, 'Tips received', 'nav', 'dash')}${tile(streak(a), 'Day streak', checked ? 'nav' : 'chk', checked ? 'dash' : '')}${tile(visible().filter(x => x.a === a).length, 'Listings', 'mkview', 'mine')}${tile(invited(a), 'Invited', 'invite')}</div>
+  <div class="sc-row" style="margin-top:10px">${checked ? '' : `<button class="sc-btn sm" data-act="chk">Check in</button>`}<button class="sc-btn sm ghost" data-act="sell">${ic('shop', 14)}Sell something</button><button class="sc-btn sm ghost" data-act="invite">${ic('share', 14)}Invite friends</button><button class="sc-btn sm ghost" data-act="editprof">${ic('pen', 14)}Edit profile</button></div></div>`;
+}
+function custModal() {
+  const c = dashCfg(), nm = (id: string) => (DASH_IDS.find(x => x[0] === id) || ['', id])[1];
+  ctx.modal(mcard(`<div class="k">Customize your dashboard</div><div class="muted" style="margin:4px 0 10px">Choose what appears on your home page and in the right-hand panel, and in what order. Saved on this device.</div>
+  <label class="sc-row" style="padding:8px 0"><input type="checkbox" ${c.strip ? 'checked' : ''} onchange="sc.dstrip()"><b>Dashboard summary on Home</b></label>
+  ${c.order.map((id, i) => `<div class="sc-row" style="padding:7px 0;border-top:1px solid var(--sl)"><label class="sc-row" style="flex:1"><input type="checkbox" ${c.off.includes(id) ? '' : 'checked'} onchange="sc.dtog('${id}')">${esc(nm(id))}</label><button class="sc-ib" ${i ? '' : 'disabled'} onclick="sc.dmove('${id}',-1)" aria-label="Move up">▲</button><button class="sc-ib" ${i < c.order.length - 1 ? '' : 'disabled'} onclick="sc.dmove('${id}',1)" aria-label="Move down">▼</button></div>`).join('')}
+  <div class="sc-row" style="justify-content:space-between;margin-top:12px"><button class="sc-btn sm ghost" onclick="sc.dreset()">Reset</button><button class="sc-btn" onclick="sc.close()">Done</button></div>`, 440));
+}
 // ---------- modals ----------
 const need = (): boolean => { const bl = blocked(); if (bl) { ctx.toast(bl, true); return false; } if (!me()) { ctx.toast('Create or open a LUMA wallet first', true); return false; } return true; };
 const go = (v: View) => { hist.push(S.view); if (hist.length > 30) hist.shift(); S.view = v; S.shown = 25; S.err = ''; window.scrollTo({ top: 0 }); paint(); };
@@ -972,6 +1017,7 @@ async function onClick(el: HTMLElement, ev: Event) {
     case 'chk': if (need() && !S.busy) { if ((IX.chk.get(me()) || new Set()).has(today())) { ctx.toast('Already checked in today'); break; } await act({ t: 'chk' }, 'Checking in…', 'Checked in. Keep your streak going!'); } break;
     case 'invite': { const u = linkFor('ref', me()); try { void navigator.clipboard.writeText(u); ctx.toast('Invite link copied. You earn reputation for each friend who follows through it.'); } catch { ctx.toast(u); } break; }
     case 'export': if (me()) exportMine(); break;
+    case 'dcust': custModal(); break;
     case 'lopen': MK_S.img = 0; go({ k: 'listing', id: v }); break;
     case 'lsave': { const b: string[] = LS.get(mkSaveKey(), []), i = b.indexOf(v); if (i >= 0) b.splice(i, 1); else b.unshift(v); LS.set(mkSaveKey(), b.slice(0, 200)); paint(); break; }
     case 'sell': if (need()) void listModal('', true); break;
@@ -1097,6 +1143,10 @@ export const sc: any = {
   tipPreset(v: string) { if (!TS) return; sc.tipUpd(); TS.amt = v; renderTip(); },
   tipUpd() { if (!TS) return; const a = document.getElementById('sc-tip') as HTMLInputElement | null, n = document.getElementById('sc-tipn') as HTMLInputElement | null; if (a) TS.amt = a.value; if (n) TS.note = n.value; },
   tipSend: () => void tipSend(),
+  dstrip() { const c = dashCfg(); c.strip = !c.strip; saveDash(c); paint(); custModal(); },
+  dtog(id: string) { const c = dashCfg(), i = c.off.indexOf(id); if (i >= 0) c.off.splice(i, 1); else c.off.push(id); saveDash(c); paint(); custModal(); },
+  dmove(id: string, d: number) { const c = dashCfg(), i = c.order.indexOf(id), j = i + d; if (i < 0 || j < 0 || j >= c.order.length) return; c.order.splice(j, 0, c.order.splice(i, 1)[0]); saveDash(c); paint(); custModal(); },
+  dreset() { LS.set(dashKey(), {}); paint(); custModal(); },
   mkf(k: string, v: string) { (MK_S as any)[k] = v; paint(); },
   lpick() { ED = { ...collectListing(), __mk: 1 }; void openNfts('mk'); },
   async lsubmit() { await listSubmit(); },
