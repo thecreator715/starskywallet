@@ -232,6 +232,7 @@ export async function load(keepSelection = true) {
       renderAll();
       return;
     }
+    if (DX.wantSymV) { const id = api.findSym(DX.wantSymV); DX.wantSymV = ''; if (id) { DX.mid = id; DX.inv = false; DX.flipped = false; } }
     if (DX.wantKey) {
       const id = api.findFor(DX.wantKey);
       DX.wantKey = '';
@@ -938,6 +939,15 @@ export const api: any = {
   },
   want(k: string) {
     DX.wantKey = k;
+  },
+  /** market for a token symbol such as LUMA: prefers the pair quoted in the native coin */
+  findSym(sym: string) {
+    const s = String(sym).replace(/^\$/, '').toUpperCase(), eq = (a: Asset) => nm(a).toUpperCase() === s;
+    const m = DX.markets.find((x: M.Market) => eq(x.base) && isNative(x.quote)) || DX.markets.find((x: M.Market) => eq(x.base)) || DX.markets.find((x: M.Market) => eq(x.quote));
+    return m ? m.id : '';
+  },
+  wantSym(sym: string) {
+    DX.wantSymV = String(sym);
   },
   findFor(k: string) {
     const m = DX.markets.find((x: M.Market) => akey(x.base) === k && isNative(x.quote)) || DX.markets.find((x: M.Market) => akey(x.base) === k) || DX.markets.find((x: M.Market) => akey(x.quote) === k);

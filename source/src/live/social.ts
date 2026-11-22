@@ -143,7 +143,8 @@ function bigChart(sym: string) {
   <div style="margin:12px 0 2px;font-size:1.8rem;font-weight:800">${usdFmt(f.p.usd)} <span style="font-size:1rem;color:${up ? '#34d399' : '#f87171'}">${up ? '+' : ''}${f.p.chg.toFixed(2)}%</span></div>
   <div style="height:190px">${spark(h.length ? h : [f.p.usd, f.p.usd], up).replace('height="56"', 'height="190"')}</div>
   <div class="sc-row" style="justify-content:space-between;margin:6px 0 12px"><span class="sc-m">Low ${usdFmt(lo)}</span><span class="sc-m">High ${usdFmt(hi)}</span></div>
-  <div class="sc-row"><button class="sc-btn" onclick="sc.goTag('$${esc(f.sym.toLowerCase())}')">See posts about $${esc(f.sym)}</button><button class="sc-btn ghost" onclick="sc.close()">Close</button></div>`, 460));
+  <div class="sc-row" style="justify-content:center;margin-bottom:8px"><button class="sc-btn" style="width:100%;justify-content:center" onclick="sc.trade('${esc(f.sym)}')">${ic('chart', 16)}Trade $${esc(f.sym)} on the DEX</button></div>
+  <div class="sc-row" style="justify-content:center"><button class="sc-btn ghost" onclick="sc.goTag('$${esc(f.sym.toLowerCase())}')">See posts about $${esc(f.sym)}</button><button class="sc-btn ghost" onclick="sc.close()">Close</button></div>`, 460));
 }
 function priceCard(tagTxt: string, opts: { close?: boolean; expand?: boolean } = {}): string {
   const f = pxFor(tagTxt); if (!f) return ''; const up = f.p.chg >= 0, nm = f.sym;
@@ -1499,6 +1500,7 @@ export const sc: any = {
   goTag(t: string) { ctx.closeModal(); go({ k: 'tag', tag: t }); },
   shareNft(id: string) { const el = document.createElement('i'); el.dataset.act = 'nftshare'; el.dataset.v = id; void onClick(el, new Event('click')); },
   cam(k: string) { sc_cam(k); },
+  trade(sym: string) { ctx.closeModal(); const w: any = window; try { w.dx?.wantSym?.(sym); w.goTab('dex'); setTimeout(() => { const id = w.dx?.findSym?.(sym); if (id) w.dx.pick(id); }, 700); } catch { ctx.toast('Open the DEX tab to trade ' + sym, true); } },
   async upload(inp: HTMLInputElement, kind: string) {
     const files = inp.files; if (!files || !files.length || UP || !need()) { inp.value = ''; return; } UP = true;
     try {
