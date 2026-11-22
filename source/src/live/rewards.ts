@@ -29,8 +29,8 @@ const enc = new TextEncoder();
 const hexOf = (s: string) => Array.from(enc.encode(s)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
 const post = (p: string, body: any) => call(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-interface St { view: string; d: any; err: string; busy: boolean; step: string; done: any; at: number; addr: string; loading: boolean }
-const S: St = { view: (() => { try { return localStorage.getItem('rw.view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } })(), d: null, err: '', busy: false, step: '', done: null, at: 0, addr: '', loading: false };
+interface St { pg: number; flt: string; view: string; d: any; err: string; busy: boolean; step: string; done: any; at: number; addr: string; loading: boolean }
+const S: St = { pg: 0, flt: '', view: (() => { try { return localStorage.getItem('rw.view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } })(), d: null, err: '', busy: false, step: '', done: null, at: 0, addr: '', loading: false };
 let timer: any = 0, refresh: any = 0;
 
 const myAddr = (): string => { try { const a = ctx.account(); return a ? a : ''; } catch { return ''; } };
@@ -47,6 +47,21 @@ const f8 = (n: number) => (Number(n) || 0).toLocaleString('en', { minimumFractio
 const dt = () => Math.max(0, (Date.now() - S.at) / 1000);
 const earnTok = (r: any) => (r.earnedTok || 0) + (r.perDayTok || 0) / 86400 * dt();
 const canNow = (r: any, c: any) => !!c.open && earnTok(r) > 0;
+const AK = () => 'rw.auto.' + (myAddr() || '-');
+const autoGet = (): { on: boolean; last: number } => { try { const j = JSON.parse(localStorage.getItem(AK()) || 'null'); return j && typeof j === 'object' ? { on: !!j.on, last: +j.last || 0 } : { on: false, last: 0 }; } catch { return { on: false, last: 0 }; } };
+const autoSet = (v: { on: boolean; last: number }) => { try { localStorage.setItem(AK(), JSON.stringify(v)); } catch {} };
+const DAY = 86400e3;
+let autoBusy = false;
+async function autoTick() {
+  if (autoBusy || S.busy || ctx.xrpl() || !myAddr()) return; const a = autoGet(); if (!a.on || Date.now() - a.last < DAY || !walletOf()) return;
+  autoBusy = true;
+  try { await load(true); const d = S.d; if (!d || !d.ok || !d.exists || d.excluded || !d.cfg.open) { autoSet({ on: true, last: Date.now() - DAY + 3600e3 }); return; }
+    if (!(d.rows || []).some((r: any) => canNow(r, d.cfg))) { autoSet({ on: true, last: Date.now() - DAY + 3600e3 }); return; }
+    autoSet({ on: true, last: Date.now() }); await run(); if (S.err) autoSet({ on: true, last: Date.now() - DAY + 3600e3 }); else ctx.toast('Auto claim: rewards collected', false);
+  } finally { autoBusy = false; }
+}
+setInterval(() => { void autoTick(); }, 60000); setTimeout(() => { void autoTick(); }, 8000);
+const nextRun = (a: { on: boolean; last: number }) => { if (!a.on) return ''; const t = a.last + DAY, left = t - Date.now(); return left <= 0 ? 'Next claim: any moment now' : 'Next claim: ' + new Date(t).toLocaleString() + ' (in ' + (left > 3600e3 ? Math.round(left / 3600e3) + ' h' : Math.max(1, Math.round(left / 60e3)) + ' min') + ')'; };
 export function shell() { return `<div id="rw" class="grid"><div class="card c12"><div class="k">Rewards</div><div class="muted" style="margin-top:.4rem">Loading…</div></div></div>`; }
 
 function paint() {
@@ -64,6 +79,7 @@ function paint() {
   else if (!c.open) action = `<div class="muted">${esc(c.why || 'Rewards are closed right now.')}</div>`;
   else if (!w) action = `<div class="muted">Unlock your vault with this wallet's key to collect. A watch-only wallet can look but not collect.</div>`;
   else action = `<button class="pri" id="rw_go" ${S.busy ? 'disabled' : ''} onclick="window.rw.collect()">${S.busy ? esc(S.step || 'Working…') : 'Collect all'}</button><div class="muted" style="font-size:.8rem;margin-top:.35rem">Every token pays out in itself, from the genesis wallet. Collect as often as you like; each payout costs ${fmt(c.fee, 2)} LUMA, taken from it in that token.</div>`;
+  if (w && c.open && d.exists && !d.excluded) { const au = autoGet(); action += `<label class="row" style="gap:.5rem;margin-top:.6rem;align-items:center;cursor:pointer"><input type="checkbox" ${au.on ? 'checked' : ''} onchange="window.rw.auto(this.checked)"><span><b>Auto claim all every 24 hours</b><span class="muted" style="display:block;font-size:.78rem">${au.on ? esc(nextRun(au)) + '. ' : ''}Runs while Starsky is open in a tab with this wallet unlocked.</span></span></label>`; }
   const R: any[] = d.rows || [], btn = (r: any, i: number) => w && c.open && d.exists && !d.excluded ? `<button class="sm pri" id="rw_b${i}" data-s="${esc(r.sym)}" ${S.busy || !canNow(r, c) ? 'disabled' : ''} onclick="window.rw.collect(this.dataset.s)">Collect ${esc(r.name)}</button>` : '';
   const tok = (r: any) => `<span class="mono">${f8(earnTok(r))}</span> ${esc(r.name)}`;
   const rows = R.map((r: any, i: number) => `<tr><td><b>${esc(r.name)}</b>${r.issuer ? `<div class="muted mono" style="font-size:.72rem">${esc(r.issuer.slice(0, 10))}…</div>` : '<div class="muted" style="font-size:.72rem">native coin</div>'}</td>
@@ -76,7 +92,10 @@ function paint() {
       <div style="margin-top:.7rem">${btn(r, i)}</div></div>`).join('');
   const body = !R.length ? '<div class="muted">Nothing here earns rewards yet.</div>' : S.view === 'grid' ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:.8rem;margin-top:.6rem">${grid}</div>` : `<div style="overflow-x:auto;margin-top:.5rem"><table class="t" style="width:100%"><thead><tr><th>Token</th><th class="r">Balance</th><th class="r">Worth</th><th class="r">Yearly rate</th><th class="r">Earns per day</th><th class="r">Earned so far (paid in the token)</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   const toggle = `<span class="row" style="gap:.3rem"><button class="sm ${S.view === 'list' ? 'pri' : 'ghost'}" onclick="window.rw.setView('list')">List</button><button class="sm ${S.view === 'grid' ? 'pri' : 'ghost'}" onclick="window.rw.setView('grid')">Grid</button></span>`;
-  const hist = (d.recent || []).length ? d.recent.map((x: any) => `<div class="row" style="justify-content:space-between;font-size:.85rem;padding:.25rem 0"><span class="muted">${ago(x.t)}${x.state !== 'paid' ? ' (' + esc(x.state) + ')' : ''}</span><span>${fmt(x.net, 6)} LUMA <span class="muted">(fee ${fmt(x.fee, 2)})</span></span></div>`).join('') : '<div class="muted">No collects yet.</div>';
+  const allH: any[] = d.recent || [], syms = Array.from(new Set(allH.map((x: any) => x.tok || 'LUMA'))), fh = S.flt ? allH.filter((x: any) => (x.tok || 'LUMA') === S.flt) : allH, PS = 10, pgs = Math.max(1, Math.ceil(fh.length / PS)); if (S.pg >= pgs) S.pg = pgs - 1; if (S.pg < 0) S.pg = 0;
+  const totN = fh.reduce((s: number, x: any) => s + (x.state === 'paid' ? (+x.net || 0) : 0), 0);
+  const hist = fh.length ? `<div class="muted" style="font-size:.8rem;margin-bottom:.4rem">${fh.length} collect${fh.length === 1 ? '' : 's'} · ${fmt(totN, 6)} LUMA value paid out</div>` + fh.slice(S.pg * PS, S.pg * PS + PS).map((x: any) => `<div style="padding:.45rem 0;border-top:1px solid rgba(255,255,255,.07);font-size:.85rem"><div class="row" style="justify-content:space-between;gap:.6rem"><b>${fmt(x.tokNet ?? x.net, 8)} ${esc(x.tok || 'LUMA')}</b><span class="${x.state === 'paid' ? 'up' : 'muted'}">${esc(x.state)}</span></div><div class="muted" style="font-size:.78rem">${new Date(x.t).toLocaleString()} (${ago(x.t)}) · worth ${fmt(x.net, 6)} LUMA · fee ${fmt(x.tokFee ?? x.fee, 6)} ${esc(x.tok || 'LUMA')}${x.tokGross != null ? ' · earned ' + fmt(x.tokGross, 8) : ''}</div>${x.tx ? `<div class="muted" style="font-size:.74rem;word-break:break-all">tx ${esc(String(x.tx).slice(0, 10))}…${esc(String(x.tx).slice(-6))}</div>` : ''}${x.err ? `<div class="dn" style="font-size:.78rem">${esc(x.err)}</div>` : ''}</div>`).join('') + `<div class="row" style="justify-content:space-between;align-items:center;margin-top:.6rem;gap:.5rem"><button class="sm ghost" ${S.pg <= 0 ? 'disabled' : ''} onclick="window.rw.page(${S.pg - 1})">Newer</button><span class="muted" style="font-size:.8rem">Page ${S.pg + 1} of ${pgs}</span><button class="sm ghost" ${S.pg >= pgs - 1 ? 'disabled' : ''} onclick="window.rw.page(${S.pg + 1})">Older</button></div>` : '<div class="muted">No collects yet.</div>';
+  const flt = syms.length > 1 ? `<select onchange="window.rw.filter(this.value)" style="margin-top:.4rem"><option value="">All tokens</option>${syms.map(s => `<option ${S.flt === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>` : '';
   el.innerHTML = `
     <div class="card c12" style="background:linear-gradient(135deg,rgba(52,211,153,.10),rgba(96,165,250,.08))">
       <div class="row" style="align-items:flex-end;gap:1rem;flex-wrap:wrap">
@@ -92,7 +111,7 @@ function paint() {
     <div class="card c3"><div class="k">Collected so far</div><div style="font-size:1.45rem;font-weight:700;margin-top:.2rem">${fmt(d.collected || 0, 4)} LUMA</div><div class="muted" style="font-size:.78rem">${fmt(d.collects || 0, 0)} collects</div></div>
     <div class="card c3"><div class="k">Rates</div><div style="font-size:1.45rem;font-weight:700;margin-top:.2rem">${fmt(c.apyLuma, 0)}% · ${fmt(c.apyOther, 0)}%</div><div class="muted" style="font-size:.78rem">LUMA · every other token, per year</div></div>
     <div class="card c12"><div class="row" style="justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap"><div class="k" style="margin:0">Your tokens and what each one has earned</div>${toggle}</div>${body}</div>
-    <div class="card c6"><div class="k">Latest collects</div><div style="margin-top:.4rem">${hist}</div></div>
+    <div class="card c6"><div class="k">Latest collects</div>${flt}<div style="margin-top:.4rem">${hist}</div></div>
     <div class="card c6"><div class="k">How rewards work</div><ul class="muted" style="margin:.5rem 0 0 1.1rem;line-height:1.6">
       <li>Every token on the LUMA network that has a price earns on its balance: LUMA ${fmt(c.apyLuma, 0)}% a year, every other token ${fmt(c.apyOther, 0)}%.</li>
       <li>Rewards are worth the token's value in LUMA and are paid in LUMA, from the genesis wallet.</li>
@@ -143,4 +162,4 @@ export function mount() {
   refresh = setInterval(() => { if (!document.hidden && !S.busy) void load(true); }, 30000);
 }
 export function unmount() { stop(); }
-(window as any).rw = { load: () => load(), collect: (sym?: string) => { void run(sym); }, setView: (v: string) => { S.view = v === 'grid' ? 'grid' : 'list'; try { localStorage.setItem('rw.view', S.view); } catch {} paint(); } };
+(window as any).rw = { page: (n: number) => { S.pg = n; paint(); }, filter: (v: string) => { S.flt = v; S.pg = 0; paint(); }, auto: (on: boolean) => { autoSet({ on, last: 0 }); ctx.toast(on ? 'Auto claim on. Rewards are collected every 24 hours.' : 'Auto claim off.', false); paint(); if (on) void autoTick(); }, load: () => load(), collect: (sym?: string) => { void run(sym); }, setView: (v: string) => { S.view = v === 'grid' ? 'grid' : 'list'; try { localStorage.setItem('rw.view', S.view); } catch {} paint(); } };
