@@ -1479,6 +1479,8 @@ export function renderApp() {
   Extras.boot();
   const root = document.getElementById('app');
   if (!root) return;
+  // never rebuild the page under someone who is typing in the profile editor (a ledger tick or balance refresh would reset the cursor)
+  { const ae = document.activeElement as HTMLElement | null; if (st.tab === 'social' && ae && ae !== document.body && ae.closest && ae.closest('.sc-editpg') && document.querySelector('#sc .sc-editpg')) return; }
 
   if (!VAULT) {
     renderLockScreen(root);
