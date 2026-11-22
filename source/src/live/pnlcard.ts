@@ -2,6 +2,7 @@
 import { ctx } from './ctx.ts';
 import { ipfsAdd } from './nft.ts';
 import { esc, fmt } from './util.ts';
+import QRCode from 'qrcode';
 
 export interface PnlData { market: string; long: boolean; lev: number; entry: string; exit: string; size: number; margin: number; pnl: number; roe: number; held: string; result: string; when: number; unit: string }
 const rr = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); };
@@ -31,6 +32,14 @@ export async function drawPnl(d: PnlData): Promise<Blob> {
   const items: [string, string][] = [['Entry', d.entry], ['Exit', d.exit], ['Size', fmt(d.size) + ' ' + d.unit], ['Margin', fmt(d.margin) + ' ' + d.unit], ['Held', d.held]];
   let x = 80; const y = 525, cw = (W - 160) / items.length;
   for (const [k, v] of items) { c.fillStyle = '#8f98c9'; c.font = `600 18px ${F}`; c.fillText(k, x, y); c.fillStyle = '#ffffff'; c.font = `700 28px ${F}`; c.fillText(v, x, y + 38); x += cw; }
+  // QR code to the site (top right)
+  try {
+    const qc = document.createElement('canvas');
+    await QRCode.toCanvas(qc, 'https://www.starsky-luma.org', { margin: 1, width: 150, color: { dark: '#0b0f26', light: '#ffffff' } });
+    rr(c, W - 80 - 170, 150, 170, 196, 18); c.fillStyle = '#ffffff'; c.fill();
+    c.drawImage(qc, W - 80 - 160, 160, 150, 150);
+    c.fillStyle = '#0b0f26'; c.font = `700 16px ${F}`; c.textAlign = 'center'; c.fillText('Scan to open Starsky', W - 80 - 85, 332); c.textAlign = 'left';
+  } catch {}
   // footer
   c.fillStyle = '#7f89bd'; c.font = `500 18px ${F}`; c.fillText(new Date(d.when).toLocaleString(), 80, 626); c.textAlign = 'right'; c.fillStyle = '#62f2b4'; c.font = `700 20px ${F}`; c.fillText('starsky-luma.org', W - 80, 626); c.textAlign = 'left';
   return await new Promise<Blob>((res, rej) => cv.toBlob(b => (b ? res(b) : rej(new Error('Could not draw the image.'))), 'image/png'));
