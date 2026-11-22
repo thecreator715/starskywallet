@@ -1,0 +1,1140 @@
+// LUMA Social: a social network whose database is the LUMA chain.
+// Every action is a tiny LUMA payment to the network's "hub" address carrying a JSON memo (type "luma-social"). The chain keeps the order, the author (the signer) and the time.
+// This page reads the hub's history, replays it in order, and builds everything you see: posts, threads, likes, reactions, follows, profiles, handles, polls, boosts, tips, trends.
+// Tips are real payments straight to the person tipped, in LUMA or any token; a small public log entry in the hub lets everyone see them, and every reader verifies each tip on the chain.
+// No company server holds anything. Anyone can rebuild the same network from the chain, and nobody can post as you without your key.
+import { ctx } from './ctx.ts';
+import { amtTx, esc, fmt, hexName } from './util.ts';
+import { base } from './nodelink.ts';
+
+const MT = 'luma-social';
+const HUBS: Record<string, string> = { main: 'rHNDrZSmSH6TqDCfA1KENwwZyKwHmStvPL', test: 'rGeYQ26dzMz3TfTqz34dpBfmpHZpHbeFdE' };
+// what each action costs (LUMA). The network fee of the chain is on top. All of it lands in the hub; tips go straight to the person tipped.
+const COST: Record<string, number> = { post: 0.001, rt: 0.001, like: 0.0001, unl: 0.0001, fol: 0.001, unf: 0.001, prof: 0.01, hdl: 1, vote: 0.0001, del: 0.0001, rx: 0.0001, boost: 1, edit: 0.001, pin: 0.0001, tipn: 0.0001, rep: 0.0001, lst: 0.01, lup: 0.001, ofr: 0.0001, ask: 0.0001, ans: 0.0001, rev: 0.0001, chk: 0.0001 };
+const MAXTXT = 500, MAXMEMO = 900, MAXPARTS = 10, RIPPLE_EPOCH = 946684800;
+const EMOJI = ['🔥', '😂', '🚀', '👏', '😮', '😢'];
+
+const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
+const hub = () => { const c = (window as any).STARSKY_CONFIG || {}; return (c.socialHub && c.socialHub[net()]) || HUBS[net()]; };
+const enc = new TextEncoder(), dec = new TextDecoder();
+const toHex = (s: string) => Array.from(enc.encode(s)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+const fromHex = (h: string) => { try { const a = new Uint8Array((h.match(/../g) || []).map(x => parseInt(x, 16))); return dec.decode(a); } catch { return ''; } };
+const isAddr = (a: any) => typeof a === 'string' && /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(a);
+const isHash = (a: any) => typeof a === 'string' && /^[0-9A-Fa-f]{64}$/.test(a);
+
+// ---------- the index: rebuilt from the chain ----------
+interface Ev { h: string; a: string; t: number; l: number; i: number; v: number; d: any }
+interface Post { id: string; a: string; t: number; x: string; m: string[]; q?: string; r?: string; p?: string[]; n?: string; del?: boolean; mod?: boolean; ed?: number }
+interface Prof { n?: string; b?: string; i?: string; k?: string; c?: string; w?: string; l?: string; pr?: string; jb?: string; st?: string; sh?: string; ln?: Array<{ t: string; u: string }> }
+interface Tip { th: string; by: string; to: string; ref: string; c: string; i: string; v: number; t: number; m: string }
+interface Idx {
+  posts: Map<string, Post>; replies: Map<string, string[]>; likes: Map<string, Set<string>>; rts: Map<string, Set<string>>; rtEv: Array<{ by: string; ref: string; t: number; h: string }>;
+  follows: Map<string, Set<string>>; followers: Map<string, Set<string>>; prof: Map<string, Prof>; owner: Map<string, string>; cur: Map<string, string>;
+  votes: Map<string, Map<string, number>>; rx: Map<string, Map<string, string>>; boosts: Map<string, Array<{ by: string; v: number; t: number }>>; pin: Map<string, string>;
+  tipClaims: Array<{ th: string; by: string; to: string; ref: string; t: number; m: string; k?: string; q?: number }>; tipsRef: Map<string, Tip[]>; tipsTo: Map<string, Tip[]>; tipsBy: Map<string, Tip[]>; tipsAll: Tip[];
+  order: string[]; maxLedger: number; refBy: Map<string, string>; chk: Map<string, Set<number>>;
+}
+let EV: Ev[] = [];
+let TV: Record<string, any> = {};          // verified tips by payment hash (0 = checked and rejected)
+let IX: Idx = blank();
+function blank(): Idx { return { posts: new Map(), replies: new Map(), likes: new Map(), rts: new Map(), rtEv: [], follows: new Map(), followers: new Map(), prof: new Map(), owner: new Map(), cur: new Map(), votes: new Map(), rx: new Map(), boosts: new Map(), pin: new Map(), tipClaims: [], tipsRef: new Map(), tipsTo: new Map(), tipsBy: new Map(), tipsAll: [], order: [], maxLedger: 0, refBy: new Map(), chk: new Map() }; }
+const setOf = <K>(m: Map<K, Set<string>>, k: K) => { let s = m.get(k); if (!s) m.set(k, (s = new Set())); return s; };
+const listOf = <V>(m: Map<string, V[]>, k: string) => { let s = m.get(k); if (!s) m.set(k, (s = [])); return s; };
+const clip = (v: any, n: number) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
+const safeUrl = (u: any): string => {
+  if (typeof u !== 'string') return ''; u = u.trim();
+  if (/^ipfs:\/\/[A-Za-z0-9/_.\-]{10,200}$/.test(u)) return 'https://ipfs.io/ipfs/' + u.slice(7);
+  return /^https:\/\/[^\s"'<>\\]{4,300}$/.test(u) ? u : '';
+};
+const tokName = (c: string) => (c === 'LUMA' || c === 'native' || c === 'XRP' ? 'LUMA' : hexName(c));
+const tokKey = (c: string, i: string) => (tokName(c) === 'LUMA' ? 'LUMA' : c + '|' + i);
+
+
+// ---------- the platform policy: what the operator hides, bans and allows. The built-in rules below always apply, even when the operator's panel cannot be reached. ----------
+const RULES0: Record<string, string> = {
+  child: String.raw`\b(child|children|kid|kids|minor|minors|underage|under-?age|teen|teens|toddler|preteen|schoolgirl|schoolboy)\b.{0,50}\b(porn\w*|sex\w*|nude|naked|explicit|xxx|nsfw|erotic\w*)\b|\b(porn\w*|sex\w*|nude|naked|explicit|xxx|nsfw|erotic\w*)\b.{0,50}\b(child|children|kid|kids|minor|minors|underage|under-?age|teen|teens|toddler|preteen|schoolgirl|schoolboy)\b|\b(loli\w*|shota\w*|pedo\w*|paedo\w*)\b`,
+  sexual: String.raw`\b(porn\w*|xxx|nsfw|nudes?|hardcore|blowjob|handjob|cumshot|creampie|orgasm\w*|erotic\w*|onlyfans|hentai|milf|dick ?pics?|anal sex|sex ?tapes?|sex ?chat|camgirls?|escort services?|fetish|bondage|horny|naked)\b`,
+  violence: String.raw`\b(gore|beheading\w*|decapitat\w*|snuff|torture video|mass shooting|rape\w*|lynch\w*|how to make a bomb|bomb making|i('| wi)ll (kill|murder|shoot|stab) (you|him|her|them|everyone)|kill (yourself|your ?self)|kys|death threat\w*)\b`,
+};
+interface Pol { on: boolean; readOnly: boolean; banner: string; imageMode: string; imageHosts: string[]; blurMedia: boolean; flags: { sexual: boolean; violence: boolean; child: boolean }; rules: Record<string, string>; words: string[]; patterns: string[]; hidden: Set<string>; banned: Set<string>; verified: Set<string>; badProfiles: string[]; at: number; ok: boolean }
+const POL0 = (): Pol => ({ on: true, readOnly: false, banner: '', imageMode: 'any', imageHosts: [], blurMedia: true, flags: { sexual: true, violence: true, child: true }, rules: RULES0, words: [], patterns: [], hidden: new Set(), banned: new Set(), verified: new Set(), badProfiles: [], at: 0, ok: false });
+let POL: Pol = POL0(), RXC: Array<[string, RegExp]> = [];
+function setPol(j: any) {
+  const p = POL0(); p.ok = true; p.on = j.on !== false; p.readOnly = !!j.readOnly; p.banner = String(j.banner || '').slice(0, 240); p.imageMode = ['any', 'allowlist', 'nft', 'off'].includes(j.imageMode) ? j.imageMode : 'any';
+  p.imageHosts = Array.isArray(j.imageHosts) ? j.imageHosts.map((x: any) => String(x).toLowerCase()) : []; p.blurMedia = j.blurMedia !== false; p.flags = { sexual: j.flags?.sexual !== false, violence: j.flags?.violence !== false, child: true };
+  p.rules = { ...RULES0, ...(j.rules || {}), child: RULES0.child + '|' + (j.rules && j.rules.child ? j.rules.child : RULES0.child) }; p.words = Array.isArray(j.words) ? j.words.map(String) : []; p.patterns = Array.isArray(j.patterns) ? j.patterns.map(String) : [];
+  p.hidden = new Set((j.hidden || []).map((x: string) => String(x).toUpperCase())); p.banned = new Set(j.banned || []); p.verified = new Set(j.verified || []); p.badProfiles = j.badProfiles || []; p.at = Date.now(); POL = p;
+  RXC = []; const add = (k: string, src: string) => { try { RXC.push([k, new RegExp(src, 'i')]); } catch {} };
+  add('child', p.rules.child); if (p.flags.sexual) add('sexual', p.rules.sexual); if (p.flags.violence) add('violence', p.rules.violence);
+  for (const w of p.words) add('custom', '\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b'); for (const x of p.patterns) add('custom', x);
+}
+setPol({}); POL.at = 0; POL.ok = false;
+const violates = (t: string): string => { t = String(t || ''); if (!t) return ''; for (const [k, r] of RXC) if (r.test(t)) return k; return ''; };
+const hiddenPost = (p: Post) => POL.hidden.has(p.id) || POL.banned.has(p.a) || !!violates(p.x + ' ' + (p.p || []).join(' '));
+const NFTHOSTS = ['ipfs.io', 'nftstorage.link', 'cloudflare-ipfs.com', 'arweave.net', 'w3s.link', 'dweb.link'];
+const okImg = (u: string): boolean => { if (!u) return false; const m = POL.imageMode; if (m === 'any') return true; if (m === 'off') return false; let h = ''; try { h = new URL(u).hostname.toLowerCase(); } catch { return false; } const hs = POL.imageHosts.length ? POL.imageHosts : NFTHOSTS; return hs.some(x => h === x || h.endsWith('.' + x)); };
+const WHY: Record<string, string> = { child: 'content that sexualises children', sexual: 'sexual or explicit content', violence: 'graphic violence or threats', custom: 'words this network does not allow' };
+const roots = (): string[] => { const k = net(), port = k === 'test' ? 8091 : 8090; const c = (window as any).STARSKY_CONFIG || {}, pn = String((c[k] || c.main || {}).panel || '').replace(/\/+$/, ''); const r = [`${base()}/panel/${k}`]; if (pn) r.push(pn); r.push(`http://127.0.0.1:${port}`, `http://localhost:${port}`); return r; };
+let RIGHT = 0;
+async function pcall(p: string): Promise<any> {
+  const rs = roots();
+  for (let n = 0; n < rs.length; n++) { const i = (RIGHT + n) % rs.length; try { const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 5000); const r = await fetch(`${rs[i]}/api/public/social/${p}`, { cache: 'no-store', signal: ctl.signal }); clearTimeout(to); const j = await r.json().catch(() => null); if (j && typeof j === 'object' && j.ok) { RIGHT = i; return j; } } catch {} }
+  return null;
+}
+let polBusy = false;
+async function loadPolicy() { if (polBusy || Date.now() - POL.at < 45000) return; polBusy = true; try { const j = await pcall('policy'); if (j) { setPol(j); try { localStorage.setItem('sc.pol.' + net(), JSON.stringify(j)); } catch {} rebuild(); paint(); } } finally { polBusy = false; } }
+function cachedPolicy() { try { const j = JSON.parse(localStorage.getItem('sc.pol.' + net()) || 'null'); if (j) { setPol(j); POL.at = 0; } } catch {} }
+const blocked = (): string => (!POL.on ? 'LUMA Social is closed by the network operator for now.' : POL.readOnly ? 'LUMA Social is read only right now.' : me() && POL.banned.has(me()) ? 'This account is suspended from LUMA Social by the network operator.' : '');
+// token prices and history for the price cards
+interface Px { usd: number; chg: number; hist: number[] }
+let PX: Record<string, Px> = {}, pxAt = 0;
+async function loadPrices() { if (Date.now() - pxAt < 60000) return; pxAt = Date.now(); const j = await pcall('prices'); if (j && j.tokens) { PX = j.tokens; updCard(); paint(); } }
+const pxFor = (sym: string): { sym: string; p: Px } | null => { const s = sym.replace(/^\$/, '').toUpperCase(); for (const c of [s, s + 'Z', s + 'X']) for (const k of Object.keys(PX)) if (k.toUpperCase() === c) return { sym: k, p: PX[k] }; return null; };
+const usdFmt = (n: number) => '$' + (n >= 1 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n >= 0.01 ? n.toFixed(4) : n.toPrecision(3));
+function spark(h: number[], up: boolean) {
+  const a = h.length > 1 ? h : [h[0] || 0, h[0] || 0], mn = Math.min(...a), mx = Math.max(...a), W = 300, H = 56, dy = mx - mn || 1, col = up ? '#34d399' : '#f87171';
+  const pts = a.map((v, i) => `${(i / (a.length - 1) * W).toFixed(1)},${(H - 4 - ((v - mn) / dy) * (H - 10)).toFixed(1)}`);
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}" aria-hidden="true"><defs><linearGradient id="spg${up ? 'u' : 'd'}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".35"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs><polygon points="0,${H} ${pts.join(' ')} ${W},${H}" fill="url(#spg${up ? 'u' : 'd'})"/><polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function priceCard(tagTxt: string, opts: { close?: boolean } = {}): string {
+  const f = pxFor(tagTxt); if (!f) return ''; const up = f.p.chg >= 0, nm = f.sym;
+  return `<div class="sc-pc" data-act="tag" data-v="$${esc(nm.toLowerCase())}"><span class="sc-pcl" style="background:linear-gradient(135deg,hsl(${hue(nm)} 70% 50%),hsl(${(hue(nm) + 60) % 360} 70% 38%))">${esc(nm[0])}</span><div class="sc-pci"><b>${esc(nm)}</b><div><span class="sc-m">${esc(nm)}</span> <b>${usdFmt(f.p.usd)}</b> <span style="color:${up ? '#34d399' : '#f87171'};font-weight:600">${up ? '+' : ''}${f.p.chg.toFixed(2)}%</span></div></div><div class="sc-pcs">${spark(f.p.hist, up)}</div>${opts.close ? `<span class="sc-pcb"><button class="sc-ib" data-act="tag" data-v="$${esc(nm.toLowerCase())}" title="Open">${ic('expand', 16)}</button><button class="sc-ib" data-act="pcx" data-v="${esc(nm)}" title="Remove card">${ic('x', 16)}</button></span>` : ''}</div>`;
+}
+const cardSym = (txt: string, comp = false): string => { const m = txt.match(/\$[A-Za-z][A-Za-z0-9]{1,9}/g) || []; for (let i = m.length - 1; i >= 0; i--) { const f = pxFor(m[i]); if (f && !(comp && S.noCard.has(f.sym))) return m[i]; } return ''; };
+function updCard() { const el = document.getElementById('sc-card'); if (el) el.innerHTML = cardSym(S.draft, true) ? priceCard(cardSym(S.draft, true), { close: true }) : ''; }
+
+function rebuild() {
+  const ix = blank(); EV.sort((x, y) => x.l - y.l || x.i - y.i);
+  const seenTip = new Set<string>(), mk = mkBlank();
+  for (const e of EV) {
+    const d = e.d; ix.maxLedger = Math.max(ix.maxLedger, e.l);
+    const ref = typeof d.ref === 'string' && isHash(d.ref) ? d.ref.toUpperCase() : '';
+    switch (d.t) {
+      case 'post': {
+        const x = clip(d.x, MAXTXT), m = Array.isArray(d.m) ? d.m.map(safeUrl).filter(Boolean).slice(0, 4) : [], p = Array.isArray(d.p) ? d.p.map((o: any) => clip(o, 40)).filter(Boolean).slice(0, 4) : undefined;
+        if (!x && !m.length && !d.q) break; if (ix.posts.has(e.h)) break;
+        const po: Post = { id: e.h, a: e.a, t: e.t, x, m, q: isHash(d.q) ? d.q.toUpperCase() : undefined, n: isHash(d.n) ? d.n.toUpperCase() : undefined, r: isHash(d.r) ? d.r.toUpperCase() : undefined, p: p && p.length >= 2 ? p : undefined };
+        ix.posts.set(e.h, po); ix.order.push(e.h); if (po.r) listOf(ix.replies, po.r).push(e.h); break;
+      }
+      case 'edit': { const p = ref ? ix.posts.get(ref) : undefined; if (p && p.a === e.a && !p.del) { const x = clip(d.x, MAXTXT); if (x) { p.x = x; p.ed = e.t; } } break; }
+      case 'rt': if (ref && !setOf(ix.rts, ref).has(e.a)) { setOf(ix.rts, ref).add(e.a); ix.rtEv.push({ by: e.a, ref, t: e.t, h: e.h }); } break;
+      case 'like': if (ref) setOf(ix.likes, ref).add(e.a); break;
+      case 'unl': if (ref) setOf(ix.likes, ref).delete(e.a); break;
+      case 'del': { const p = ref ? ix.posts.get(ref) : undefined; if (p && p.a === e.a) p.del = true; break; }
+      case 'fol': if (isAddr(d.a) && d.a !== e.a) { setOf(ix.follows, e.a).add(d.a); setOf(ix.followers, d.a).add(e.a); if (isAddr(d.rf) && d.rf !== e.a && !ix.refBy.has(e.a)) ix.refBy.set(e.a, d.rf); } break;
+      case 'chk': { let c = ix.chk.get(e.a); if (!c) ix.chk.set(e.a, (c = new Set())); c.add(Math.floor(e.t / 86400)); break; }
+      case 'unf': if (isAddr(d.a)) { setOf(ix.follows, e.a).delete(d.a); setOf(ix.followers, d.a).delete(e.a); } break;
+      case 'prof': ix.prof.set(e.a, { n: clip(d.n, 40), b: clip(d.b, 200), i: safeUrl(d.i), k: safeUrl(d.k), c: /^#[0-9a-fA-F]{6}$/.test(d.c || '') ? d.c : '', w: safeUrl(d.w), l: clip(d.l, 40), pr: clip(d.pr, 30), jb: clip(d.jb, 40), st: clip(d.st, 50), sh: d.sh === 's' ? 's' : 'c', ln: Array.isArray(d.ln) ? d.ln.slice(0, 2).map((x: any) => ({ t: clip(x && x.t, 20), u: safeUrl(x && x.u) })).filter((x: any) => x.u) : [] }); break;
+      case 'hdl': { const h = typeof d.h === 'string' ? d.h.toLowerCase() : ''; if (/^[a-z0-9_]{3,15}$/.test(h)) { if (!ix.owner.has(h)) ix.owner.set(h, e.a); if (ix.owner.get(h) === e.a) ix.cur.set(e.a, h); } break; }
+      case 'vote': if (ref && Number.isInteger(d.o)) { let m = ix.votes.get(ref); if (!m) ix.votes.set(ref, (m = new Map())); if (!m.has(e.a)) m.set(e.a, d.o); } break;
+      case 'rx': if (ref) { let m = ix.rx.get(ref); if (!m) ix.rx.set(ref, (m = new Map())); if (d.e === '') m.delete(e.a); else if (EMOJI.includes(d.e)) m.set(e.a, d.e); } break;
+      case 'boost': if (ref) listOf(ix.boosts, ref).push({ by: e.a, v: e.v, t: e.t }); break;
+      case 'pin': if (d.ref === '') ix.pin.delete(e.a); else { const p = ref ? ix.posts.get(ref) : undefined; if (p && p.a === e.a && !p.del && !p.r) ix.pin.set(e.a, ref); } break;
+      case 'tipn': if (isHash(d.th) && isAddr(d.to) && !seenTip.has(d.th.toUpperCase())) { seenTip.add(d.th.toUpperCase()); ix.tipClaims.push({ th: d.th.toUpperCase(), by: e.a, to: d.to, ref, t: e.t, m: clip(d.m, 60), k: d.k === 'buy' ? 'buy' : '', q: Math.max(1, Math.min(999, Math.floor(Number(d.q) || 1))) }); } break;
+      case 'lst': case 'lup': case 'ofr': case 'ask': case 'ans': case 'rev': mkEvent(mk, e, d, ref); break;
+    }
+  }
+  for (const c of ix.tipClaims) {                   // only tips that the chain itself confirmed are counted
+    const r = TV[c.th]; if (!r || r.by !== c.by || r.to !== c.to) continue;
+    if (c.k === 'buy') { const l = mk.l.get(c.ref), q = c.q || 1; listOf(mk.sales, c.ref).push({ th: c.th, by: c.by, to: c.to, ref: c.ref, n: r.v, q, t: c.t, ok: !!l && l.a === c.to && tokKey(r.c, r.i) === tokKey(l.c, l.i) && r.v + 1e-9 >= l.pr * q }); continue; }
+    const tp: Tip = { th: c.th, by: c.by, to: c.to, ref: c.ref, c: r.c, i: r.i, v: r.v, t: c.t, m: c.m };
+    ix.tipsAll.push(tp); listOf(ix.tipsTo, c.to).push(tp); listOf(ix.tipsBy, c.by).push(tp); if (c.ref) listOf(ix.tipsRef, c.ref).push(tp);
+  }
+  for (const p of ix.posts.values()) if (!p.del && hiddenPost(p)) { p.del = true; p.mod = true; }
+  for (const a of POL.badProfiles) ix.prof.delete(a);
+  IX = ix; MK = mk;
+}
+
+// ---------- reading the chain ----------
+const KEY = () => 'sc.ev.' + net() + '.' + hub(), TKEY = () => 'sc.tipv.' + net();
+function loadCache() { try { const j = JSON.parse(localStorage.getItem(KEY()) || '[]'); if (Array.isArray(j)) EV = j; } catch { EV = []; } try { TV = JSON.parse(localStorage.getItem(TKEY()) || '{}') || {}; } catch { TV = {}; } rebuild(); }
+function saveCache() { try { let a = EV; if (a.length > 6000) a = a.slice(-6000); const s = JSON.stringify(a); if (s.length < 3.5e6) localStorage.setItem(KEY(), s); const k = Object.keys(TV); if (k.length > 4000) for (const x of k.slice(0, k.length - 4000)) delete TV[x]; localStorage.setItem(TKEY(), JSON.stringify(TV)); } catch {} }
+function parseTx(x: any): Ev | null {
+  const tx = x.tx || x.tx_json || {}, meta = x.meta || x.metaData || {};
+  if (!(x.validated ?? true) || tx.TransactionType !== 'Payment' || tx.Destination !== hub() || meta.TransactionResult !== 'tesSUCCESS') return null;
+  const amt = meta.delivered_amount ?? tx.Amount ?? tx.DeliverMax; if (typeof amt !== 'string') return null;
+  for (const m of tx.Memos || []) {
+    const mm = m.Memo || {}; if (fromHex(mm.MemoType) !== MT) continue;
+    let d: any; try { d = JSON.parse(fromHex(mm.MemoData)); } catch { continue; }
+    if (!d || d.v !== 1 || typeof d.t !== 'string' || !(d.t in COST)) continue;
+    if (Number(amt) < COST[d.t] * 1e6 * 0.999) continue;      // underpaid actions do not count
+    const h = String(x.hash || tx.hash || '').toUpperCase(); if (!isHash(h)) continue;
+    const date = tx.date ?? x.date, t = date != null ? Number(date) + RIPPLE_EPOCH : x.close_time_iso ? Math.floor(Date.parse(x.close_time_iso) / 1000) : Math.floor(Date.now() / 1000);
+    return { h, a: tx.Account, t, l: Number(tx.ledger_index ?? x.ledger_index ?? 0), i: Number(meta.TransactionIndex ?? 0), v: Number(amt) / 1e6, d };
+  }
+  return null;
+}
+let pulling = false;
+export async function pull(full = false) {
+  if (pulling) return; pulling = true;
+  try {
+    if (!ctx.online()) throw new Error('not connected to the network yet');
+    const have = new Set(EV.map(e => e.h)), stop = full ? 0 : IX.maxLedger; let marker: any, added = 0;
+    for (let page = 0; page < (stop ? 12 : 20); page++) {
+      const r = await ctx.req('account_tx', { account: hub(), ledger_index_min: -1, ledger_index_max: -1, limit: 200, forward: false, ...(marker ? { marker } : {}) });
+      let old = false;
+      for (const x of r.transactions || []) { const e = parseTx(x); const l = Number((x.tx || x.tx_json || {}).ledger_index ?? x.ledger_index ?? 0); if (stop && l && l < stop - 1) old = true; if (e && !have.has(e.h)) { EV.push(e); have.add(e.h); added++; } }
+      marker = r.marker; if (!marker || old) break;
+    }
+    S.hubErr = ''; if (added || full) { rebuild(); saveCache(); }
+    S.loaded = true;
+  } catch (e: any) { const m = String(e?.message || e); S.hubErr = /actNotFound|Account not found/i.test(m) ? 'The LUMA Social hub is not switched on yet on this network. The network operator turns it on from the control panel (Social tab).' : m; S.loaded = true; }
+  pulling = false;
+  void verifyTips(); void loadPolicy(); void loadPrices();
+}
+// a tip is a normal payment. The public log entry only points at it; we read the payment itself to learn who paid whom and how much.
+const tipTries = new Map<string, number>(); let verifying = false;
+async function verifyTips() {
+  if (verifying || !ctx.online()) return; verifying = true;
+  try {
+    const todo = IX.tipClaims.filter(c => TV[c.th] === undefined && (tipTries.get(c.th) || 0) < 3).slice(-30); let n = 0;
+    for (let k = 0; k < todo.length; k += 5) {
+      await Promise.all(todo.slice(k, k + 5).map(async c => {
+        tipTries.set(c.th, (tipTries.get(c.th) || 0) + 1);
+        try {
+          const r = await ctx.req('tx', { transaction: c.th }), tx = r.tx_json || r.tx || r, meta = r.meta || r.metaData || {};
+          if (r.validated === false) return;
+          const amt = meta.delivered_amount ?? tx.DeliverMax ?? tx.Amount;
+          if (tx.TransactionType !== 'Payment' || meta.TransactionResult !== 'tesSUCCESS' || tx.Account !== c.by || tx.Destination !== c.to || amt == null) { TV[c.th] = 0; n++; return; }
+          const v = typeof amt === 'string' ? { c: 'LUMA', i: '', v: Number(amt) / 1e6 } : { c: amt.currency, i: amt.issuer || '', v: Number(amt.value) };
+          TV[c.th] = v.v > 0 ? { by: c.by, to: c.to, ...v } : 0; n++;
+        } catch (e: any) { if (/txnNotFound/i.test(String(e?.message || e))) tipTries.set(c.th, 3); }
+      }));
+    }
+    if (n) { rebuild(); saveCache(); paint(); }
+  } finally { verifying = false; }
+}
+
+// ---------- state ----------
+type View = { k: 'home' } | { k: 'explore' } | { k: 'notif' } | { k: 'bm' } | { k: 'dash' } | { k: 'profile'; a: string; tab?: string } | { k: 'thread'; id: string } | { k: 'tag'; tag: string } | { k: 'search'; q: string } | { k: 'market' } | { k: 'stats' } | { k: 'listing'; id: string };
+const S: { view: View; tab: 'foryou' | 'following'; xtab: 'hot' | 'new' | 'tipped'; draft: string; media: string; poll: string[]; pollOn: boolean; quote: string; busy: boolean; step: string; loaded: boolean; hubErr: string; shown: number; q: string; err: string; lb: string; deep: boolean; noCard: Set<string>; nft: { id: string; img: string; name: string } | null; rev: Set<string> } =
+  { view: { k: 'home' }, tab: 'foryou', xtab: 'hot', draft: '', media: '', poll: ['', ''], pollOn: false, quote: '', busy: false, step: '', loaded: false, hubErr: '', shown: 25, q: '', err: '', lb: '', deep: false, noCard: new Set(), nft: null, rev: new Set() };
+const hist: View[] = [];
+let timer: any = 0, bound: HTMLElement | null = null, kd: ((e: KeyboardEvent) => void) | null = null, KD: ((e: KeyboardEvent) => void) | null = null;
+const LS = { get: (k: string, d: any) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set: (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const bmKey = () => 'sc.bm.' + net(), seenKey = () => 'sc.seen.' + net() + '.' + (ctx.account() || ''), muteKey = () => 'sc.mute.' + net(), draftKey = () => 'sc.draft.' + net();
+const me = () => ctx.account() || '';
+const bookmarks = (): string[] => LS.get(bmKey(), []);
+const muted = (): string[] => LS.get(muteKey(), []);
+const isMuted = (a: string) => muted().includes(a);
+
+// ---------- icons ----------
+const P: Record<string, string> = {
+  shop: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9a3 3 0 006 0 3 3 0 006 0 3 3 0 006 0"/><path d="M5 12v8h14v-8"/>', home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>',
+  bell: '<path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/>', bm: '<path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>',
+  user: '<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>', pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>',
+  heart: '<path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 00-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 000-7.8z"/>',
+  repeat: '<path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/>',
+  msg: '<path d="M21 11.5a8.4 8.4 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.4 8.4 0 01-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8z"/>',
+  share: '<path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/>', trash: '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>',
+  zap: '<path d="M13 2L3 14h9l-1 8 10-12h-9z"/>', coin: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9a2.8 2.8 0 00-2.8-1.5c-1.6 0-2.8.9-2.8 2.2s1.2 1.9 2.8 2.3 2.8 1 2.8 2.3-1.2 2.2-2.8 2.2A2.8 2.8 0 019.2 15"/><path d="M12 6v1.5M12 16.5V18"/>',
+  chart: '<path d="M18 20V10M12 20V4M6 20v-6"/>', pin: '<path d="M12 17v5"/><path d="M9 3h6l-1 7 3 3v2H7v-2l3-3z"/>', image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>', smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>',
+  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', back: '<path d="M19 12H5M12 19l-7-7 7-7"/>', link: '<path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/>',
+  slash: '<circle cx="12" cy="12" r="10"/><path d="M4.9 4.9l14.2 14.2"/>', quote: '<path d="M3 21c3 0 7-1 7-8V5H4v6h4"/><path d="M14 21c3 0 7-1 7-8V5h-6v6h4"/>', trend: '<path d="M23 6l-9.5 9.5-5-5L1 18"/><path d="M17 6h6v6"/>',
+  x: '<path d="M18 6L6 18M6 6l12 12"/>', expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>', gem: '<path d="M6 3h12l4 6-10 13L2 9z"/><path d="M11 3L8 9l4 13 4-13-3-6M2 9h20"/>', flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>', eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>', check: '<path d="M20 6L9 17l-5-5"/>', at: '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 006 0v-1a10 10 0 10-3.9 7.9"/>', pinoff: '<path d="M12 17v5"/><path d="M9 3h6l-1 7 3 3v2H7v-2l3-3z"/><path d="M3 3l18 18"/>',
+};
+const ic = (n: string, s = 18, cls = '') => `<svg class="sc-i ${cls}" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
+const icFill = (n: string, s = 18) => `<svg class="sc-i" width="${s}" height="${s}" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
+const LOGO = `<svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="sc-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#sc-g)"/><path d="M10 8v13a3 3 0 003 3h9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="21.5" cy="11" r="2.2" fill="#fff"/></svg>`;
+
+// ---------- helpers for display ----------
+const hue = (a: string) => { let h = 0; for (let i = 0; i < a.length; i++) h = (h * 31 + a.charCodeAt(i)) >>> 0; return h % 360; };
+const handleOf = (a: string) => IX.cur.get(a) || '';
+const nameOf = (a: string) => { const p = IX.prof.get(a); return (p && p.n) || (handleOf(a) ? '@' + handleOf(a) : ctx.showL(a).slice(0, 8) + '…' + ctx.showL(a).slice(-4)); };
+const tagOf = (a: string) => (handleOf(a) ? '@' + handleOf(a) : ctx.showL(a).slice(0, 6) + '…' + ctx.showL(a).slice(-4));
+const avatar = (a: string, size = 44) => { const p = IX.prof.get(a), ini = (nameOf(a).replace(/^@/, '')[0] || '?').toUpperCase(); return `<span class="sc-av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:linear-gradient(135deg,hsl(${hue(a)} 70% 48%),hsl(${(hue(a) + 50) % 360} 70% 36%))">${esc(ini)}${p && p.i && okImg(p.i) ? `<img src="${esc(p.i)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>`; };
+const badge = (a: string) => (POL.verified.has(a) ? `<span class="sc-chk" title="Verified by the network operator"><svg width="15" height="15" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#f5b73b"/><path d="M7 12.5l3.3 3.2L17 9" fill="none" stroke="#1a1200" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : handleOf(a) ? `<span class="sc-chk" title="Owns @${esc(handleOf(a))} on the chain"><svg width="15" height="15" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#6aa8ff"/><path d="M7 12.5l3.3 3.2L17 9" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : '');
+const ago = (t: number) => { const s = Math.max(1, Math.floor(Date.now() / 1000 - t)); if (s < 60) return s + 's'; if (s < 3600) return Math.floor(s / 60) + 'm'; if (s < 86400) return Math.floor(s / 3600) + 'h'; if (s < 86400 * 30) return Math.floor(s / 86400) + 'd'; return new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+const full = (t: number) => new Date(t * 1000).toLocaleString();
+const TOK = /(https:\/\/[^\s<>"']+|#[\p{L}\p{N}_]{1,40}|@[A-Za-z0-9_]{3,15}|\$[A-Za-z][A-Za-z0-9]{1,9})/gu;
+const rich = (txt: string) => txt.split(TOK).map((part, i) => {
+  if (i % 2 === 0) return esc(part).replace(/\n/g, '<br>');
+  if (part[0] === '#') return `<a class="sc-l" data-act="tag" data-v="${esc(part.slice(1).toLowerCase())}">${esc(part)}</a>`;
+  if (part[0] === '$') return `<a class="sc-l sc-cash" data-act="tag" data-v="${esc(part.toLowerCase())}">${esc(part)}</a>`;
+  if (part[0] === '@') return `<a class="sc-l" data-act="handle" data-v="${esc(part.slice(1).toLowerCase())}">${esc(part)}</a>`;
+  const u = safeUrl(part.replace(/[.,;:!?)]+$/, '')); return u ? `<a class="sc-l" href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow">${esc(part.length > 38 ? part.slice(0, 35) + '…' : part)}</a>` : esc(part);
+}).join('');
+const tagsIn = (txt: string) => Array.from(new Set((txt.match(/#[\p{L}\p{N}_]{1,40}/gu) || []).map(x => x.slice(1).toLowerCase())));
+const cashIn = (txt: string) => Array.from(new Set((txt.match(/\$[A-Za-z][A-Za-z0-9]{1,9}/g) || []).map(x => x.toLowerCase())));
+const likeN = (id: string) => (IX.likes.get(id) || new Set()).size, rtN = (id: string) => (IX.rts.get(id) || new Set()).size, repN = (id: string) => (IX.replies.get(id) || []).filter(x => !IX.posts.get(x)?.del && !isMuted(IX.posts.get(x)!.a)).length;
+const rxN = (id: string) => (IX.rx.get(id) || new Map()).size;
+const iLike = (id: string) => !!me() && (IX.likes.get(id) || new Set()).has(me()), iRt = (id: string) => !!me() && (IX.rts.get(id) || new Set()).has(me());
+const folN = (a: string) => (IX.followers.get(a) || new Set()).size, fwgN = (a: string) => (IX.follows.get(a) || new Set()).size;
+const iFollow = (a: string) => !!me() && (IX.follows.get(me()) || new Set()).has(a);
+const k = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : n ? String(n) : '');
+const boostedNow = (id: string) => (IX.boosts.get(id) || []).some(b => Date.now() / 1000 - b.t < 86400);
+function score(p: Post) {
+  const now = Date.now() / 1000, hrs = (now - p.t) / 3600, tips = (IX.tipsRef.get(p.id) || []).length;
+  let boost = 0; for (const b of IX.boosts.get(p.id) || []) boost += Math.min(b.v, 100) * 0.5 * Math.exp(-((now - b.t) / 3600) / 12);
+  return (likeN(p.id) + 2 * rtN(p.id) + 1.5 * repN(p.id) + 0.5 * rxN(p.id) + 3 * tips + 1) / Math.pow(hrs + 2, 1.35) + boost / Math.pow(hrs + 2, 0.5);
+}
+function totals(list: Tip[]) { const m = new Map<string, { name: string; v: number }>(); for (const t of list) { const key = tokKey(t.c, t.i), o = m.get(key) || { name: tokName(t.c), v: 0 }; o.v += t.v; m.set(key, o); } return Array.from(m.values()).sort((a, b) => (a.name === 'LUMA' ? -1 : b.name === 'LUMA' ? 1 : b.v - a.v)); }
+const totalStr = (list: Tip[], max = 3) => { const t = totals(list), s = t.slice(0, max).map(x => `${fmt(x.v, 4)} ${esc(x.name)}`).join(' · '); return s + (t.length > max ? ` · +${t.length - max} more` : ''); };
+
+// ---------- sending ----------
+function memoFor(d: any) { return [{ Memo: { MemoType: toHex(MT), MemoData: toHex(JSON.stringify({ v: 1, ...d })) } }]; }
+const drops = (n: number) => String(Math.max(1, Math.round(n * 1e6)));
+async function pay(dest: string, amount: any, d: any, label: string): Promise<{ ok: boolean; hash?: string; msg?: string }> {
+  if (ctx.xrpl()) return { ok: false, msg: 'LUMA Social works with your LUMA wallet. Switch the wallet type to LUMA.' };
+  if (!me()) return { ok: false, msg: 'Create or open a LUMA wallet first.' };
+  if (!dest) return { ok: false, msg: 'The Social hub address is not set.' };
+  const json = JSON.stringify({ v: 1, ...d }); if (enc.encode(json).length > MAXMEMO) return { ok: false, msg: 'That is too long to store in one transaction. Shorten the text or remove a link.' };
+  S.busy = true; S.step = label; paint();
+  try { return await ctx.submit({ TransactionType: 'Payment', Account: me(), Destination: dest, Amount: amount, Memos: memoFor(d) }); }
+  catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
+  finally { S.busy = false; S.step = ''; }
+}
+function local(d: any, hash: string, v: number) { const e: Ev = { h: hash.toUpperCase(), a: me(), t: Math.floor(Date.now() / 1000), l: IX.maxLedger + 1, i: 9999, v, d }; if (!EV.some(x => x.h === e.h)) { EV.push(e); rebuild(); } }
+// one network action: pay the hub, show it at once, confirm from the chain a few seconds later. Returns the transaction hash ('' when it failed).
+async function act(d: any, label: string, ok?: string, amount?: number): Promise<string> {
+  const v = amount ?? COST[d.t], r = await pay(hub(), drops(v), d, label);
+  if (!r.ok) { S.err = r.msg || 'The transaction was not accepted.'; ctx.toast(S.err, true); paint(); return ''; }
+  S.err = ''; if (r.hash) local(d, r.hash, v); if (ok) ctx.toast(ok, false); paint(); setTimeout(() => { void pull().then(paint); }, 5000); return r.hash || 'ok';
+}
+
+// ---------- rendering ----------
+const CSS = `
+.sc{--sa:#8b5cf6;--sb:#22d3ee;--sg:linear-gradient(135deg,#8b5cf6,#6366f1 55%,#22d3ee);--sl:rgba(255,255,255,.08);--sh:rgba(139,92,246,.07);display:grid;grid-template-columns:248px minmax(0,620px) 330px;gap:28px;justify-content:center;align-items:start;max-width:1260px;margin:0 auto;font-feature-settings:"cv11","ss01"}
+.sc *{box-sizing:border-box}.sc-i{flex:none;display:block}
+.sc button{font-family:inherit}
+.sc-nav{position:sticky;top:14px;display:flex;flex-direction:column;gap:2px}
+.sc-brand{display:flex;align-items:center;gap:10px;padding:6px 14px 16px;font-weight:800;font-size:1.08rem;letter-spacing:-.01em}.sc-brand small{display:block;color:var(--mut);font-weight:500;font-size:.72rem;letter-spacing:0}
+.sc-nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:14px;padding:11px 16px;border-radius:12px;font-size:1rem;font-weight:600;color:var(--tx);position:relative;transition:background .15s}
+.sc-nav button:hover{background:var(--sh)}.sc-nav button:focus-visible{outline:2px solid var(--sa);outline-offset:1px}.sc-nav button.on{background:var(--sh);color:#fff}.sc-nav button.on:before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--sg)}
+.sc-nav button.on .sc-i{color:var(--sb)}
+.sc-nav .sc-big{background:var(--sg);color:#fff;justify-content:center;margin-top:14px;font-weight:700;box-shadow:0 6px 22px rgba(99,102,241,.35)}.sc-nav .sc-big:hover{filter:brightness(1.08);background:var(--sg)}
+.sc-badge{background:#ef4444;color:#fff;border-radius:999px;padding:1px 7px;font-size:.7rem;font-weight:700;margin-left:auto}
+.sc-col{min-width:0}.sc-side{position:sticky;top:14px;display:flex;flex-direction:column;gap:14px}
+.sc-box{border:1px solid var(--sl);background:rgba(255,255,255,.025);border-radius:16px;padding:16px}.sc-box h4{margin:0 0 10px;font-size:.98rem;font-weight:700;display:flex;align-items:center;gap:8px}
+.sc-head{display:flex;align-items:center;gap:12px;padding:14px 8px;font-size:1.12rem;font-weight:800;position:sticky;top:0;z-index:5;background:rgba(10,12,22,.72);backdrop-filter:blur(14px) saturate(1.3);border-bottom:1px solid var(--sl);letter-spacing:-.01em}
+.sc-head .sc-sub{font-size:.8rem;color:var(--mut);font-weight:500;margin-left:2px}
+.sc-ib{all:unset;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;color:var(--tx)}.sc-ib:hover{background:var(--sh)}.sc-ib:focus-visible{outline:2px solid var(--sa)}
+.sc-tabs{display:flex;border-bottom:1px solid var(--sl)}.sc-tabs button{all:unset;cursor:pointer;flex:1;text-align:center;padding:13px 6px;color:var(--mut);font-weight:600;font-size:.94rem;position:relative}.sc-tabs button:hover{background:var(--sh)}.sc-tabs button.on{color:var(--tx)}.sc-tabs button.on:after{content:"";position:absolute;left:30%;right:30%;bottom:0;height:3px;border-radius:3px;background:var(--sg)}.sc-tabs button:focus-visible{outline:2px solid var(--sa);outline-offset:-2px}
+.sc-post{display:flex;gap:12px;padding:16px 10px;border-bottom:1px solid var(--sl);cursor:pointer;transition:background .15s}.sc-post:hover{background:rgba(255,255,255,.018)}
+.sc-av{position:relative;flex:none;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;overflow:hidden}.sc-av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.sc-body{min-width:0;flex:1}.sc-ctx{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:.82rem;font-weight:600;margin:-2px 0 4px}
+.sc-who{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.sc-who b{cursor:pointer;font-weight:700}.sc-who b:hover{text-decoration:underline}.sc-m{color:var(--mut);font-size:.88rem}.sc-chk{display:inline-flex}
+.sc-who .sc-more{margin-left:auto;width:30px;height:30px;color:var(--mut)}
+.sc-txt{margin:3px 0 8px;line-height:1.5;overflow-wrap:anywhere;font-size:1rem}.sc-l{color:#8db4ff;cursor:pointer;text-decoration:none}.sc-l:hover{text-decoration:underline}.sc-cash{color:#7ee0a6;font-weight:600}
+.sc-media{display:grid;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;border:1px solid var(--sl)}.sc-media.n2,.sc-media.n4{grid-template-columns:1fr 1fr}.sc-media img{width:100%;max-height:440px;min-height:120px;object-fit:cover;display:block;cursor:zoom-in;background:rgba(255,255,255,.04)}
+.sc-acts{display:flex;justify-content:space-between;max-width:440px;margin:4px 0 0 -8px;color:var(--mut)}
+.sc-acts button{all:unset;cursor:pointer;display:inline-flex;gap:6px;align-items:center;padding:6px 8px;border-radius:999px;font-size:.84rem;font-weight:600;transition:background .15s,color .15s}.sc-acts button:hover{background:var(--sh);color:var(--tx)}.sc-acts button:focus-visible{outline:2px solid var(--sa)}
+.sc-acts .lk:hover,.sc-acts .lk.on{color:#fb5b8d}.sc-acts .lk.on svg{fill:#fb5b8d}.sc-acts .rt:hover,.sc-acts .rt.on{color:#34d399}.sc-acts .tp:hover{color:#fbbf24}.sc-acts .rc:hover{color:#8db4ff}
+.sc-quote{border:1px solid var(--sl);border-radius:14px;padding:10px 12px;margin:8px 0}
+.sc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
+.sc-rxc{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid var(--sl);background:rgba(255,255,255,.03);font-size:.82rem;font-weight:600}.sc-rxc:hover{border-color:var(--sa)}.sc-rxc.on{border-color:var(--sa);background:rgba(139,92,246,.18)}
+.sc-tipc{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:.8rem;font-weight:700;color:#fcd34d;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.28)}.sc-tipc:hover{background:rgba(251,191,36,.18)}
+.sc-boost{display:inline-flex;align-items:center;gap:4px;color:#22d3ee;font-weight:700;font-size:.78rem}
+.sc-poll{margin:8px 0;display:flex;flex-direction:column;gap:6px}.sc-opt{position:relative;border:1px solid var(--sl);border-radius:10px;padding:9px 12px;overflow:hidden;display:flex;justify-content:space-between;cursor:pointer}.sc-opt:hover{border-color:var(--sa)}.sc-opt i{position:absolute;left:0;top:0;bottom:0;background:rgba(139,92,246,.3);z-index:0}.sc-opt span{position:relative;z-index:1}
+.sc-comp{display:flex;gap:12px;padding:16px 10px;border-bottom:1px solid var(--sl)}.sc-comp textarea{width:100%;min-height:64px;background:transparent;border:0;outline:0;color:var(--tx);font-size:1.12rem;resize:none;font-family:inherit;line-height:1.45;overflow:hidden}.sc-comp textarea::placeholder{color:var(--mut)}
+.sc-in{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--sl);border-radius:10px;color:var(--tx);padding:9px 12px;margin:4px 0;font-family:inherit;font-size:.95rem}.sc-in:focus{outline:2px solid rgba(139,92,246,.55);border-color:transparent}
+.sc-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sc-btn{all:unset;cursor:pointer;background:var(--sg);color:#fff;font-weight:700;padding:9px 20px;border-radius:999px;font-size:.94rem;transition:filter .15s,transform .05s;display:inline-flex;align-items:center;gap:8px}.sc-btn:hover{filter:brightness(1.1)}.sc-btn:active{transform:scale(.98)}.sc-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}.sc-btn[disabled]{opacity:.45;cursor:default}
+.sc-btn.sm{padding:6px 14px;font-size:.84rem}.sc-btn.ghost{background:transparent;border:1px solid var(--sl);color:var(--tx)}.sc-btn.ghost:hover{background:var(--sh)}.sc-btn.on{background:transparent;border:1px solid var(--sl);color:var(--tx)}.sc-btn.gold{background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#1a1200}
+.sc-tool{display:flex;gap:2px;color:var(--sb)}.sc-tool .sc-ib{color:#7dd3fc;width:34px;height:34px}.sc-tool .sc-ib.on{background:var(--sh)}
+.sc-ring{display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:.8rem}
+.sc-prof{border:1px solid var(--sl);border-radius:18px;margin:10px 0;overflow:hidden}.sc-ban{height:140px;background:linear-gradient(135deg,#312e81,#0e7490)}.sc-pinfo{padding:0 18px 16px}
+.sc-pav{margin-top:-44px;border:4px solid #0b0d18;border-radius:50%;display:inline-block}.sc-stats{display:flex;gap:18px;color:var(--mut);flex-wrap:wrap}.sc-stats b{color:var(--tx)}
+.sc-jar{margin-top:12px;border:1px solid rgba(251,191,36,.28);background:rgba(251,191,36,.07);border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:10px;cursor:pointer}
+.sc-user{display:flex;gap:10px;align-items:center;padding:8px 0}.sc-user .sc-who{flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:0}
+.sc-tag{display:block;padding:8px 0;cursor:pointer}.sc-tag:hover b{text-decoration:underline}.sc-tag b{font-weight:700}
+.sc-warn{border:1px solid var(--warn);background:var(--warn-t);border-radius:12px;padding:12px 14px;margin:10px 0}.sc-empty{color:var(--mut);padding:44px 18px;text-align:center;line-height:1.5}
+.sc-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0}.sc-kpi{border:1px solid var(--sl);background:rgba(255,255,255,.025);border-radius:14px;padding:14px}.sc-kpi b{display:block;font-size:1.5rem;font-weight:800;letter-spacing:-.02em}.sc-kpi span{color:var(--mut);font-size:.82rem}
+.sc-nrow{display:flex;gap:12px;padding:14px 10px;border-bottom:1px solid var(--sl)}.sc-nic{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;background:var(--sh)}
+.sc-chipt{all:unset;cursor:pointer;display:inline-flex;flex-direction:column;gap:1px;padding:8px 12px;border-radius:12px;border:1px solid var(--sl);font-weight:700;font-size:.9rem;min-width:84px}.sc-chipt small{color:var(--mut);font-weight:500;font-size:.74rem}.sc-chipt:hover{border-color:var(--sa)}.sc-chipt.on{border-color:var(--sa);background:rgba(139,92,246,.2)}.sc-chipt.off{opacity:.45;cursor:not-allowed}
+.sc-mi{all:unset;cursor:pointer;display:flex;align-items:center;gap:12px;padding:11px 8px;border-radius:10px;width:100%;box-sizing:border-box}.sc-mi:hover{background:var(--sh)}.sc-mi.bad{color:#f87171}
+.sc-skel{display:flex;gap:12px;padding:16px 10px;border-bottom:1px solid var(--sl)}.sc-skel i{display:block;border-radius:8px;background:linear-gradient(90deg,rgba(255,255,255,.05),rgba(255,255,255,.1),rgba(255,255,255,.05));background-size:200% 100%;animation:scsh 1.4s infinite}
+@keyframes scsh{to{background-position:-200% 0}}
+@media(prefers-reduced-motion:reduce){.sc-skel i{animation:none}.sc *{transition:none!important}}
+.sc-pc{display:flex;align-items:center;gap:12px;border:1px solid var(--sl);border-radius:16px;padding:12px 14px;margin:8px 0;background:rgba(255,255,255,.025);cursor:pointer;position:relative;overflow:hidden}.sc-pc:hover{border-color:rgba(139,92,246,.5)}
+.sc-pcl{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;flex:none}.sc-pci{min-width:0}.sc-pci b{font-weight:700}.sc-pcs{flex:1;min-width:90px;max-width:260px;margin-left:auto}
+.sc-pcb{position:absolute;top:6px;right:6px;display:flex;gap:4px}.sc-pcb .sc-ib{background:rgba(0,0,0,.55);width:30px;height:30px}
+.sc-media{position:relative}.sc-media.blurred img{filter:blur(34px) saturate(.8);transform:scale(1.1);pointer-events:none}.sc-reveal{all:unset;cursor:pointer;position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;background:rgba(8,8,16,.45);color:#fff}.sc-reveal:hover{background:rgba(8,8,16,.3)}
+.sc-nftb{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;color:#c4b5fd;background:rgba(139,92,246,.14);border:1px solid rgba(139,92,246,.35);border-radius:999px;padding:3px 10px;margin-top:6px}.sc-nftb .ok{color:#34d399}.sc-nftb span{color:var(--mut)}.sc-nftb span.ok{color:#34d399}
+.sc-nftat{display:flex;gap:12px;align-items:center;border:1px solid rgba(139,92,246,.4);border-radius:14px;padding:8px;margin:8px 0;background:rgba(139,92,246,.08)}.sc-nftat img{width:56px;height:56px;border-radius:10px;object-fit:cover}.sc-nftat>div{flex:1;min-width:0}
+.sc-nftg{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}.sc-nftc{border:1px solid var(--sl);border-radius:14px;padding:8px;display:flex;flex-direction:column;gap:6px;background:rgba(255,255,255,.025)}.sc-nftc img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:rgba(255,255,255,.05)}.sc-nftc .nm{font-size:.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sc-note{background:linear-gradient(135deg,rgba(245,183,59,.14),rgba(245,183,59,.06));border:1px solid rgba(245,183,59,.4);border-radius:12px;padding:10px 14px;margin:10px 0;font-size:.92rem}
+.sc-lb{max-width:94vw;max-height:88vh;border-radius:12px;display:block}
+@media(max-width:1120px){.sc{grid-template-columns:72px minmax(0,640px);gap:18px}.sc-side{display:none}.sc-nav button span.t,.sc-brand span{display:none}.sc-brand{padding:6px 12px 12px}.sc-nav button{justify-content:center;padding:12px}.sc-badge{position:absolute;top:2px;right:2px;margin:0}.sc-kpis{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:720px){.sc{grid-template-columns:minmax(0,1fr)}.sc-brand{display:none}.sc-nav{position:fixed;left:0;right:0;bottom:0;top:auto;flex-direction:row;justify-content:space-around;background:rgba(10,12,22,.92);backdrop-filter:blur(14px);border-top:1px solid var(--sl);z-index:30;padding:4px 2px;gap:0}.sc-nav .sc-big{margin:0;padding:10px 14px}.sc-nav button{padding:10px 8px}.sc-col{padding-bottom:76px}.sc-acts{max-width:none}.sc-nav button.on:before{display:none}}
+`;
+
+const CSS2 = `
+.mk-top{padding:12px 10px;display:flex;flex-direction:column;gap:10px}.mk-cats{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}.mk-cats button{all:unset;cursor:pointer;white-space:nowrap;padding:6px 14px;border-radius:999px;border:1px solid var(--sl);font-weight:700;font-size:.86rem;color:var(--mut)}.mk-cats button.on{background:var(--sg);color:#fff;border-color:transparent}
+.mk-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:14px;padding:6px 10px 14px}.mk-c{cursor:pointer;border-radius:14px;transition:transform .15s}.mk-c:hover{transform:translateY(-2px)}.mk-i{position:relative;aspect-ratio:1;border-radius:14px;overflow:hidden;background:linear-gradient(135deg,#1b1f3a,#0e7490 140%);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.5);border:1px solid var(--sl)}.mk-i img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.mk-p{font-weight:900;font-size:1.08rem;margin-top:8px}.mk-t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mk-s{position:absolute;left:8px;top:8px;background:#ef4444;color:#fff;font-weight:800;font-size:.74rem;padding:3px 10px;border-radius:999px;z-index:2}
+.mk-sv{all:unset;cursor:pointer;position:absolute;right:8px;top:8px;width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;color:#fff;z-index:2}.mk-sv.on{color:#fbbf24}.mk-sv.on svg{fill:#fbbf24}
+.mk-gal{position:relative;aspect-ratio:4/3;max-height:480px;width:100%;background:linear-gradient(135deg,#1b1f3a,#0e7490 140%);display:flex;align-items:center;justify-content:center;overflow:hidden;color:rgba(255,255,255,.5)}.mk-gal img{width:100%;height:100%;object-fit:contain;background:#05060d}
+.mk-th{all:unset;cursor:pointer;width:62px;height:62px;border-radius:10px;overflow:hidden;border:2px solid transparent}.mk-th.on{border-color:var(--sa)}.mk-th img{width:100%;height:100%;object-fit:cover}
+.mk-pp{font-size:1.7rem;font-weight:900;letter-spacing:-.03em;background:var(--sg);-webkit-background-clip:text;background-clip:text;color:transparent;width:fit-content}.mk-h{margin:2px 0 6px;font-size:1.35rem;letter-spacing:-.02em}
+.mk-d{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;color:var(--mut)}.mk-d b{color:var(--tx)}.mk-q{padding:10px 0;border-bottom:1px solid var(--sl)}.mk-a{margin:6px 0 0 14px;padding-left:10px;border-left:2px solid var(--sa)}
+.sc-pname{font-size:1.6em;font-weight:900;letter-spacing:-.03em;margin-top:12px;display:flex;align-items:center;gap:7px}.sc-stt{display:inline-block;margin-top:8px;padding:4px 12px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid var(--sl);font-size:.9em;font-weight:600}
+.sc-mts{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;color:var(--mut);font-size:.92em}.sc-mt{display:inline-flex;align-items:center;gap:6px}.sc-lks{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.sc-lk{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--sl);background:rgba(255,255,255,.05);color:#a5c4ff;text-decoration:none;font-weight:700;font-size:.88em}.sc-lk:hover{border-color:var(--pa,#8b5cf6)}
+.sc-stat{all:unset;cursor:pointer;color:var(--mut)}.sc-stat:hover{text-decoration:underline}.sc-stat b{color:var(--tx)}.sc-fy{background:rgba(255,255,255,.08);border-radius:6px;padding:1px 7px;font-size:.78em;font-weight:700}
+.sc-bar{height:8px;border-radius:8px;background:rgba(255,255,255,.08);margin-top:10px;overflow:hidden}.sc-bar i{display:block;height:100%;background:var(--sg);border-radius:8px}
+.sc-pav.sq .sc-av{border-radius:24%!important}.sc-pav{box-shadow:0 0 0 3px var(--pa,#8b5cf6),0 10px 30px rgba(0,0,0,.5)!important}
+.sc-sec{font-weight:800;margin:16px 0 4px;padding-top:12px;border-top:1px solid var(--sl);letter-spacing:-.01em}.sc-fl{display:block;color:var(--mut);font-size:.86em;font-weight:600;margin:6px 0}.sc-sw{all:unset;cursor:pointer;width:26px;height:26px;border-radius:50%;box-shadow:0 0 0 2px rgba(255,255,255,.15)}.sc-sw:hover{box-shadow:0 0 0 2px #fff}
+
+.sc{--sa:#8b5cf6;--sb:#22d3ee;--sc2:#f472b6;--sg:linear-gradient(135deg,#8b5cf6 0%,#6366f1 45%,#22d3ee 100%);--sg2:linear-gradient(135deg,#f472b6,#8b5cf6 55%,#22d3ee);--card2:linear-gradient(180deg,rgba(255,255,255,.065),rgba(255,255,255,.022));--sl:rgba(255,255,255,.09);
+ grid-template-columns:minmax(216px,264px) minmax(0,740px) minmax(270px,350px);gap:clamp(16px,2.2vw,34px);max-width:1440px;width:100%;position:relative;font-size:clamp(15px,.95vw + 9px,17px);line-height:1.5;letter-spacing:-.005em}
+.sc:before{content:"";position:fixed;inset:-10% -10% auto -10%;height:70vh;pointer-events:none;z-index:-1;background:radial-gradient(40% 50% at 18% 20%,rgba(139,92,246,.22),transparent 70%),radial-gradient(35% 45% at 85% 10%,rgba(34,211,238,.16),transparent 70%),radial-gradient(30% 40% at 60% 60%,rgba(244,114,182,.08),transparent 70%)}
+.sc-col{min-width:0}
+.sc-brand{font-size:1.3em;font-weight:900;letter-spacing:-.03em;padding:4px 14px 22px}.sc-brand span{background:var(--sg2);-webkit-background-clip:text;background-clip:text;color:transparent}.sc-brand small{-webkit-text-fill-color:var(--mut);font-weight:600;font-size:.56em;letter-spacing:.01em;margin-top:2px}
+.sc-nav button{font-weight:700;font-size:1.04em;padding:12px 16px;border-radius:14px;gap:15px}.sc-nav button .sc-i{width:23px;height:23px}
+.sc-nav button.on{background:linear-gradient(135deg,rgba(139,92,246,.26),rgba(34,211,238,.12));box-shadow:inset 0 0 0 1px rgba(139,92,246,.45)}.sc-nav button.on:before{display:none}
+.sc-nav .sc-big{padding:15px 18px;font-weight:800;font-size:1.06em;border-radius:16px;box-shadow:0 10px 30px rgba(99,102,241,.45),inset 0 1px 0 rgba(255,255,255,.3)}
+.sc-head{font-size:1.3em;font-weight:900;letter-spacing:-.03em;padding:16px 10px;background:linear-gradient(180deg,rgba(10,12,24,.86),rgba(10,12,24,.66));border-bottom:1px solid var(--sl)}
+.sc-tabs{margin:12px 0 4px;padding:4px;border:1px solid var(--sl);border-radius:16px;background:rgba(255,255,255,.03);gap:4px;border-bottom:1px solid var(--sl)}
+.sc-tabs button{padding:11px 8px;border-radius:12px;font-weight:700;font-size:.97em}.sc-tabs button.on{background:var(--sg);color:#fff;box-shadow:0 6px 18px rgba(99,102,241,.35)}.sc-tabs button.on:after{display:none}.sc-tabs button:hover:not(.on){background:rgba(255,255,255,.06)}
+.sc-comp{margin:14px 0;padding:clamp(14px,1.6vw,22px);border:1px solid transparent;border-radius:22px;background:linear-gradient(#0d1020,#0d1020) padding-box,linear-gradient(135deg,rgba(139,92,246,.7),rgba(34,211,238,.45),rgba(244,114,182,.4)) border-box;box-shadow:0 14px 44px rgba(79,70,229,.18)}
+.sc-comp textarea{font-size:1.2em;font-weight:500;min-height:72px}
+.sc-post{margin:10px 0;padding:clamp(14px,1.5vw,20px);border:1px solid var(--sl);border-radius:20px;background:var(--card2);box-shadow:0 8px 28px rgba(0,0,0,.28);transition:transform .15s,border-color .15s,box-shadow .15s}
+.sc-post:hover{background:var(--card2);border-color:rgba(139,92,246,.5);box-shadow:0 12px 36px rgba(79,70,229,.2);transform:translateY(-1px)}
+.sc-who b{font-weight:800;font-size:1.06em;letter-spacing:-.015em}.sc-txt{font-size:1.07em;line-height:1.58;font-weight:450}
+.sc-av{box-shadow:0 0 0 2px rgba(255,255,255,.12),0 6px 16px rgba(0,0,0,.35)}
+.sc-acts button{padding:7px 11px;font-weight:700;border-radius:12px}.sc-acts button:hover{background:rgba(255,255,255,.08)}
+.sc-box{border-radius:20px;background:var(--card2);border:1px solid var(--sl);box-shadow:0 8px 28px rgba(0,0,0,.25);padding:18px}.sc-box h4{font-size:1.04em;font-weight:800;letter-spacing:-.02em}
+.sc-btn{font-weight:800;border-radius:14px;padding:11px 24px;box-shadow:0 8px 22px rgba(99,102,241,.4),inset 0 1px 0 rgba(255,255,255,.28)}.sc-btn.sm{padding:7px 16px;border-radius:12px}.sc-btn.ghost,.sc-btn.on{box-shadow:none;background:rgba(255,255,255,.04)}
+.sc-btn.gold{box-shadow:0 8px 22px rgba(245,158,11,.4),inset 0 1px 0 rgba(255,255,255,.4)}
+.sc-in{border-radius:14px;padding:12px 14px;background:rgba(255,255,255,.05);border:1px solid var(--sl)}
+.sc-prof{border-radius:26px;box-shadow:0 18px 50px rgba(0,0,0,.4);background:var(--card2)}.sc-ban{height:clamp(120px,16vw,190px);background:var(--sg);position:relative}.sc-ban:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 40%,rgba(10,12,24,.55))}
+.sc-pav{border:4px solid #0b0d18;box-shadow:0 0 0 3px rgba(139,92,246,.7),0 10px 30px rgba(0,0,0,.5);margin-top:-52px}
+.sc-pinfo>div:nth-of-type(2){font-size:1.55em!important;font-weight:900!important;letter-spacing:-.03em}
+.sc-stats b{font-weight:900;font-size:1.08em}
+.sc-kpis{gap:14px}.sc-kpi{border-radius:20px;padding:18px;background:var(--card2);box-shadow:0 8px 24px rgba(0,0,0,.25)}.sc-kpi b{font-size:2em;font-weight:900;letter-spacing:-.04em;background:var(--sg2);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sc-tipc{padding:5px 12px;font-weight:800}.sc-rxc{padding:5px 11px}.sc-jar{border-radius:16px;background:linear-gradient(135deg,rgba(251,191,36,.14),rgba(245,158,11,.05))}
+.sc-pc{border-radius:20px;padding:14px 16px;background:var(--card2)}.sc-pci b{font-weight:800}
+.sc-media{border-radius:18px;box-shadow:0 8px 26px rgba(0,0,0,.35)}
+.sc-nrow{border-radius:18px;margin:8px 0;border:1px solid var(--sl);background:var(--card2)}.sc-nic{width:40px;height:40px;background:rgba(255,255,255,.07)}
+.sc-nftc,.sc-quote,.sc-opt,.sc-skel{border-radius:16px}.sc-nftb{font-weight:700}
+.sc-empty{font-weight:600;font-size:1.02em;padding:56px 20px}
+.sc-user{padding:10px 0}.sc-tag b{font-weight:800}
+.sc *::-webkit-scrollbar{width:10px;height:10px}.sc *::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:10px}
+@media(max-width:1200px){.sc{grid-template-columns:76px minmax(0,1fr);gap:18px}.sc-nav button.on{box-shadow:inset 0 0 0 1px rgba(139,92,246,.45)}}
+@media(max-width:720px){.sc{grid-template-columns:minmax(0,1fr);font-size:15.5px}.sc-post{padding:14px;border-radius:18px;margin:8px 0}.sc-comp{border-radius:18px}.sc-nav{border-radius:20px 20px 0 0;box-shadow:0 -10px 30px rgba(0,0,0,.4)}.sc-nav button.on{background:rgba(139,92,246,.25)}.sc-head{font-size:1.2em}.sc-tabs button{padding:10px 4px;font-size:.92em}.sc-kpi b{font-size:1.6em}}
+`;
+
+function postCard(p: Post, opts: { quoted?: boolean; rtBy?: string; pinned?: boolean; full?: boolean } = {}): string {
+  if (!p) return '';
+  if (p.del) { const w = p.mod ? 'This post was removed by the network moderators.' : 'This post was deleted.'; return opts.quoted ? `<div class="sc-quote sc-m">${w}</div>` : `<div class="sc-post" style="cursor:default"><div class="sc-m">${w}</div></div>`; }
+  const imgs = p.m.filter(okImg), blur = POL.blurMedia && !LS.get('sc.noblur', false) && !S.rev.has(p.id);
+  const nftBar = p.n ? nftBadge(p) : '';
+  const media = imgs.length ? `${nftBar}<div class="sc-media n${imgs.length} ${blur ? 'blurred' : ''}">${blur ? `<button class="sc-reveal" data-act="reveal" data-v="${p.id}">${ic('eye', 18)}Show image</button>` : ''}${imgs.map(u => `<img src="${esc(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-act="img" data-v="${esc(u)}" onerror="this.remove()">`).join('')}</div>` : (p.m.length && !imgs.length ? `<div class="sc-m" style="margin:6px 0">${ic('image', 14)} Image hidden: this network only allows ${POL.imageMode === 'off' ? 'no images' : 'images from approved sources'}.</div>` : '');
+  const q = p.q && IX.posts.get(p.q) && !opts.quoted ? `<div class="sc-quote" data-act="open" data-v="${p.q}">${postCard(IX.posts.get(p.q)!, { quoted: true })}</div>` : '';
+  let poll = '';
+  if (p.p) {
+    const votes = IX.votes.get(p.id) || new Map<string, number>(), tot = votes.size, mine = me() ? votes.get(me()) : undefined;
+    poll = `<div class="sc-poll">${p.p.map((o, i) => { const n = Array.from(votes.values()).filter(v => v === i).length, pc = tot ? Math.round(n / tot * 100) : 0, show = mine != null; return `<div class="sc-opt" data-act="vote" data-v="${p.id}" data-o="${i}">${show ? `<i style="width:${pc}%"></i>` : ''}<span>${esc(o)}${mine === i ? ' ✓' : ''}</span>${show ? `<span>${pc}%</span>` : ''}</div>`; }).join('')}<div class="sc-m">${tot} vote${tot === 1 ? '' : 's'}${mine == null ? ' · tap an option (0.0001 LUMA)' : ''}</div></div>`;
+  }
+  if (opts.quoted) return `<div><div class="sc-who"><b>${esc(nameOf(p.a))}</b>${badge(p.a)}<span class="sc-m">${esc(tagOf(p.a))} · ${ago(p.t)}</span></div><div class="sc-txt">${rich(p.x)}</div>${media}</div>`;
+  const rxm = IX.rx.get(p.id) || new Map<string, string>(), rxc = new Map<string, number>(); for (const e of rxm.values()) rxc.set(e, (rxc.get(e) || 0) + 1);
+  const mineRx = rxm.get(me());
+  const tips = IX.tipsRef.get(p.id) || [];
+  const chips = rxc.size || tips.length ? `<div class="sc-chips">${Array.from(rxc.entries()).sort((a, b) => b[1] - a[1]).map(([e, n]) => `<button class="sc-rxc ${mineRx === e ? 'on' : ''}" data-act="rx" data-v="${p.id}" data-e="${e}" title="React">${e} ${n}</button>`).join('')}${tips.length ? `<button class="sc-tipc" data-act="sup" data-v="${p.id}" title="See who tipped">${ic('coin', 14)}${totalStr(tips, 2)} · ${tips.length} tip${tips.length === 1 ? '' : 's'}</button>` : ''}</div>` : '';
+  const bm = bookmarks().includes(p.id);
+  const acts = `<div class="sc-acts"><button class="rc" data-act="reply" data-v="${p.id}" title="Reply">${ic('msg')}${k(repN(p.id))}</button><button class="rt ${iRt(p.id) ? 'on' : ''}" data-act="rt" data-v="${p.id}" title="Repost (${COST.rt} LUMA)">${ic('repeat')}${k(rtN(p.id))}</button><button class="lk ${iLike(p.id) ? 'on' : ''}" data-act="like" data-v="${p.id}" title="Like (${COST.like} LUMA)">${iLike(p.id) ? icFill('heart') : ic('heart')}${k(likeN(p.id))}</button><button data-act="react" data-v="${p.id}" title="React">${ic('smile')}${k(rxN(p.id))}</button><button class="tp" data-act="tip" data-v="${p.id}" title="Tip this post in any token">${ic('coin')}Tip</button><button data-act="menu" data-v="${p.id}" title="More">${ic('more')}</button></div>`;
+  const ctxl = opts.rtBy ? `<div class="sc-ctx">${ic('repeat', 14)}${esc(nameOf(opts.rtBy))} reposted</div>` : opts.pinned ? `<div class="sc-ctx">${ic('pin', 14)}Pinned</div>` : boostedNow(p.id) ? `<div class="sc-ctx" style="color:#22d3ee">${ic('zap', 14)}Boosted</div>` : '';
+  const rp = p.r && IX.posts.get(p.r) && !opts.full ? `<div class="sc-m" style="margin-bottom:2px">Replying to <a class="sc-l" data-act="user" data-v="${IX.posts.get(p.r)!.a}">${esc(tagOf(IX.posts.get(p.r)!.a))}</a></div>` : '';
+  return `<article class="sc-post" data-act="open" data-v="${p.id}"><div data-act="user" data-v="${p.a}" style="cursor:pointer">${avatar(p.a, opts.full ? 48 : 44)}</div><div class="sc-body">${ctxl}<div class="sc-who"><b data-act="user" data-v="${p.a}">${esc(nameOf(p.a))}</b>${badge(p.a)}<span class="sc-m">${esc(tagOf(p.a))} · <span title="${esc(full(p.t))}">${ago(p.t)}</span>${p.ed ? ' · <span title="Edited ' + esc(full(p.ed)) + '">edited</span>' : ''}</span></div>${rp}<div class="sc-txt" ${opts.full ? 'style="font-size:1.12rem"' : ''}>${rich(p.x)}</div>${cardSym(p.x) ? priceCard(cardSym(p.x)) : ''}${media}${poll}${q}${chips}${acts}</div></article>`;
+}
+function skeleton(n = 4) { return Array.from({ length: n }, () => `<div class="sc-skel"><i style="width:44px;height:44px;border-radius:50%"></i><div style="flex:1;display:flex;flex-direction:column;gap:9px"><i style="height:12px;width:38%"></i><i style="height:12px;width:92%"></i><i style="height:12px;width:70%"></i></div></div>`).join(''); }
+function feedList(items: Array<{ p: Post; rtBy?: string; pinned?: boolean; t: number }>, more: boolean, empty = 'Nothing here yet. Be the first to post.'): string {
+  if (!items.length) return S.loaded ? `<div class="sc-empty">${empty}</div>` : skeleton();
+  return items.map(i => postCard(i.p, { rtBy: i.rtBy, pinned: i.pinned })).join('') + (more ? `<div style="text-align:center;padding:16px"><button class="sc-btn ghost" data-act="more">Show more</button></div>` : '');
+}
+function topLevel(filter: (p: Post) => boolean) {
+  const out: Array<{ p: Post; rtBy?: string; t: number }> = [];
+  for (const id of IX.order) { const p = IX.posts.get(id)!; if (p.del || p.r || isMuted(p.a) || !filter(p)) continue; out.push({ p, t: p.t }); }
+  for (const r of IX.rtEv) { const p = IX.posts.get(r.ref); if (p && !p.del && !isMuted(r.by) && !isMuted(p.a) && filter({ ...p, a: r.by })) out.push({ p, rtBy: r.by, t: r.t }); }
+  return out;
+}
+const draftLen = () => S.draft.length;
+function ringHtml(len: number) {
+  const over = len > MAXTXT, parts = Math.ceil(len / 470), pc = Math.min(1, len / MAXTXT);
+  return `<span class="sc-ring" id="sc-ring"><svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="3"/><circle cx="12" cy="12" r="9" fill="none" stroke="${over ? '#fbbf24' : '#8b5cf6'}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(pc * 56.5).toFixed(1)} 100" transform="rotate(-90 12 12)"/></svg>${over ? `<span style="color:#fbbf24">Thread of ${parts}</span>` : len > MAXTXT - 60 ? MAXTXT - len : ''}</span>`;
+}
+function composer(opts: { reply?: string; quote?: string } = {}): string {
+  const rep = opts.reply ? IX.posts.get(opts.reply) : undefined, qq = opts.quote ? IX.posts.get(opts.quote) : undefined;
+  if (!me()) return `<div class="sc-comp"><div class="sc-m">Open a LUMA wallet to post, reply, like and tip.</div></div>`;
+  { const bl = blocked(); if (bl) return `<div class="sc-comp"><div class="sc-m">${esc(bl)}</div></div>`; }
+  const nParts = Math.max(1, Math.ceil(Math.max(S.draft.length, 1) / 470)), cost = S.draft.length > MAXTXT ? nParts * COST.post : COST.post;
+  return `<div class="sc-comp" id="sc-comp">${avatar(me())}<div style="flex:1;min-width:0">${rep ? `<div class="sc-m" style="margin-bottom:2px">Replying to ${esc(tagOf(rep.a))}</div>` : ''}<textarea id="sc-txt" maxlength="${MAXTXT * MAXPARTS - 200}" rows="2" placeholder="${rep ? 'Post your reply' : qq ? 'Add your take' : 'What is happening on the chain?  Try $LUMA or #tags'}">${esc(S.draft)}</textarea>
+  <div id="sc-card">${cardSym(S.draft, true) ? priceCard(cardSym(S.draft, true), { close: true }) : ''}</div>
+  ${S.nft ? `<div class="sc-nftat"><img src="${esc(S.nft.img)}" alt="" referrerpolicy="no-referrer"><div><b>${esc(S.nft.name)}</b><div class="sc-m">NFT attached. It will be shown with a check that you own it.</div></div><button class="sc-ib" data-act="nftx" title="Remove">${ic('x', 16)}</button></div>` : ''}
+  ${qq ? `<div class="sc-quote">${postCard(qq, { quoted: true })}<button class="sc-btn sm ghost" data-act="noquote" style="margin-top:6px">Remove quote</button></div>` : ''}
+  <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
+  ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
+  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
+  <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 4)} LUMA</span></button></div></div></div>`;
+}
+
+function topTipped(days = 7) {
+  const since = Date.now() / 1000 - days * 86400, m = new Map<string, number>();
+  for (const t of IX.tipsAll) if (t.t >= since) m.set(t.to, (m.get(t.to) || 0) + 1);
+  return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 4);
+}
+function sidebar(): string {
+  const day = Date.now() / 1000 - 86400 * 2, tg = new Map<string, number>(), cg = new Map<string, number>();
+  for (const id of IX.order) { const p = IX.posts.get(id)!; if (p.del || p.t < day || isMuted(p.a)) continue; for (const t of tagsIn(p.x)) tg.set(t, (tg.get(t) || 0) + 1); for (const t of cashIn(p.x)) cg.set(t, (cg.get(t) || 0) + 1); }
+  for (const t of IX.tipsAll) if (t.t >= day && tokName(t.c) !== 'LUMA') { const key = '$' + tokName(t.c).toLowerCase(); cg.set(key, (cg.get(key) || 0) + 2); }
+  const trends = Array.from(tg.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5), coins = Array.from(cg.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const m = me(), who = Array.from(IX.followers.entries()).filter(([a]) => a !== m && !iFollow(a) && !isMuted(a)).sort((a, b) => b[1].size - a[1].size).slice(0, 4).map(x => x[0]);
+  const fill = who.length < 4 ? Array.from(new Set(IX.order.map(i => IX.posts.get(i)!.a))).filter(a => a !== m && !iFollow(a) && !who.includes(a) && !isMuted(a)).slice(-(4 - who.length)) : [];
+  const tt = topTipped();
+  const userRow = (a: string, right: string) => `<div class="sc-user"><span data-act="user" data-v="${a}" style="cursor:pointer">${avatar(a, 38)}</span><div class="sc-who"><b data-act="user" data-v="${a}">${esc(nameOf(a))}${badge(a)}</b><span class="sc-m">${esc(tagOf(a))}</span></div>${right}</div>`;
+  return `<div class="sc-side"><div class="sc-box" style="padding:10px"><input class="sc-in" id="sc-q" placeholder="Search posts, #tags, $tokens, @people" value="${esc(S.q)}" style="margin:0"></div>
+  ${me() ? `<div class="sc-box"><h4>${ic('trend', 17)}Daily check-in</h4><div class="sc-row" style="justify-content:space-between"><div><b style="font-size:1.3rem">${streak(me())}</b> <span class="sc-m">day streak</span></div>${(IX.chk.get(me()) || new Set()).has(today()) ? '<span class="sc-m">Checked in today</span>' : `<button class="sc-btn sm" data-act="chk">Check in</button>`}</div><div class="sc-row" style="margin-top:10px;justify-content:space-between"><span class="sc-m">Reputation <b style="color:#fff">${reputation(me())}</b> · ${invited(me())} invited</span><button class="sc-btn sm ghost" data-act="invite">Invite friends</button></div><button class="sc-btn sm ghost" style="margin-top:8px" data-act="nav" data-v="stats">${ic('chart', 15)}Network stats</button></div>` : ''}
+  <div class="sc-box"><h4>${ic('trend', 17)}Trending tokens</h4>${coins.length ? coins.map(([t, n]) => `<a class="sc-tag" data-act="tag" data-v="${esc(t)}"><b class="sc-cash">${esc(t.toUpperCase())}</b><div class="sc-m">${n} mention${n === 1 ? '' : 's'} and tips</div></a>`).join('') : '<div class="sc-m">Write $USD or $LUMA in a post and the token shows up here.</div>'}</div>
+  <div class="sc-box"><h4>${ic('chart', 17)}Trending topics</h4>${trends.length ? trends.map(([t, n]) => `<a class="sc-tag" data-act="tag" data-v="${esc(t)}"><b>#${esc(t)}</b><div class="sc-m">${n} post${n === 1 ? '' : 's'}</div></a>`).join('') : '<div class="sc-m">Tags show up here when people use them.</div>'}</div>
+  ${tt.length ? `<div class="sc-box"><h4>${ic('coin', 17)}Most tipped this week</h4>${tt.map(([a, n]) => userRow(a, `<span class="sc-m">${n} tip${n === 1 ? '' : 's'}</span>`)).join('')}</div>` : ''}
+  <div class="sc-box"><h4>${ic('user', 17)}Who to follow</h4>${[...who, ...fill].length ? [...who, ...fill].map(a => userRow(a, `<button class="sc-btn sm" data-act="follow" data-v="${a}">Follow</button>`)).join('') : '<div class="sc-m">No one yet. Invite your friends.</div>'}</div>
+  <div class="sc-m" style="padding:0 6px;line-height:1.55;font-size:.8rem">Everything here is stored on the LUMA chain. You own your account, your posts and your followers. Actions cost a fraction of a cent of LUMA. Tips, in any token, go 100% to the person tipped.</div></div>`;
+}
+
+function notifications(): Array<{ t: number; ic: string; col: string; html: string }> {
+  const m = me(), out: Array<{ t: number; ic: string; col: string; html: string }> = []; if (!m) return out;
+  const handle = handleOf(m), mention = handle ? new RegExp('@' + handle + '\\b', 'i') : null;
+  for (const e of EV) {
+    const d = e.d, who = `<b data-act="user" data-v="${e.a}">${esc(nameOf(e.a))}</b>`; if (e.a === m || isMuted(e.a)) continue;
+    const ref = typeof d.ref === 'string' ? IX.posts.get(d.ref.toUpperCase()) : undefined, snip = ref ? `<div class="sc-m">${esc(ref.x.slice(0, 120))}</div>` : '';
+    if (d.t === 'like' && ref && ref.a === m) out.push({ t: e.t, ic: 'heart', col: '#fb5b8d', html: `${who} liked your post${snip}` });
+    else if (d.t === 'rt' && ref && ref.a === m) out.push({ t: e.t, ic: 'repeat', col: '#34d399', html: `${who} reposted your post${snip}` });
+    else if (d.t === 'rx' && ref && ref.a === m && d.e) out.push({ t: e.t, ic: 'smile', col: '#fbbf24', html: `${who} reacted ${esc(d.e)} to your post${snip}` });
+    else if (d.t === 'boost' && ref && ref.a === m) out.push({ t: e.t, ic: 'zap', col: '#22d3ee', html: `${who} boosted your post with ${fmt(e.v, 2)} LUMA${snip}` });
+    else if (d.t === 'fol' && d.a === m) out.push({ t: e.t, ic: 'user', col: '#8db4ff', html: `${who} followed you` });
+    else if (d.t === 'vote' && ref && ref.a === m) out.push({ t: e.t, ic: 'list', col: '#a78bfa', html: `${who} voted in your poll` });
+    else if (d.t === 'post') { const p = IX.posts.get(e.h); if (!p || p.del) continue; const parent = p.r && IX.posts.get(p.r), q = p.q && IX.posts.get(p.q);
+      if (parent && parent.a === m) out.push({ t: e.t, ic: 'msg', col: '#8db4ff', html: `${who} replied<div class="sc-m">${esc(p.x.slice(0, 140))}</div>` }); else if (q && q.a === m) out.push({ t: e.t, ic: 'quote', col: '#a78bfa', html: `${who} quoted your post<div class="sc-m">${esc(p.x.slice(0, 140))}</div>` }); else if (mention && mention.test(p.x)) out.push({ t: e.t, ic: 'at', col: '#8db4ff', html: `${who} mentioned you<div class="sc-m">${esc(p.x.slice(0, 140))}</div>` }); }
+  }
+  for (const tp of IX.tipsTo.get(m) || []) if (tp.by !== m && !isMuted(tp.by)) out.push({ t: tp.t, ic: 'coin', col: '#fbbf24', html: `<b data-act="user" data-v="${tp.by}">${esc(nameOf(tp.by))}</b> tipped you <b>${fmt(tp.v, 4)} ${esc(tokName(tp.c))}</b>${tp.m ? `<div class="sc-m">“${esc(tp.m)}”</div>` : ''}` });
+  return out.sort((a, b) => b.t - a.t).slice(0, 80);
+}
+const unread = () => { const seen = LS.get(seenKey(), 0); return notifications().filter(n => n.t > seen).length; };
+
+const tipRows = (list: Tip[]) => list.slice().sort((a, b) => b.t - a.t).slice(0, 40).map(t => `<div class="sc-user">${avatar(t.by, 36)}<div class="sc-who"><b data-act="user" data-v="${t.by}">${esc(nameOf(t.by))}${badge(t.by)}</b><span class="sc-m">${t.m ? '“' + esc(t.m) + '” · ' : ''}${ago(t.t)} ago</span></div><b style="color:#fcd34d">${fmt(t.v, 4)} ${esc(tokName(t.c))}</b></div>`).join('');
+function profileView(a: string, tab = 'posts'): string {
+  const p: Prof = IX.prof.get(a) || {}, mine = a === me(), h = handleOf(a);
+  const posts = IX.order.map(i => IX.posts.get(i)!).filter(x => !x.del && x.a === a);
+  let list: Post[] = [];
+  if (tab === 'posts') list = posts.filter(x => !x.r); else if (tab === 'replies') list = posts.filter(x => x.r); else if (tab === 'media') list = posts.filter(x => x.m.length); else if (tab === 'likes') list = Array.from(IX.likes.entries()).filter(([, s]) => s.has(a)).map(([id]) => IX.posts.get(id)!).filter(x => x && !x.del && !isMuted(x.a));
+  list = list.sort((x, y) => y.t - x.t);
+  const pinId = IX.pin.get(a), pinned = tab === 'posts' && pinId ? IX.posts.get(pinId) : undefined; if (pinned && !pinned.del) list = list.filter(x => x.id !== pinId);
+  const joined = posts[0], got = IX.tipsTo.get(a) || [], sup = new Set(got.map(t => t.by)).size, accent = p.c || '#6366f1';
+  const banner = p.k && okImg(p.k) ? `background:#0d1020 url('${esc(p.k)}') center/cover` : `background:linear-gradient(135deg,${accent},#312e81 60%,#0e7490)`;
+  const mut = !mine && me() ? Array.from(IX.followers.get(a) || []).filter(x => x !== me() && iFollow(x)) : [];
+  const likesGot = posts.reduce((n, x) => n + likeN(x.id), 0);
+  const links = (p.ln || []).map(l => `<a class="sc-lk" href="${esc(l.u)}" target="_blank" rel="noopener noreferrer nofollow">${ic('link', 14)}${esc(l.t || l.u.replace(/^https:\/\//, '').slice(0, 24))}</a>`).join('');
+  const meta = [p.jb ? `${ic('pen', 14)}${esc(p.jb)}` : '', p.l ? `${ic('pin', 14)}${esc(p.l)}` : '', p.pr ? `${ic('user', 14)}${esc(p.pr)}` : '', joined ? `${ic('home', 14)}Active since ${new Date(joined.t * 1000).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}` : ''].filter(Boolean).map(x => `<span class="sc-mt">${x}</span>`).join('');
+  const checks: Array<[string, boolean]> = [['Add a photo', !!p.i], ['Add a cover picture', !!p.k], ['Write a bio', !!p.b], ['Claim your @handle', !!h], ['Add a link', !!(p.w || (p.ln || []).length)], ['Pin a post', !!pinId]], done = checks.filter(x => x[1]).length;
+  const shine = mine && done < checks.length ? `<div class="sc-box" style="margin:10px 0"><div class="sc-row" style="justify-content:space-between"><h4 style="margin:0">Make your profile shine</h4><span class="sc-m">${done}/${checks.length}</span></div><div class="sc-bar"><i style="width:${Math.round(done / checks.length * 100)}%"></i></div><div class="sc-row" style="margin-top:10px">${checks.filter(x => !x[1]).map(x => `<button class="sc-btn sm ghost" data-act="editprof">${esc(x[0])}</button>`).join('')}</div></div>` : '';
+  const tabs: Array<[string, string]> = [['posts', 'Posts'], ['replies', 'Replies'], ['media', 'Media'], ['shop', 'Shop'], ['nfts', 'NFTs'], ['tips', 'Tips'], ['likes', 'Likes']];
+  const body = tab === 'shop' ? `<div style="padding:10px">${shopGrid(a)}</div>` : tab === 'nfts' ? nftTab(a) : tab === 'tips' ? `<div style="padding:10px">${got.length ? `<div class="sc-m" style="margin-bottom:6px">${totalStr(got, 6)} from ${sup} supporter${sup === 1 ? '' : 's'}</div>${tipRows(got)}` : '<div class="sc-empty">No tips yet.</div>'}</div>` : list.length ? list.slice(0, S.shown).map(x => postCard(x)).join('') : pinned ? '' : '<div class="sc-empty">Nothing here yet.</div>';
+  return `<div class="sc-prof" style="--pa:${esc(accent)}"><div class="sc-ban" style="${banner}"></div><div class="sc-pinfo"><div class="sc-row" style="justify-content:space-between;align-items:flex-end"><span class="sc-pav ${p.sh === 's' ? 'sq' : ''}">${avatar(a, 96)}</span>${mine ? `<div class="sc-row"><button class="sc-btn sm ghost" data-act="plink" data-v="${a}">${ic('share', 15)}Share</button><button class="sc-btn sm ghost" data-act="nav" data-v="dash">${ic('chart', 15)}Creator</button><button class="sc-btn sm" data-act="editprof">${ic('pen', 15)}Edit profile</button></div>` : `<div class="sc-row"><button class="sc-ib" data-act="menuu" data-v="${a}" title="More">${ic('more')}</button><button class="sc-ib" data-act="plink" data-v="${a}" title="Copy profile link">${ic('share')}</button><button class="sc-btn sm gold" data-act="tip" data-to="${a}">${ic('coin', 15)}Tip</button><button class="sc-btn sm ${iFollow(a) ? 'on' : ''}" data-act="follow" data-v="${a}">${iFollow(a) ? 'Following' : 'Follow'}</button></div>`}</div>
+  <div class="sc-pname">${esc(nameOf(a))}${badge(a)}</div><div class="sc-m">${h ? '@' + esc(h) + ' · ' : ''}<span class="mono">${esc(ctx.showL(a))}</span>${!mine && me() && (IX.follows.get(a) || new Set()).has(me()) ? ' <span class="sc-fy">Follows you</span>' : ''}</div>
+  ${p.st ? `<div class="sc-stt">${esc(p.st)}</div>` : ''}${p.b ? `<div class="sc-txt" style="margin:10px 0 6px">${rich(p.b)}</div>` : mine ? `<div class="sc-m" style="margin-top:10px">Add a bio so people know who you are.</div>` : ''}
+  <div class="sc-mts">${meta}<span class="sc-mt">${ic('gem', 14)}Reputation ${reputation(a)}</span>${streak(a) > 1 ? `<span class="sc-mt">${ic('trend', 14)}${streak(a)} day streak</span>` : ''}</div>${achievements(a).length ? `<div class="sc-lks">${achievements(a).map(x => `<span class="sc-lk" style="cursor:default">${ic(x[0], 13)}${esc(x[1])}</span>`).join('')}</div>` : ''}${p.w || links ? `<div class="sc-lks">${p.w ? `<a class="sc-lk" href="${esc(p.w)}" target="_blank" rel="noopener noreferrer nofollow">${ic('link', 14)}${esc(p.w.replace(/^https:\/\//, '').slice(0, 30))}</a>` : ''}${links}</div>` : ''}
+  <div class="sc-stats" style="margin-top:12px"><button class="sc-stat" data-act="flist" data-v="${a}" data-k="following"><b>${fwgN(a)}</b> Following</button><button class="sc-stat" data-act="flist" data-v="${a}" data-k="followers"><b>${folN(a)}</b> Followers</button><span><b>${posts.length}</b> Posts</span><span><b>${likesGot}</b> Likes</span></div>
+  ${mut.length ? `<div class="sc-m" style="margin-top:8px">Followed by ${mut.slice(0, 2).map(x => esc(nameOf(x))).join(', ')}${mut.length > 2 ? ' and ' + (mut.length - 2) + ' more you follow' : ''}</div>` : ''}
+  ${got.length ? `<div class="sc-jar" data-act="supu" data-v="${a}">${ic('coin', 20)}<div><b style="color:#fcd34d">Tip jar</b><div class="sc-m">${totalStr(got)} from ${sup} supporter${sup === 1 ? '' : 's'}</div></div></div>` : ''}
+  ${isMuted(a) ? `<div class="sc-warn" style="margin-bottom:0">You muted this account. <a class="sc-l" data-act="unmute" data-v="${a}">Unmute</a></div>` : ''}${POL.banned.has(a) ? `<div class="sc-warn" style="margin-bottom:0">This account is suspended by the network operator.</div>` : ''}</div></div>${shine}
+  <div class="sc-tabs">${tabs.map(([t, l]) => `<button class="${tab === t ? 'on' : ''}" data-act="ptab" data-v="${t}">${l}</button>`).join('')}</div>${pinned && !pinned.del && tab === 'posts' ? postCard(pinned, { pinned: true }) : ''}${body}`;
+}
+function flistModal(a: string, kind: string) {
+  const set = Array.from((kind === 'followers' ? IX.followers.get(a) : IX.follows.get(a)) || []);
+  ctx.modal(mcard(`<div class="k" style="margin-bottom:8px">${kind === 'followers' ? 'Followers' : 'Following'} of ${esc(nameOf(a))} (${set.length})</div>${set.length ? set.slice(0, 80).map(x => `<div class="sc-user">${avatar(x, 40)}<div class="sc-who"><b style="cursor:pointer" onclick="sc.goU('${x}')">${esc(nameOf(x))}${badge(x)}</b><span class="sc-m">${esc(tagOf(x))}${(IX.prof.get(x) || {}).b ? ' · ' + esc((IX.prof.get(x) || {}).b!.slice(0, 50)) : ''}</span></div>${x !== me() ? `<button class="sc-btn sm ${iFollow(x) ? 'on' : ''}" onclick="sc.fol('${x}')">${iFollow(x) ? 'Following' : 'Follow'}</button>` : ''}</div>`).join('') : '<div class="sc-m">Nobody yet.</div>'}<div class="sc-row" style="justify-content:flex-end;margin-top:8px"><button class="sc-btn ghost" onclick="sc.close()">Close</button></div>`, 420));
+}
+function nftTab(a: string): string {
+  const c = NFTS.get(a); if (!c) { void loadNfts(a).then(() => { paint(); }); return skeleton(2); }
+  return `<div style="padding:10px">${a === me() ? '<div class="sc-m" style="margin-bottom:8px">Tap Share to post one of your NFTs with a check that you own it.</div>' : ''}${nftGrid(c.list, false, a === me())}</div>`;
+}
+function threadView(id: string): string {
+  const p = IX.posts.get(id); if (!p) return `<div class="sc-empty">${S.loaded ? 'This post was not found.' : 'Reading the chain…'}</div>`;
+  const chain: Post[] = []; let cur: Post | undefined = p; while (cur && cur.r && chain.length < 12) { cur = IX.posts.get(cur.r); if (cur) chain.unshift(cur); }
+  const replies = (IX.replies.get(id) || []).map(x => IX.posts.get(x)!).filter(x => x && !x.del && !isMuted(x.a)).sort((a, b) => score(b) - score(a) || b.t - a.t);
+  const likers = Array.from(IX.likes.get(id) || []).slice(0, 8), tips = IX.tipsRef.get(id) || [];
+  return `${chain.map(c => postCard(c)).join('')}<div style="border-bottom:1px solid var(--sl)">${postCard(p, { full: true })}${likers.length ? `<div class="sc-m" style="padding:0 12px 14px">Liked by ${likers.map(a => esc(nameOf(a))).join(', ')}${likeN(id) > likers.length ? ' and ' + (likeN(id) - likers.length) + ' more' : ''}</div>` : ''}${tips.length ? `<div class="sc-m" style="padding:0 12px 14px;color:#fcd34d">${ic('coin', 14)} ${totalStr(tips)} tipped by ${new Set(tips.map(t => t.by)).size} people</div>` : ''}</div>${composer({ reply: id })}${replies.length ? replies.map(r => postCard(r)).join('') : '<div class="sc-empty">No replies yet.</div>'}`;
+}
+function searchView(q: string): string {
+  const needle = q.trim().toLowerCase().replace(/^[#@]/, ''); if (!needle) return '<div class="sc-empty">Type something to search.</div>';
+  const people = Array.from(new Set([...IX.cur.keys(), ...IX.prof.keys(), ...IX.order.map(i => IX.posts.get(i)!.a)])).filter(a => !isMuted(a) && (nameOf(a).toLowerCase().includes(needle) || handleOf(a).includes(needle) || ctx.showL(a).toLowerCase().startsWith(q.trim().toLowerCase()))).slice(0, 6);
+  const posts = IX.order.map(i => IX.posts.get(i)!).filter(p => !p.del && !isMuted(p.a) && p.x.toLowerCase().includes(needle)).sort((a, b) => b.t - a.t).slice(0, 40);
+  return `${people.length ? `<div class="sc-box" style="margin:10px 0"><h4>People</h4>${people.map(a => `<div class="sc-user"><span data-act="user" data-v="${a}" style="cursor:pointer">${avatar(a, 38)}</span><div class="sc-who"><b data-act="user" data-v="${a}">${esc(nameOf(a))}${badge(a)}</b><span class="sc-m">${esc(tagOf(a))} · ${folN(a)} followers</span></div></div>`).join('')}</div>` : ''}${posts.length ? posts.map(p => postCard(p)).join('') : '<div class="sc-empty">No posts match.</div>'}`;
+}
+function dashView(): string {
+  const m = me(); if (!m) return `<div class="sc-empty">Open a LUMA wallet to see your creator numbers.</div>`;
+  const xp = `<div class="sc-box" style="margin:10px 0"><h4>Your data</h4><div class="sc-m" style="margin-bottom:8px">Download everything you have done on LUMA Social as a file. It is yours.</div><div class="sc-row"><button class="sc-btn sm ghost" data-act="export">Export my data</button><button class="sc-btn sm ghost" data-act="invite">Copy my invite link</button></div></div>`;
+  const mine = IX.order.map(i => IX.posts.get(i)!).filter(p => p.a === m && !p.del);
+  let likes = 0, rts = 0, reps = 0, rxs = 0, bst = 0; for (const p of mine) { likes += likeN(p.id); rts += rtN(p.id); reps += (IX.replies.get(p.id) || []).length; rxs += rxN(p.id); for (const b of IX.boosts.get(p.id) || []) bst += b.v; }
+  const got = IX.tipsTo.get(m) || [], sent = IX.tipsBy.get(m) || [], eng = (p: Post) => likeN(p.id) + 2 * rtN(p.id) + (IX.replies.get(p.id) || []).length + rxN(p.id) + 3 * (IX.tipsRef.get(p.id) || []).length;
+  const top = mine.slice().sort((a, b) => eng(b) - eng(a)).slice(0, 5).filter(p => eng(p) > 0);
+  const sup = new Map<string, Tip[]>(); for (const t of got) { if (t.by === m) continue; const l = sup.get(t.by) || []; l.push(t); sup.set(t.by, l); }
+  const board = Array.from(sup.entries()).sort((a, b) => b[1].length - a[1].length).slice(0, 8), mu = muted();
+  const kpi = (n: string | number, l: string) => `<div class="sc-kpi"><b>${n}</b><span>${l}</span></div>`;
+  return xp + `<div class="sc-kpis">${kpi(folN(m), 'Followers')}${kpi(mine.length, 'Posts')}${kpi(likes, 'Likes received')}${kpi(rts, 'Reposts')}${kpi(reps, 'Replies')}${kpi(rxs, 'Reactions')}</div>
+  <div class="sc-box" style="margin-bottom:12px"><h4>${ic('coin', 17)}Tips received</h4>${got.length ? `<div style="font-size:1.25rem;font-weight:800;color:#fcd34d">${totalStr(got, 6)}</div><div class="sc-m">${got.length} tip${got.length === 1 ? '' : 's'} from ${sup.size} supporter${sup.size === 1 ? '' : 's'}. Sent by you: ${sent.length ? totalStr(sent, 4) : 'none yet'}.</div>` : '<div class="sc-m">No tips yet. Tips arrive in your wallet in LUMA or any token. Share your profile to get your first.</div>'}</div>
+  ${board.length ? `<div class="sc-box" style="margin-bottom:12px"><h4>${ic('user', 17)}Top supporters</h4>${board.map(([a, l], i) => `<div class="sc-user"><span class="sc-m" style="width:18px">${i + 1}</span><span data-act="user" data-v="${a}" style="cursor:pointer">${avatar(a, 36)}</span><div class="sc-who"><b data-act="user" data-v="${a}">${esc(nameOf(a))}${badge(a)}</b><span class="sc-m">${totalStr(l, 3)}</span></div><span class="sc-m">${l.length}x</span></div>`).join('')}</div>` : ''}
+  <div class="sc-box" style="margin-bottom:12px"><h4>${ic('chart', 17)}Top posts</h4>${top.length ? top.map(p => `<div class="sc-tag" data-act="open" data-v="${p.id}"><div>${esc(p.x.slice(0, 110))}</div><div class="sc-m">${likeN(p.id)} likes · ${rtN(p.id)} reposts · ${(IX.replies.get(p.id) || []).length} replies · ${rxN(p.id)} reactions</div></div>`).join('') : '<div class="sc-m">Your most engaging posts show up here.</div>'}${bst ? `<div class="sc-m" style="margin-top:8px">${fmt(bst, 2)} LUMA spent on boosts.</div>` : ''}</div>
+  <div class="sc-box" style="margin-bottom:12px"><h4>${ic('eye', 17)}Safety and display</h4><label class="sc-m" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" ${LS.get('sc.noblur', false) ? 'checked' : ''} data-act="noblur"> Show images without blurring them first${POL.blurMedia ? '' : ' (this network does not blur by default)'}</label><div class="sc-m" style="margin-top:8px;line-height:1.5">This network blocks ${POL.flags.sexual ? 'sexual content, ' : ''}${POL.flags.violence ? 'graphic violence and threats, ' : ''}and anything that sexualises children. Report a post from its menu and moderators will review it.</div></div>
+  <div class="sc-box"><h4>${ic('slash', 17)}Muted accounts</h4>${mu.length ? mu.map(a => `<div class="sc-user">${avatar(a, 32)}<div class="sc-who"><b>${esc(nameOf(a))}</b></div><button class="sc-btn sm ghost" data-act="unmute" data-v="${a}">Unmute</button></div>`).join('') : '<div class="sc-m">You have not muted anyone. Muting is private and stays on this device.</div>'}</div>`;
+}
+function center(): string {
+  if (!POL.on) return `<div class="sc-head">LUMA Social</div><div class="sc-empty">LUMA Social is closed by the network operator for now. Please check back later.</div>`;
+  const v = S.view, back = `<button class="sc-ib" data-act="back" title="Back">${ic('back')}</button>`;
+  if (v.k === 'home') {
+    const fl = S.tab === 'following' ? topLevel(p => p.a === me() || (IX.follows.get(me()) || new Set()).has(p.a)).sort((a, b) => b.t - a.t) : topLevel(() => true).sort((a, b) => score(b.p) - score(a.p) || b.t - a.t);
+    return `<div class="sc-head">Home</div><div class="sc-tabs"><button class="${S.tab === 'foryou' ? 'on' : ''}" data-act="tab" data-v="foryou">For you</button><button class="${S.tab === 'following' ? 'on' : ''}" data-act="tab" data-v="following">Following</button></div>${composer({ quote: S.quote || undefined })}${feedList(fl.slice(0, S.shown), fl.length > S.shown, S.tab === 'following' ? 'Follow people and their posts will show up here.' : undefined)}`;
+  }
+  if (v.k === 'explore') {
+    const all = topLevel(() => true), tipped = (p: Post) => totals(IX.tipsRef.get(p.id) || []).length ? (IX.tipsRef.get(p.id) || []).length : 0;
+    const list = S.xtab === 'new' ? all.sort((a, b) => b.t - a.t) : S.xtab === 'tipped' ? all.filter(x => tipped(x.p)).sort((a, b) => tipped(b.p) - tipped(a.p) || b.t - a.t) : all.sort((a, b) => score(b.p) - score(a.p));
+    return `<div class="sc-head">Explore</div><div class="sc-box" style="margin:10px 0"><input class="sc-in" id="sc-q2" placeholder="Search posts, #tags, $tokens, @people" value="${esc(S.q)}" style="margin:0"></div><div class="sc-tabs">${([['hot', 'Trending'], ['new', 'Latest'], ['tipped', 'Tipped']] as const).map(([x, l]) => `<button class="${S.xtab === x ? 'on' : ''}" data-act="xtab" data-v="${x}">${l}</button>`).join('')}</div>${feedList(list.slice(0, S.shown), list.length > S.shown, S.xtab === 'tipped' ? 'Posts that people tip show up here.' : undefined)}`;
+  }
+  if (v.k === 'notif') { const n = notifications(); return `<div class="sc-head">Notifications</div>${n.length ? n.map(x => `<div class="sc-nrow"><span class="sc-nic" style="color:${x.col}">${ic(x.ic, 18)}</span><div class="sc-body"><div>${x.html}</div><div class="sc-m">${ago(x.t)} ago</div></div></div>`).join('') : '<div class="sc-empty">Likes, replies, follows, mentions, reactions and tips show up here.</div>'}`; }
+  if (v.k === 'bm') { const b = bookmarks().map(i => IX.posts.get(i)).filter(Boolean) as Post[]; return `<div class="sc-head">Bookmarks<span class="sc-sub">saved on this device</span></div>${b.length ? b.map(p => postCard(p)).join('') : '<div class="sc-empty">Choose Save from a post menu to keep it here.</div>'}`; }
+  if (v.k === 'market') return `<div class="sc-head">Marketplace</div>${marketView()}`;
+  if (v.k === 'stats') return `<div class="sc-head">${back}Network stats</div>${statsView()}`;
+  if (v.k === 'listing') return `<div class="sc-head">${back}Listing</div>${listingView(v.id)}`;
+  if (v.k === 'dash') return `<div class="sc-head">Creator dashboard</div>${dashView()}`;
+  if (v.k === 'profile') return `<div class="sc-head">${back}${esc(nameOf(v.a))}</div>${profileView(v.a, v.tab || 'posts')}`;
+  if (v.k === 'thread') return `<div class="sc-head">${back}Post</div>${threadView(v.id)}`;
+  if (v.k === 'tag') {
+    const isC = v.tag[0] === '$', l = topLevel(p => (isC ? cashIn(p.x) : tagsIn(p.x)).includes(v.tag)).sort((a, b) => b.t - a.t);
+    const tl = isC ? IX.tipsAll.filter(t => '$' + tokName(t.c).toLowerCase() === v.tag) : [];
+    return `<div class="sc-head">${back}<span class="${isC ? 'sc-cash' : ''}">${isC ? esc(v.tag.toUpperCase()) : '#' + esc(v.tag)}</span></div>${isC ? `<div style="margin:10px 0">${priceCard(v.tag)}</div>` : ''}${isC ? `<div class="sc-box" style="margin:10px 0"><div class="sc-m">${tl.length ? `${totalStr(tl)} tipped on LUMA Social in ${tl.length} tip${tl.length === 1 ? '' : 's'}.` : 'Posts that mention this token. Tip it on any post.'}</div></div>` : ''}${feedList(l.slice(0, S.shown), l.length > S.shown, 'No posts yet.')}`;
+  }
+  return `<div class="sc-head">${back}Search</div>${searchView(v.q)}`;
+}
+
+export function shell() { return `<div id="sc-root"><style>${CSS}${CSS2}</style><div class="sc" id="sc"></div></div>`; }
+function paint() {
+  const root = document.getElementById('sc'); if (!root) return;
+  if (ctx.xrpl()) { root.innerHTML = `<div class="sc-box" style="grid-column:1/-1">LUMA Social runs on the LUMA chain. Switch the wallet type to LUMA to use it.</div>`; return; }
+  const keep = document.activeElement as HTMLElement | null, kid = keep && keep.id, ss = (keep as any)?.selectionStart;
+  const un = unread(), v = S.view, on = (x: string) => (v.k === x ? 'on' : '');
+  const nb = (id: string, icon: string, label: string, extra = '', cls = '') => `<button class="${cls}" data-act="nav" data-v="${id}" aria-label="${label}">${ic(icon, 21)}<span class="t">${label}</span>${extra}</button>`;
+  root.innerHTML = `<div class="sc-nav"><div class="sc-brand">${LOGO}<span>LUMA Social<small>on-chain, owned by you</small></span></div>${nb('home', 'home', 'Home', '', on('home'))}${nb('explore', 'search', 'Explore', '', on('explore') || on('search') || on('tag'))}${nb('notif', 'bell', 'Notifications', un ? `<span class="sc-badge">${un > 99 ? '99+' : un}</span>` : '', on('notif'))}${nb('bm', 'bm', 'Bookmarks', '', on('bm'))}${nb('market', 'shop', 'Marketplace', '', on('market') || on('listing'))}${nb('dash', 'chart', 'Creator', '', on('dash'))}${nb('me', 'user', 'Profile', '', v.k === 'profile' && v.a === me() ? 'on' : '')}${nb('compose', 'pen', 'Post', '', 'sc-big')}</div>
+  <div class="sc-col">${POL.banner ? `<div class="sc-note">${esc(POL.banner)}</div>` : ''}${S.hubErr ? `<div class="sc-warn">${esc(S.hubErr)}</div>` : ''}${S.err ? `<div class="sc-warn">${esc(S.err)}</div>` : ''}${center()}</div>${sidebar()}`;
+  const ta = document.getElementById('sc-txt') as HTMLTextAreaElement | null; if (ta) grow(ta); void fillNft();
+  if (kid) { const el = document.getElementById(kid) as HTMLInputElement | null; if (el) { el.focus(); try { if (ss != null) el.setSelectionRange(ss, ss); } catch {} } }
+}
+const grow = (t: HTMLTextAreaElement) => { t.style.height = 'auto'; t.style.height = Math.min(360, Math.max(64, t.scrollHeight)) + 'px'; };
+
+
+// ---------- NFTs: use them as pictures and share the ones you own ----------
+interface Nft { id: string; uri: string; issuer: string; serial: number }
+const NFTS = new Map<string, { at: number; list: Nft[] }>(), NM: Record<string, { name: string; img: string }> = LS.get('sc.nftm', {}), askOwner = new Set<string>();
+async function loadNfts(a: string, force = false): Promise<Nft[]> {
+  const c = NFTS.get(a); if (c && !force && Date.now() - c.at < 120000) return c.list;
+  const list: Nft[] = []; try { let marker: any; for (let i = 0; i < 4; i++) { const r = await ctx.req('account_nfts', { account: a, limit: 100, ...(marker ? { marker } : {}) }); for (const n of r.account_nfts || []) list.push({ id: String(n.NFTokenID).toUpperCase(), uri: fromHex(n.URI || ''), issuer: n.Issuer || '', serial: n.nft_serial || 0 }); marker = r.marker; if (!marker) break; } } catch {}
+  NFTS.set(a, { at: Date.now(), list }); return list;
+}
+const gw = (u: string) => { u = String(u || '').trim(); if (/^ipfs:\/\//.test(u)) return 'https://ipfs.io/ipfs/' + u.slice(7).replace(/^ipfs\//, ''); return /^https:\/\/[^\s"'<>\\]{4,400}$/.test(u) ? u : ''; };
+async function nftMeta(n: Nft): Promise<{ name: string; img: string }> {
+  if (NM[n.id]) return NM[n.id];
+  const out = { name: '', img: '' }, u = gw(n.uri);
+  if (u) { try { const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 7000); const r = await fetch(u, { signal: ctl.signal }); clearTimeout(to); const ct = r.headers.get('content-type') || ''; if (/^image\//.test(ct)) out.img = u; else { const t = await r.text(); if (t.trim()[0] === '{') { const j = JSON.parse(t); out.name = clip(j.name || '', 60); out.img = gw(String(j.image || j.image_url || j.imageUri || '')); } } } catch { if (/\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(u)) out.img = u; } }
+  if (out.img) { NM[n.id] = out; const k = Object.keys(NM); if (k.length > 150) delete NM[k[0]]; LS.set('sc.nftm', NM); }
+  return out;
+}
+const nftFind = (id: string): Nft | undefined => { for (const v of NFTS.values()) { const n = v.list.find(x => x.id === id); if (n) return n; } return undefined; };
+async function fillNft() {
+  const els = Array.from(document.querySelectorAll('[data-nft]')).slice(0, 40) as HTMLElement[];
+  for (const el of els) { const n = nftFind(el.dataset.nft || ''); if (!n) continue; const m = await nftMeta(n); if (!el.isConnected) continue; const im = el.querySelector('img') as HTMLImageElement | null, nm = el.querySelector('.nm'); if (m.img && im && !im.src) im.src = m.img; if (nm) nm.textContent = m.name || 'NFT #' + n.serial; }
+}
+let rpt: any = 0;
+function nftBadge(p: Post): string {
+  const c = NFTS.get(p.a); if (!c && !askOwner.has(p.a)) { askOwner.add(p.a); void loadNfts(p.a).then(() => { clearTimeout(rpt); rpt = setTimeout(paint, 500); }); }
+  const ok = c ? c.list.some(n => n.id === p.n) : undefined;
+  return `<div class="sc-nftb">${ic('gem', 14)}<b>NFT</b><span class="${ok ? 'ok' : ''}">${ok === undefined ? 'checking owner…' : ok ? 'verified: ' + esc(nameOf(p.a)) + ' owns it' : 'owner not verified'}</span></div>`;
+}
+let PICK = 'post', ED: any = {};
+function nftGrid(list: Nft[], pick: boolean, mine: boolean) {
+  if (!list.length) return `<div class="sc-empty">${pick ? 'This wallet holds no NFTs yet.' : 'No NFTs here.'}</div>`;
+  return `<div class="sc-nftg">${list.slice(0, 60).map(n => `<div class="sc-nftc" data-nft="${n.id}"><img alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><div class="nm">NFT #${n.serial}</div>${pick ? `<button class="sc-btn sm" onclick="sc.nftPick('${n.id}')">Use this</button>` : mine ? `<button class="sc-btn sm" data-act="nftshare" data-v="${n.id}">Share</button>` : ''}</div>`).join('')}</div>`;
+}
+async function openNfts(purpose: string) {
+  if (!need()) return; PICK = purpose; const what = purpose === 'avatar' ? 'profile photo' : purpose === 'banner' ? 'cover picture' : 'post';
+  ctx.modal(mcard(`<div class="k">Choose an NFT for your ${what}</div><div class="muted" style="margin:6px 0 10px">Your NFTs, read live from your wallet. Only NFTs you hold are shown.</div><div class="sc-m">Reading your wallet…</div>`, 520));
+  const list = await loadNfts(me(), true);
+  ctx.modal(mcard(`<div class="k">Choose an NFT for your ${what}</div><div class="muted" style="margin:6px 0 10px">Your NFTs, read live from your wallet.${POL.imageMode !== 'any' ? ' This network only shows pictures from approved sources such as IPFS, so some NFTs may not display.' : ''}</div>${nftGrid(list, true, true)}<div class="sc-row" style="justify-content:flex-end;margin-top:10px"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button></div>`, 520));
+  void fillNft();
+}
+async function nftPick(id: string) {
+  const n = nftFind(id); if (!n) return; const m = await nftMeta(n);
+  if (!m.img) { ctx.toast('This NFT has no picture that can be shown here.', true); return; }
+  if (!okImg(m.img)) { ctx.toast('This network does not allow pictures from that source.', true); return; }
+  ctx.closeModal();
+  if (PICK === 'post') { S.nft = { id, img: m.img, name: m.name || 'NFT #' + n.serial }; S.media = m.img; paint(); }
+  else if (PICK === 'mk') { const mm: string[] = ED.m || []; const sh = m.img.replace(/^https:\/\/ipfs\.io\/ipfs\//, 'ipfs://'); if (mm.length < 4) mm.push(sh); ED.m = mm; listModal(); }
+  else { ED[PICK === 'avatar' ? 'i' : 'k'] = m.img; editModal(); }
+}
+
+// ---------- marketplace ----------
+interface Lst { id: string; a: string; t: number; ti: string; ds: string; pr: number; c: string; i: string; cat: string; cd: string; lc: string; m: string[]; q: number; st: string; ed: number }
+interface Sale { th: string; by: string; to: string; ref: string; n: number; q: number; t: number; ok: boolean }
+interface MKI { l: Map<string, Lst>; ofr: Map<string, Array<{ by: string; pr: number; x: string; t: number; h: string }>>; ask: Map<string, Array<{ h: string; by: string; x: string; t: number; an?: string; at?: number }>>; rev: Map<string, Array<{ by: string; s: number; x: string; t: number }>>; sales: Map<string, Sale[]>; order: string[] }
+const CATS = ['Electronics', 'Vehicles', 'Home', 'Fashion', 'Collectibles', 'Art & NFTs', 'Services', 'Tools', 'Sports', 'Toys', 'Books', 'Other'], CONDS = ['New', 'Like new', 'Good', 'Fair', 'For parts'];
+const mkBlank = (): MKI => ({ l: new Map(), ofr: new Map(), ask: new Map(), rev: new Map(), sales: new Map(), order: [] });
+let MK: MKI = mkBlank();
+const MK_S: { q: string; cat: string; sort: string; view: string; img: number } = { q: '', cat: '', sort: 'new', view: 'all', img: 0 };
+const mkSaveKey = () => 'sc.mksave.' + net();
+const MKBAD = /\b(firearms?|guns?|ammo|ammunition|explosives?|cocaine|heroin|meth|fentanyl|counterfeit|stolen|fake ids?|escorts?|porn|nudes?)\b/i;
+const mkHidden = (l: Lst) => POL.hidden.has(l.id) || POL.banned.has(l.a) || !!violates(l.ti + ' ' + l.ds) || MKBAD.test(l.ti + ' ' + l.ds);
+function mkEvent(mk: MKI, e: Ev, d: any, ref: string) {
+  switch (d.t) {
+    case 'lst': { const ti = clip(d.ti, 60), pr = Number(d.pr); if (!ti || !(pr >= 0) || !isFinite(pr) || mk.l.has(e.h)) break; mk.l.set(e.h, { id: e.h, a: e.a, t: e.t, ti, ds: clip(d.ds, 300), pr, c: clip(d.c, 40) || 'LUMA', i: isAddr(d.i) ? d.i : '', cat: CATS.includes(d.cat) ? d.cat : 'Other', cd: CONDS.includes(d.cd) ? d.cd : '', lc: clip(d.lc, 40), m: Array.isArray(d.m) ? d.m.map(safeUrl).filter(Boolean).slice(0, 4) : [], q: Math.max(1, Math.min(999, Math.floor(Number(d.q) || 1))), st: 'active', ed: 0 }); mk.order.push(e.h); break; }
+    case 'lup': { const l = ref ? mk.l.get(ref) : undefined; if (!l || l.a !== e.a || l.st === 'del') break; if (d.st === 'del' || d.st === 'sold' || d.st === 'active') l.st = d.st; if (d.pr != null && Number(d.pr) >= 0 && isFinite(Number(d.pr))) l.pr = Number(d.pr); if (d.ti) l.ti = clip(d.ti, 60) || l.ti; if (typeof d.ds === 'string') l.ds = clip(d.ds, 300); if (d.q) l.q = Math.max(1, Math.min(999, Math.floor(Number(d.q) || 1))); l.ed = e.t; break; }
+    case 'ofr': if (ref) listOf(mk.ofr as any, ref).push({ by: e.a, pr: Math.max(0, Number(d.pr) || 0), x: clip(d.x, 100), t: e.t, h: e.h }); break;
+    case 'ask': if (ref) listOf(mk.ask as any, ref).push({ h: e.h, by: e.a, x: clip(d.x, 140), t: e.t }); break;
+    case 'ans': { const l = mk.l.get(ref), q = (mk.ask.get(ref) || []).find(x => x.h === (isHash(d.q) ? d.q.toUpperCase() : '')); if (q && l && l.a === e.a) { q.an = clip(d.x, 140); q.at = e.t; } break; }
+    case 'rev': { const s = Math.floor(Number(d.s)); if (ref && s >= 1 && s <= 5 && !(mk.rev.get(ref) || []).some(r => r.by === e.a)) listOf(mk.rev as any, ref).push({ by: e.a, s, x: clip(d.x, 100), t: e.t }); break; }
+  }
+}
+const left = (l: Lst) => l.q - (MK.sales.get(l.id) || []).filter(x => x.ok).reduce((n, x) => n + x.q, 0);
+const isSold = (l: Lst) => l.st === 'sold' || left(l) <= 0;
+const priceStr = (l: Lst) => (l.pr === 0 ? 'Free' : fmt(l.pr, 6) + ' ' + tokName(l.c));
+const revsFor = (id: string) => (MK.rev.get(id) || []).filter(r => (MK.sales.get(id) || []).some(x => x.ok && x.by === r.by));
+const rating = (a: string) => { let t = 0, n = 0; for (const l of MK.l.values()) if (l.a === a) for (const r of revsFor(l.id)) { t += r.s; n++; } return { n, avg: n ? t / n : 0 }; };
+const soldBy = (a: string) => { let n = 0; for (const v of MK.sales.values()) for (const x of v) if (x.ok && x.to === a) n += x.q; return n; };
+const stars = (n: number) => '★★★★★'.slice(0, Math.round(n)) + '☆☆☆☆☆'.slice(0, 5 - Math.round(n));
+function lcard(l: Lst): string {
+  const img = l.m.find(okImg), sold = isSold(l), sv = (LS.get(mkSaveKey(), []) as string[]).includes(l.id);
+  return `<div class="mk-c" data-act="lopen" data-v="${l.id}"><div class="mk-i">${img ? `<img src="${esc(img)}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.remove()">` : ic('shop', 34)}${sold ? '<span class="mk-s">Sold</span>' : ''}<button class="mk-sv ${sv ? 'on' : ''}" data-act="lsave" data-v="${l.id}" title="Save" aria-label="Save">${ic('bm', 16)}</button></div><div class="mk-p">${esc(priceStr(l))}</div><div class="mk-t">${esc(l.ti)}</div><div class="sc-m">${esc(l.lc)}${l.lc ? ' · ' : ''}${ago(l.t)} ago</div></div>`;
+}
+const visible = () => Array.from(MK.l.values()).filter(l => l.st !== 'del' && !mkHidden(l));
+const shopGrid = (a: string) => { const l = visible().filter(x => x.a === a).sort((x, y) => y.t - x.t); return l.length ? `<div class="mk-g">${l.map(lcard).join('')}</div>` : '<div class="sc-empty">Nothing for sale.</div>'; };
+function marketView(): string {
+  const saved = LS.get(mkSaveKey(), []) as string[], q = MK_S.q.trim().toLowerCase();
+  let l = visible();
+  if (MK_S.view === 'mine') l = l.filter(x => x.a === me()); else if (MK_S.view === 'saved') l = l.filter(x => saved.includes(x.id));
+  if (MK_S.cat) l = l.filter(x => x.cat === MK_S.cat);
+  if (q) l = l.filter(x => (x.ti + ' ' + x.ds + ' ' + x.lc + ' ' + x.cat).toLowerCase().includes(q));
+  l.sort((a, b) => (Number(isSold(a)) - Number(isSold(b))) || (MK_S.sort === 'low' ? a.pr - b.pr : MK_S.sort === 'high' ? b.pr - a.pr : b.t - a.t));
+  const seg = (v: string, t: string) => `<button class="${MK_S.view === v ? 'on' : ''}" data-act="mkview" data-v="${v}">${t}</button>`;
+  return `<div class="mk-top"><div class="sc-row" style="flex-wrap:nowrap"><input class="sc-in" id="mk-q" placeholder="Search the marketplace" value="${esc(MK_S.q)}" oninput="sc.mkf('q',this.value)" style="margin:0"><button class="sc-btn" data-act="sell">${ic('pen', 16)}Sell</button></div>
+  <div class="mk-cats"><button class="${MK_S.cat ? '' : 'on'}" data-act="mkcat" data-v="">All</button>${CATS.map(c => `<button class="${MK_S.cat === c ? 'on' : ''}" data-act="mkcat" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+  <div class="sc-row" style="justify-content:space-between"><div class="sc-tabs" style="border:0;flex:none;min-width:240px">${seg('all', 'Browse')}${seg('saved', 'Saved')}${seg('mine', 'Your listings')}</div><select class="sc-in" style="width:auto;margin:0" onchange="sc.mkf('sort',this.value)"><option value="new" ${MK_S.sort === 'new' ? 'selected' : ''}>Newest</option><option value="low" ${MK_S.sort === 'low' ? 'selected' : ''}>Price: low to high</option><option value="high" ${MK_S.sort === 'high' ? 'selected' : ''}>Price: high to low</option></select></div></div>
+  ${l.length ? `<div class="mk-g">${l.slice(0, S.shown).map(lcard).join('')}</div>${l.length > S.shown ? '<div style="text-align:center;padding:14px"><button class="sc-btn ghost" data-act="more">Show more</button></div>' : ''}` : `<div class="sc-empty">${MK_S.view === 'mine' ? 'You have not listed anything yet.' : MK_S.view === 'saved' ? 'Nothing saved yet.' : 'No listings match. Be the first to sell something.'}<div style="margin-top:12px"><button class="sc-btn" data-act="sell">Create a listing</button></div></div>`}`;
+}
+function listingView(id: string): string {
+  const l = MK.l.get(id); if (!l || l.st === 'del' || mkHidden(l)) return `<div class="sc-empty">This listing is not available.</div>`;
+  const mine = l.a === me(), sold = isSold(l), imgs = l.m.filter(okImg), sel = Math.min(MK_S.img, Math.max(0, imgs.length - 1));
+  const offers = (MK.ofr.get(id) || []).slice().sort((a, b) => b.t - a.t), asks = (MK.ask.get(id) || []).slice().sort((a, b) => a.t - b.t), revs = revsFor(id), rt = rating(l.a);
+  const got = (MK.sales.get(id) || []).filter(x => x.ok), myBuy = got.some(x => x.by === me()), myRev = revs.some(r => r.by === me()), sv = (LS.get(mkSaveKey(), []) as string[]).includes(id);
+  return `<div class="mk-gal">${imgs.length ? `<img src="${esc(imgs[sel])}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ic('shop', 56)}${sold ? '<span class="mk-s">Sold</span>' : ''}</div>
+  ${imgs.length > 1 ? `<div class="sc-row" style="margin:8px 0">${imgs.map((u, i) => `<button class="mk-th ${i === sel ? 'on' : ''}" data-act="limg" data-v="${i}"><img src="${esc(u)}" alt="" referrerpolicy="no-referrer"></button>`).join('')}</div>` : ''}
+  <div style="padding:6px 10px"><div class="mk-pp">${esc(priceStr(l))}</div><h2 class="mk-h">${esc(l.ti)}</h2><div class="sc-m">Listed ${ago(l.t)} ago${l.lc ? ' in ' + esc(l.lc) : ''} · ${left(l) > 0 ? left(l) + ' available' : 'none left'}</div>
+  <div class="sc-row" style="margin:10px 0">${!mine && !sold && l.pr > 0 ? `<button class="sc-btn gold" data-act="lbuy" data-v="${id}">${ic('coin', 16)}Buy now</button>` : ''}${!mine && !sold ? `<button class="sc-btn" data-act="loffer" data-v="${id}">Make an offer</button>` : ''}${!mine ? `<button class="sc-btn ghost" data-act="lask" data-v="${id}">Ask a question</button>` : ''}<button class="sc-btn ghost" data-act="lsave" data-v="${id}">${ic('bm', 15)}${sv ? 'Saved' : 'Save'}</button><button class="sc-ib" data-act="lshare" data-v="${id}" title="Copy link">${ic('share')}</button>${!mine ? `<button class="sc-ib" data-act="lrep" data-v="${id}" title="Report">${ic('flag')}</button>` : ''}</div>
+  ${mine ? `<div class="sc-box" style="margin:8px 0"><div class="sc-m" style="margin-bottom:8px">Your listing</div><div class="sc-row"><button class="sc-btn sm" data-act="ledit" data-v="${id}">Edit</button>${l.st === 'sold' ? `<button class="sc-btn sm ghost" data-act="lset" data-v="${id}" data-s="active">Mark available</button>` : `<button class="sc-btn sm ghost" data-act="lset" data-v="${id}" data-s="sold">Mark as sold</button>`}<button class="sc-btn sm ghost" data-act="lset" data-v="${id}" data-s="del">Remove</button></div></div>` : ''}
+  <div class="sc-box" style="margin:10px 0"><h4>Details</h4><div class="mk-d"><span>Category</span><b>${esc(l.cat)}</b>${l.cd ? `<span>Condition</span><b>${esc(l.cd)}</b>` : ''}<span>Price in</span><b>${esc(tokName(l.c))}</b></div>${l.ds ? `<div class="sc-txt" style="margin-top:10px">${rich(l.ds)}</div>` : ''}</div>
+  <div class="sc-box sc-user" style="cursor:pointer" data-act="user" data-v="${l.a}">${avatar(l.a, 46)}<div class="sc-who"><b>${esc(nameOf(l.a))}${badge(l.a)}</b><span class="sc-m">${rt.n ? stars(rt.avg) + ' ' + rt.avg.toFixed(1) + ' (' + rt.n + ') · ' : ''}${soldBy(l.a)} sold</span></div><span class="sc-m">View shop</span></div>
+  ${got.length ? `<div class="sc-m" style="margin:10px 0">${got.reduce((n, x) => n + x.q, 0)} sold, paid on the chain and verified.</div>` : ''}
+  <div class="sc-sec">Questions (${asks.length})</div>${asks.length ? asks.map(q => `<div class="mk-q"><div><b data-act="user" data-v="${q.by}" style="cursor:pointer">${esc(nameOf(q.by))}</b> <span class="sc-m">${ago(q.t)} ago</span></div><div>${esc(q.x)}</div>${q.an ? `<div class="mk-a"><b>${esc(nameOf(l.a))}</b> ${esc(q.an)}</div>` : mine ? `<button class="sc-btn sm ghost" data-act="lans" data-v="${id}" data-q="${q.h}">Answer</button>` : ''}</div>`).join('') : '<div class="sc-m">No questions yet.</div>'}
+  <div class="sc-sec">Offers (${offers.length})</div>${offers.length ? offers.slice(0, 20).map(o => `<div class="mk-q"><div><b data-act="user" data-v="${o.by}" style="cursor:pointer">${esc(nameOf(o.by))}</b> offered <b style="color:#fcd34d">${fmt(o.pr, 6)} ${esc(tokName(l.c))}</b> <span class="sc-m">${ago(o.t)} ago</span></div>${o.x ? `<div class="sc-m">${esc(o.x)}</div>` : ''}${mine && !sold && o.pr > 0 ? `<button class="sc-btn sm ghost" data-act="lset" data-v="${id}" data-s="price" data-p="${o.pr}">Set my price to this</button>` : ''}</div>`).join('') : '<div class="sc-m">No offers yet. Offers are public.</div>'}
+  <div class="sc-sec">Reviews (${revs.length})</div>${revs.length ? revs.map(r => `<div class="mk-q"><div>${stars(r.s)} <b>${esc(nameOf(r.by))}</b> <span class="sc-m">${ago(r.t)} ago</span></div>${r.x ? `<div>${esc(r.x)}</div>` : ''}</div>`).join('') : '<div class="sc-m">Verified buyers can leave a review.</div>'}${myBuy && !myRev ? `<div style="margin-top:8px"><button class="sc-btn" data-act="lrev" data-v="${id}">Review this seller</button></div>` : ''}</div>`;
+}
+// listing form
+function collectListing(): any { const g = (i: string) => fv(i).trim(), m: string[] = []; for (let i = 0; i < 4; i++) { const u = g('mk-m' + i); if (u) m.push(u); } return { ti: g('mk-ti'), ds: g('mk-ds'), pr: g('mk-pr'), tk: fv('mk-tk'), cat: fv('mk-cat'), cd: fv('mk-cd'), lc: g('mk-lc'), q: g('mk-q2') || '1', m }; }
+async function listModal(editId = '', fresh = false) {
+  if (fresh) ED = {};
+  if (!ED.__mk) { const l = editId ? MK.l.get(editId) : undefined; ED = { __mk: 1, eid: editId, ...(l ? { ti: l.ti, ds: l.ds, pr: String(l.pr), tk: l.c + '|' + l.i, cat: l.cat, cd: l.cd, lc: l.lc, q: String(l.q), m: l.m.map(u => u.replace(/^https:\/\/ipfs\.io\/ipfs\//, 'ipfs://')) } : {}) }; }
+  ctx.modal(mcard(`<div class="k">${ED.eid ? 'Edit listing' : 'Create a listing'}</div><div class="sc-m" style="padding:12px 0">Reading your wallet…</div>`, 560));
+  const opts = await loadHold(me()).catch(() => [{ c: 'LUMA', i: '', name: 'LUMA', bal: 0, ok: true }] as TipOpt[]), e = ED, ms: string[] = e.m || [];
+  const O = (i: string, label: string, v: string, max: number, ph = '') => `<label class="sc-fl">${label}<input class="sc-in" id="${i}" maxlength="${max}" value="${esc(v || '')}" placeholder="${esc(ph)}"></label>`;
+  ctx.modal(mcard(`<div class="k" style="font-size:1.1em">${e.eid ? 'Edit listing' : 'Create a listing'}</div><div class="muted" style="margin:4px 0 8px">${e.eid ? COST.lup : COST.lst} LUMA to publish. Buyers pay you directly, with no middleman. Offers and questions are public.</div>
+  ${O('mk-ti', 'Title', e.ti, 60, 'What are you selling?')}
+  <div class="sc-row"><label class="sc-fl" style="flex:1">Price<input class="sc-in" id="mk-pr" type="number" min="0" step="any" value="${esc(e.pr || '')}" placeholder="0 for free"></label><label class="sc-fl" style="flex:1">Paid in<select class="sc-in" id="mk-tk">${opts.map(o => `<option value="${esc(o.c + '|' + o.i)}" ${(e.tk || 'LUMA|') === o.c + '|' + o.i ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label><label class="sc-fl" style="width:90px">Quantity<input class="sc-in" id="mk-q2" type="number" min="1" max="999" value="${esc(e.q || '1')}"></label></div>
+  <div class="sc-row"><label class="sc-fl" style="flex:1">Category<select class="sc-in" id="mk-cat">${CATS.map(c => `<option ${e.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label><label class="sc-fl" style="flex:1">Condition<select class="sc-in" id="mk-cd"><option value="">Not applicable</option>${CONDS.map(c => `<option ${e.cd === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label></div>
+  ${O('mk-lc', 'Location', e.lc, 40, 'City or "Ships worldwide"')}
+  <label class="sc-fl">Description<textarea class="sc-in" id="mk-ds" maxlength="300" rows="4" placeholder="Condition, size, what is included, how to receive it">${esc(e.ds || '')}</textarea></label>
+  <div class="sc-sec">Photos (up to 4)</div>${[0, 1, 2, 3].map(i => `<input class="sc-in" id="mk-m${i}" value="${esc(ms[i] || '')}" placeholder="Photo ${i + 1}: https:// or ipfs://">`).join('')}
+  <div class="sc-row" style="margin-top:6px"><button class="sc-btn sm ghost" onclick="sc.lpick()">${ic('gem', 15)}Add a photo from your NFTs</button></div>
+  <div class="sc-row" style="margin-top:14px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.lsubmit()">${e.eid ? 'Save changes' : 'Publish listing'}</button></div>`, 580));
+}
+async function listSubmit() {
+  const v = collectListing(), eid = (ED && ED.eid) || '', pr = Number(v.pr || 0), [c, i] = (v.tk || 'LUMA|').split('|'), txt = v.ti + ' ' + v.ds + ' ' + v.lc;
+  if (!v.ti) { ctx.toast('Add a title.', true); return; } if (!(pr >= 0) || !isFinite(pr) || v.pr === '') { ctx.toast('Enter a price. Use 0 for free.', true); return; }
+  const bp = violates(txt); if (bp) { ctx.toast(`Not published: it contains ${WHY[bp]}, which is not allowed here.`, true); return; }
+  if (MKBAD.test(txt)) { ctx.toast('Not published: weapons, drugs, counterfeit or stolen goods and adult services are not allowed.', true); return; }
+  for (const u of v.m) { if (!safeUrl(u)) { ctx.toast('Photos must start with https:// or ipfs://', true); return; } if (!okImg(safeUrl(u))) { ctx.toast('Pictures from that link are not allowed on this network. Use an NFT or an approved source.', true); return; } }
+  const d: any = eid ? { t: 'lup', ref: eid, ti: v.ti, ds: v.ds, pr, q: Math.max(1, Math.floor(Number(v.q) || 1)) } : { t: 'lst', ti: v.ti, ds: v.ds, pr, c: c || 'LUMA', i: i || '', cat: v.cat, cd: v.cd, lc: v.lc, m: v.m, q: Math.max(1, Math.floor(Number(v.q) || 1)) };
+  if (enc.encode(JSON.stringify({ v: 1, ...d })).length > MAXMEMO - 20) { ctx.toast('This listing is too long for one transaction. Shorten the description or use fewer photos.', true); return; }
+  ED = {}; ctx.closeModal(); const h = await act(d, eid ? 'Saving listing…' : 'Publishing…', eid ? 'Listing updated' : 'Listing published');
+  if (h && !eid && h !== 'ok') { go({ k: 'listing', id: h.toUpperCase() }); }
+}
+// buying
+let BS: { id: string; qty: number; opt?: TipOpt; load: boolean; err: string; busy: boolean } | null = null;
+async function buyModal(id: string) {
+  const l = MK.l.get(id); if (!l || isSold(l)) return; if (l.a === me()) { ctx.toast('This is your own listing.', true); return; }
+  BS = { id, qty: 1, load: true, err: '', busy: false }; renderBuy();
+  try { const o = await loadHold(l.a); if (!BS || BS.id !== id) return; BS.opt = o.find(x => tokKey(x.c, x.i) === tokKey(l.c, l.i)); BS.load = false; if (!BS.opt) BS.err = `You do not hold ${tokName(l.c)}.`; else if (!BS.opt.ok) BS.err = `The seller cannot receive ${tokName(l.c)} yet. Make an offer or ask them to set it up.`; } catch { if (BS) { BS.load = false; BS.err = 'Could not read your wallet.'; } }
+  renderBuy();
+}
+function renderBuy() {
+  const b = BS; if (!b) return; const l = MK.l.get(b.id); if (!l) return; const tot = l.pr * b.qty;
+  ctx.modal(mcard(`<div class="k">Buy now</div><div class="sc-row" style="margin:10px 0">${avatar(l.a, 40)}<div><b>${esc(l.ti)}</b><div class="sc-m">from ${esc(nameOf(l.a))}</div></div></div>
+  <label class="muted">Quantity (${left(l)} available)<input class="sc-in" type="number" min="1" max="${left(l)}" value="${b.qty}" oninput="sc.buyQty(this.value)"></label>
+  <div class="mk-pp" style="margin:8px 0">${fmt(tot, 6)} ${esc(tokName(l.c))}</div><div class="sc-m">${b.opt ? 'You hold ' + fmt(b.opt.bal, 6) + ' ' + esc(b.opt.name) + '. ' : ''}Your payment goes straight to the seller's wallet. Arrange delivery with them in the questions. Plus a ${COST.tipn} LUMA fee to record the sale publicly.</div>
+  ${b.err ? `<div class="sc-warn" style="margin:8px 0">${esc(b.err)}</div>` : ''}<div class="sc-row" style="justify-content:flex-end;margin-top:10px"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn gold" ${b.load || b.busy || !b.opt || !b.opt.ok || b.qty > left(l) ? 'disabled' : ''} onclick="sc.buySend()">${b.busy ? 'Paying…' : 'Pay ' + fmt(tot, 6) + ' ' + esc(tokName(l.c))}</button></div>`, 420));
+}
+async function buySend() {
+  const b = BS; if (!b || b.busy) return; const l = MK.l.get(b.id), o = b.opt; if (!l || !o) return; const n = l.pr * b.qty;
+  if (b.qty > left(l)) { b.err = 'Not enough in stock.'; renderBuy(); return; } if (n > o.bal) { b.err = `You only hold ${fmt(o.bal, 6)} ${o.name}.`; renderBuy(); return; }
+  let amount: any; try { amount = amtTx(o.name === 'LUMA' ? { c: 'native', i: '' } : { c: o.c, i: o.i }, n); } catch (e: any) { b.err = String(e?.message || e); renderBuy(); return; }
+  b.busy = true; b.err = ''; renderBuy();
+  const r = await pay(l.a, amount, { t: 'buy', ref: b.id, q: b.qty }, 'Paying the seller…');
+  if (!r.ok || !r.hash) { b.busy = false; b.err = r.msg || 'The payment was not sent.'; renderBuy(); return; }
+  const th = r.hash.toUpperCase(), id = b.id, q = b.qty; BS = null; ctx.closeModal(); TV[th] = { by: me(), to: l.a, c: o.name === 'LUMA' ? 'LUMA' : o.c, i: o.i, v: n };
+  ctx.toast(`Paid ${fmt(n, 4)} ${o.name} to ${nameOf(l.a)}`, false);
+  const d: any = { t: 'tipn', k: 'buy', th, to: l.a, c: o.name === 'LUMA' ? 'LUMA' : o.c, i: o.i, n, ref: id, q }, lr = await pay(hub(), drops(COST.tipn), d, 'Recording the sale…');
+  if (lr.ok && lr.hash) { local(d, lr.hash, COST.tipn); saveCache(); setTimeout(() => { void pull().then(paint); }, 5000); } else ctx.toast('Your payment was delivered, but the sale could not be recorded publicly: ' + (lr.msg || 'try again later'), true);
+  paint();
+}
+function offerModal(id: string) { const l = MK.l.get(id); if (!l) return; ctx.modal(mcard(`<div class="k">Make an offer</div><div class="sc-m" style="margin:6px 0">Listed at ${esc(priceStr(l))}. Offers are public. (${COST.ofr} LUMA)</div><label class="muted">Your offer in ${esc(tokName(l.c))}<input class="sc-in" id="mk-op" type="number" min="0" step="any"></label><label class="muted">Message (optional)<input class="sc-in" id="mk-ox" maxlength="100" placeholder="Can pick up today"></label><div class="sc-row" style="justify-content:flex-end;margin-top:10px"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.offerSend('${id}')">Send offer</button></div>`, 400)); }
+async function offerSend(id: string) { const pr = Number(fv('mk-op')), x = fv('mk-ox').trim(); if (!(pr > 0) || !isFinite(pr)) { ctx.toast('Enter an offer above zero.', true); return; } const bp = violates(x); if (bp) { ctx.toast(`Not sent: it contains ${WHY[bp]}.`, true); return; } ctx.closeModal(); const d: any = { t: 'ofr', ref: id, pr }; if (x) d.x = x; await act(d, 'Sending offer…', 'Offer sent'); }
+function askModal(id: string) { ctx.modal(mcard(`<div class="k">Ask the seller</div><div class="sc-m" style="margin:6px 0">Questions and answers are public. Do not share private details. (${COST.ask} LUMA)</div><input class="sc-in" id="mk-ax" maxlength="140" placeholder="Is this still available?"><div class="sc-row" style="justify-content:flex-end;margin-top:10px"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.askSend('${id}')">Ask</button></div>`, 400)); }
+async function askSend(id: string) { const x = fv('mk-ax').trim(); if (!x) return; const bp = violates(x); if (bp) { ctx.toast(`Not sent: it contains ${WHY[bp]}.`, true); return; } ctx.closeModal(); await act({ t: 'ask', ref: id, x }, 'Asking…', 'Question sent'); }
+function ansModal(id: string, q: string) { ctx.modal(mcard(`<div class="k">Answer</div><input class="sc-in" id="mk-nx" maxlength="140" placeholder="Your answer"><div class="sc-row" style="justify-content:flex-end;margin-top:10px"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.ansSend('${id}','${q}')">Answer</button></div>`, 400)); }
+async function ansSend(id: string, q: string) { const x = fv('mk-nx').trim(); if (!x) return; const bp = violates(x); if (bp) { ctx.toast(`Not sent: it contains ${WHY[bp]}.`, true); return; } ctx.closeModal(); await act({ t: 'ans', ref: id, q, x }, 'Answering…', 'Answer posted'); }
+function revModal(id: string) { ctx.modal(mcard(`<div class="k">Review the seller</div><label class="muted">Rating<select class="sc-in" id="mk-rs"><option value="5">★★★★★ Great</option><option value="4">★★★★ Good</option><option value="3">★★★ Okay</option><option value="2">★★ Poor</option><option value="1">★ Bad</option></select></label><input class="sc-in" id="mk-rx" maxlength="100" placeholder="How did it go?"><div class="sc-m" style="margin:6px 0">Only buyers with a verified payment can review. (${COST.rev} LUMA)</div><div class="sc-row" style="justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.revSend('${id}')">Post review</button></div>`, 400)); }
+async function revSend(id: string) { const s = Number(fv('mk-rs')), x = fv('mk-rx').trim(), bp = violates(x); if (bp) { ctx.toast(`Not sent: it contains ${WHY[bp]}.`, true); return; } ctx.closeModal(); const d: any = { t: 'rev', ref: id, s }; if (x) d.x = x; await act(d, 'Posting review…', 'Review posted'); }
+
+// ---------- growth: check-ins, referrals, reputation, badges, network stats ----------
+const refKey = () => 'sc.ref.' + net();
+const folEv = (a: string): any => { const d: any = { t: 'fol', a }, r = LS.get(refKey(), ''); if (isAddr(r) && r !== me() && !IX.refBy.has(me())) d.rf = r; return d; };
+const today = () => Math.floor(Date.now() / 86400000);
+function streak(a: string): number { const c = IX.chk.get(a); if (!c) return 0; let d = c.has(today()) ? today() : today() - 1, n = 0; while (c.has(d)) { n++; d--; } return n; }
+const invited = (a: string) => Array.from(IX.refBy.entries()).filter(([, r]) => r === a).length;
+function reputation(a: string): number {
+  const posts = IX.order.map(i => IX.posts.get(i)!).filter(p => p.a === a && !p.del); let likes = 0; for (const p of posts) likes += likeN(p.id);
+  const rt = rating(a); return Math.round((IX.followers.get(a)?.size || 0) * 3 + posts.length + likes + (IX.tipsTo.get(a) || []).length * 3 + soldBy(a) * 6 + streak(a) * 2 + invited(a) * 4 + rt.avg * rt.n * 4);
+}
+function achievements(a: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [], posts = IX.order.map(i => IX.posts.get(i)!).filter(p => p.a === a && !p.del), rt = rating(a);
+  let likes = 0; for (const p of posts) likes += likeN(p.id);
+  if (posts.length) out.push(['pen', 'Posted']); if (posts.length >= 25) out.push(['pen', '25 posts']); if (likes >= 50) out.push(['heart', '50 likes']);
+  if ((IX.followers.get(a)?.size || 0) >= 10) out.push(['user', '10 followers']); if ((IX.tipsTo.get(a) || []).length >= 5) out.push(['coin', 'Tipped 5 times']); if ((IX.tipsBy.get(a) || []).length >= 5) out.push(['coin', 'Generous tipper']);
+  if (soldBy(a) >= 1) out.push(['shop', 'Seller']); if (rt.n >= 3 && rt.avg >= 4.5) out.push(['gem', 'Trusted seller']); if (streak(a) >= 7) out.push(['trend', '7 day streak']); if (invited(a) >= 3) out.push(['share', 'Connector']); if (handleOf(a)) out.push(['gem', 'Has a handle']);
+  return out;
+}
+const topBy = (m: Map<string, number>, n = 5) => Array.from(m.entries()).sort((x, y) => y[1] - x[1]).slice(0, n);
+function statsView(): string {
+  const posts = IX.order.map(i => IX.posts.get(i)!).filter(p => !p.del), users = new Set<string>(); for (const p of posts) users.add(p.a); for (const [a] of IX.prof) users.add(a);
+  const vol = new Map<string, number>(); for (const t of IX.tipsAll) { const k = tokName(t.c); vol.set(k, (vol.get(k) || 0) + t.v); }
+  const earn = new Map<string, number>(), give = new Map<string, number>(), inv = new Map<string, number>(), sell = new Map<string, number>();
+  for (const t of IX.tipsAll) { earn.set(t.to, (earn.get(t.to) || 0) + 1); give.set(t.by, (give.get(t.by) || 0) + 1); } for (const [, r] of IX.refBy) inv.set(r, (inv.get(r) || 0) + 1); for (const v of MK.sales.values()) for (const x of v) if (x.ok) sell.set(x.to, (sell.get(x.to) || 0) + x.q);
+  const lst = visible(), nSold = Array.from(sell.values()).reduce((a, b) => a + b, 0), box = (t: string, m: Map<string, number>, u: string) => `<div class="sc-box" style="margin:10px"><h4>${t}</h4>${topBy(m).length ? topBy(m).map(([a, n], i) => `<div class="sc-user"><span class="sc-m" style="width:18px">${i + 1}</span><span data-act="user" data-v="${a}" style="cursor:pointer">${avatar(a, 34)}</span><div class="sc-who"><b data-act="user" data-v="${a}">${esc(nameOf(a))}${badge(a)}</b></div><span class="sc-m">${n} ${u}</span></div>`).join('') : '<div class="sc-m">Nothing yet.</div>'}</div>`;
+  const rep = new Map<string, number>(); for (const a of users) rep.set(a, reputation(a));
+  const tile = (n: string | number, l: string) => `<div class="sc-box" style="text-align:center;padding:14px 8px"><div style="font-size:1.5rem;font-weight:900">${n}</div><div class="sc-m">${l}</div></div>`;
+  return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:10px">${tile(users.size, 'People')}${tile(posts.length, 'Posts')}${tile(IX.tipsAll.length, 'Verified tips')}${tile(lst.length, 'Listings')}${tile(nSold, 'Items sold')}${tile(Array.from(vol.entries()).slice(0, 1).map(([k, v]) => fmt(v, 2) + ' ' + k).join('') || '0', 'Tipped')}</div>${box('Top reputation', rep, 'rep')}${box('Most tipped creators', earn, 'tips')}${box('Most generous', give, 'tips')}${box('Top inviters', inv, 'invited')}${box('Top sellers', sell, 'sold')}`;
+}
+function exportMine() {
+  const a = me(), data = { exportedAt: new Date().toISOString(), account: a, network: net(), hub: hub(), events: EV.filter(e => e.a === a).map(e => ({ tx: e.h, time: e.t, paid: e.v, data: e.d })), tipsSent: (IX.tipsBy.get(a) || []), tipsReceived: (IX.tipsTo.get(a) || []) };
+  const b = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), u = URL.createObjectURL(b), l = document.createElement('a'); l.href = u; l.download = 'luma-social-' + net() + '-export.json'; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); ctx.toast('Your data was exported');
+}
+// ---------- modals ----------
+const need = (): boolean => { const bl = blocked(); if (bl) { ctx.toast(bl, true); return false; } if (!me()) { ctx.toast('Create or open a LUMA wallet first', true); return false; } return true; };
+const go = (v: View) => { hist.push(S.view); if (hist.length > 30) hist.shift(); S.view = v; S.shown = 25; S.err = ''; window.scrollTo({ top: 0 }); paint(); };
+const mcard = (inner: string, w = 400) => `<div class="card" style="min-width:min(${w}px,92vw);max-width:94vw;max-height:88vh;overflow:auto">${inner}</div>`;
+const mi = (icon: string, label: string, fn: string, cls = '') => `<button class="sc-mi ${cls}" onclick="${fn}">${ic(icon, 19)}<span>${label}</span></button>`;
+const linkFor = (kind: string, id: string) => location.href.split(/[?#]/)[0] + '?social=' + kind + ':' + encodeURIComponent(id);
+function postMenu(id: string) {
+  const p = IX.posts.get(id); if (!p) return; const mine = p.a === me(), bm = bookmarks().includes(id), pinned = IX.pin.get(me()) === id;
+  ctx.modal(mcard(`<div class="k" style="margin-bottom:6px">Post options</div>${mi('link', 'Copy link', `sc.m('copy','${id}')`)}${typeof navigator !== 'undefined' && (navigator as any).share ? mi('share', 'Share…', `sc.m('share','${id}')`) : ''}${mi('share', 'Share to X', `sc.m('sx','${id}')`)}${mi('quote', 'Quote post', `sc.m('quote','${id}')`)}${mi('bm', bm ? 'Remove bookmark' : 'Save to bookmarks', `sc.m('bm','${id}')`)}${mi('zap', 'Boost this post (1 LUMA or more)', `sc.m('boost','${id}')`)}${mi('smile', 'React', `sc.m('react','${id}')`)}${mine ? mi('pen', 'Edit text', `sc.m('edit','${id}')`) + (p.r ? '' : mi(pinned ? 'pinoff' : 'pin', pinned ? 'Unpin from profile' : 'Pin to profile', `sc.m('${pinned ? 'unpin' : 'pin'}','${id}')`)) + mi('trash', 'Delete', `sc.m('del','${id}')`, 'bad') : mi('slash', 'Mute ' + esc(tagOf(p.a)), `sc.m('mute','${p.a}')`, 'bad') + mi('flag', 'Report this post', `sc.m('report','${id}')`, 'bad')}`));
+}
+function reportModal(id: string) {
+  const why: Array<[string, string]> = [['sexual', 'Sexual or explicit content'], ['violence', 'Violence or threats'], ['child', 'Child safety'], ['harass', 'Harassment or hate'], ['scam', 'Scam or spam'], ['other', 'Something else']];
+  ctx.modal(mcard(`<div class="k" style="margin-bottom:4px">Report this post</div><div class="muted" style="margin-bottom:8px">Reports go to the network moderators. A post that enough different people report is hidden automatically. (${COST.rep} LUMA)</div>${why.map(w => mi('flag', w[1], `sc.report('${id}','${w[0]}')`)).join('')}`, 360));
+}
+function reactModal(id: string) {
+  const mineRx = (IX.rx.get(id) || new Map()).get(me());
+  ctx.modal(mcard(`<div class="k" style="margin-bottom:10px">React (${COST.rx} LUMA)</div><div class="sc-row" style="gap:8px;justify-content:center">${EMOJI.map(e => `<button class="sc-rxc ${mineRx === e ? 'on' : ''}" style="font-size:1.6rem;padding:8px 12px" onclick="sc.rx('${id}','${e}')">${e}</button>`).join('')}</div>${mineRx ? `<div style="text-align:center;margin-top:10px"><button class="sc-btn sm ghost" onclick="sc.rx('${id}','')">Remove my reaction</button></div>` : ''}`, 340));
+}
+function boostModal(id: string) {
+  ctx.modal(mcard(`<div class="k">Boost this post</div><div class="muted" style="margin:6px 0 10px;line-height:1.5">A boost lifts the post in For you and Explore for about a day, and the post shows a Boosted label. The more LUMA, the stronger the lift (counts up to 100 LUMA). It goes to the network hub, not to the author.</div><div class="sc-row">${[1, 5, 25, 100].map(n => `<button class="sc-btn sm ghost" onclick="document.getElementById('sc-bst').value=${n}">${n}</button>`).join('')}</div><input class="sc-in" id="sc-bst" type="number" min="1" step="any" value="1" style="margin-top:8px"><div class="sc-row" style="margin-top:10px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.boost('${id}')">${ic('zap', 16)}Boost</button></div>`));
+}
+function editPostModal(id: string) {
+  const p = IX.posts.get(id); if (!p) return;
+  ctx.modal(mcard(`<div class="k">Edit post</div><div class="muted" style="margin:6px 0">Saved on the chain for ${COST.edit} LUMA. The post shows “edited”, and the old version stays in the chain history.</div><textarea class="sc-in" id="sc-ed" rows="5" maxlength="${MAXTXT}">${esc(p.x)}</textarea><div class="sc-row" style="margin-top:10px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.edit('${id}')">Save</button></div>`, 440));
+}
+function supModal(list: Tip[], title: string) {
+  const sorted = list.slice().sort((a, b) => b.t - a.t).slice(0, 40);
+  ctx.modal(mcard(`<div class="k">${esc(title)}</div><div class="muted" style="margin:6px 0 8px">${totalStr(list, 5)} in ${list.length} tip${list.length === 1 ? '' : 's'}. Each one is a real payment that anyone can check on the chain.</div>${sorted.map(t => `<div class="sc-user">${avatar(t.by, 34)}<div class="sc-who"><b>${esc(nameOf(t.by))}${badge(t.by)}</b><span class="sc-m">${t.m ? '“' + esc(t.m) + '” · ' : ''}${ago(t.t)} ago</span></div><b style="color:#fcd34d">${fmt(t.v, 4)} ${esc(tokName(t.c))}</b></div>`).join('')}<div class="sc-row" style="justify-content:flex-end;margin-top:8px"><button class="sc-btn ghost" onclick="sc.close()">Close</button></div>`, 400));
+}
+const SWATCH = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6'];
+const fv = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value || '';
+function collectProf(): any { return { n: fv('pf-n').trim(), b: fv('pf-b').trim(), i: fv('pf-i').trim(), k: fv('pf-k').trim(), c: fv('pf-c'), w: fv('pf-w').trim(), l: fv('pf-l').trim(), pr: fv('pf-pr').trim(), jb: fv('pf-jb').trim(), st: fv('pf-st').trim(), sh: fv('pf-sh') === 's' ? 's' : 'c', l1t: fv('pf-l1t').trim(), l1u: fv('pf-l1u').trim(), l2t: fv('pf-l2t').trim(), l2u: fv('pf-l2u').trim() }; }
+function profEvent(v: any): any {
+  const d: any = { t: 'prof' }; for (const k of ['n', 'b', 'i', 'k', 'c', 'w', 'l', 'pr', 'jb', 'st']) if (v[k]) d[k] = v[k]; if (v.sh === 's') d.sh = 's';
+  const ln: any[] = []; for (const x of [['l1t', 'l1u'], ['l2t', 'l2u']]) if (v[x[1]]) ln.push({ t: v[x[0]] || '', u: v[x[1]] }); if (ln.length) d.ln = ln; return d;
+}
+function prevHtml(v: any): string {
+  const a = me(), img = v.i && safeUrl(v.i) && okImg(safeUrl(v.i)), ban = v.k && safeUrl(v.k) && okImg(safeUrl(v.k)), acc = /^#[0-9a-f]{6}$/i.test(v.c || '') ? v.c : '#6366f1', ini = ((v.n || handleOf(a) || '?')[0] || '?').toUpperCase();
+  return `<div class="sc-prof" style="margin:0;--pa:${acc}"><div class="sc-ban" style="height:84px;${ban ? `background:#0d1020 url('${esc(safeUrl(v.k))}') center/cover` : `background:linear-gradient(135deg,${acc},#312e81 60%,#0e7490)`}"></div><div class="sc-pinfo" style="padding-bottom:12px"><span class="sc-pav ${v.sh === 's' ? 'sq' : ''}" style="margin-top:-34px"><span class="sc-av" style="width:64px;height:64px;font-size:26px;background:linear-gradient(135deg,hsl(${hue(a)} 70% 48%),hsl(${(hue(a) + 50) % 360} 70% 36%))">${esc(ini)}${img ? `<img src="${esc(safeUrl(v.i))}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span></span><div style="font-weight:900;font-size:1.15em;margin-top:6px">${esc(v.n || nameOf(a))}</div>${v.st ? `<div class="sc-stt">${esc(v.st)}</div>` : ''}${v.b ? `<div class="sc-m" style="margin-top:4px">${esc(v.b)}</div>` : ''}<div class="sc-m" style="margin-top:4px">${[v.jb, v.l, v.pr].filter(Boolean).map(esc).join(' · ')}</div></div></div>`;
+}
+function editModal() {
+  const q: any = IX.prof.get(me()) || {}, h = handleOf(me()), p: any = { ...q, l1t: (q.ln && q.ln[0] && q.ln[0].t) || '', l1u: (q.ln && q.ln[0] && q.ln[0].u) || '', l2t: (q.ln && q.ln[1] && q.ln[1].t) || '', l2u: (q.ln && q.ln[1] && q.ln[1].u) || '', ...(ED.__mk ? {} : ED) };
+  const L = (id: string, label: string, val: string, max: number, ph = '') => `<label class="sc-fl">${label}<input class="sc-in" id="${id}" maxlength="${max}" value="${esc(val || '')}" placeholder="${esc(ph)}" oninput="sc.prev()"></label>`;
+  ctx.modal(mcard(`<div class="k" style="font-size:1.1em">Edit profile</div><div class="muted" style="margin:4px 0 10px">Saved on the chain for ${COST.prof} LUMA and visible to everyone. Everything below is optional.</div>
+  <div id="pf-prev">${prevHtml(p)}</div>
+  <div class="sc-sec">Pictures</div>
+  <label class="sc-fl">Profile photo<div class="sc-row"><input class="sc-in" id="pf-i" value="${esc(p.i || '')}" placeholder="https:// or ipfs://" style="flex:1" oninput="sc.prev()"><button class="sc-btn sm ghost" onclick="sc.pickFor('avatar')">${ic('gem', 15)}Use an NFT</button></div></label>
+  <label class="sc-fl">Cover picture<div class="sc-row"><input class="sc-in" id="pf-k" value="${esc(p.k || '')}" placeholder="https:// or ipfs://" style="flex:1" oninput="sc.prev()"><button class="sc-btn sm ghost" onclick="sc.pickFor('banner')">${ic('gem', 15)}Use an NFT</button></div></label>
+  <div class="sc-row" style="margin:6px 0"><label class="sc-fl" style="flex:1">Photo shape<select class="sc-in" id="pf-sh" onchange="sc.prev()"><option value="c" ${p.sh !== 's' ? 'selected' : ''}>Round</option><option value="s" ${p.sh === 's' ? 'selected' : ''}>Rounded square (best for NFTs)</option></select></label></div>
+  <label class="sc-fl">Accent colour<div class="sc-row" style="gap:8px"><input class="sc-in" id="pf-c" type="color" value="${esc(p.c || '#6366f1')}" style="width:54px;height:40px;padding:2px;flex:none" oninput="sc.prev()">${SWATCH.map(c => `<button type="button" class="sc-sw" style="background:${c}" onclick="sc.swatch('${c}')" aria-label="${c}"></button>`).join('')}</div></label>
+  <div class="sc-sec">About you</div>
+  ${L('pf-n', 'Name', p.n, 40, 'Your name')}${L('pf-st', 'Status', p.st, 50, 'What are you up to?')}
+  <label class="sc-fl">Bio<textarea class="sc-in" id="pf-b" maxlength="200" rows="3" placeholder="Tell people who you are. Use #tags, $tokens and @handles." oninput="sc.prev()">${esc(p.b || '')}</textarea></label>
+  <div class="sc-row">${L('pf-jb', 'Work', p.jb, 40, 'What you do').replace('class="sc-fl"', 'class="sc-fl" style="flex:1"')}${L('pf-pr', 'Pronouns', p.pr, 30, 'optional').replace('class="sc-fl"', 'class="sc-fl" style="flex:1"')}</div>
+  ${L('pf-l', 'Location', p.l, 40, 'City, country')}
+  <div class="sc-sec">Links</div>
+  ${L('pf-w', 'Website', p.w, 200, 'https://')}
+  <div class="sc-row"><label class="sc-fl" style="width:34%">Link 1 label<input class="sc-in" id="pf-l1t" maxlength="20" value="${esc(p.l1t)}" placeholder="Shop" oninput="sc.prev()"></label><label class="sc-fl" style="flex:1">Link 1<input class="sc-in" id="pf-l1u" value="${esc(p.l1u)}" placeholder="https://" oninput="sc.prev()"></label></div>
+  <div class="sc-row"><label class="sc-fl" style="width:34%">Link 2 label<input class="sc-in" id="pf-l2t" maxlength="20" value="${esc(p.l2t)}" placeholder="Music" oninput="sc.prev()"></label><label class="sc-fl" style="flex:1">Link 2<input class="sc-in" id="pf-l2u" value="${esc(p.l2u)}" placeholder="https://" oninput="sc.prev()"></label></div>
+  <div class="sc-sec">Your @handle</div><div class="muted" style="margin:2px 0 6px">${h ? 'You are @' + esc(h) + '. ' : ''}A handle costs ${COST.hdl} LUMA and adds a check mark. First to claim it keeps it.</div><div class="sc-row"><input class="sc-in" id="pf-h" maxlength="15" placeholder="yourname" style="flex:1" value=""><button class="sc-btn sm" onclick="sc.claim()">Claim</button></div><div class="sc-m" id="pf-hm">3 to 15 letters, numbers or _</div>
+  <div class="sc-row" style="margin-top:14px;justify-content:space-between;position:sticky;bottom:-1px;padding:10px 0;background:#0d1020"><span class="sc-m" id="pf-size"></span><div class="sc-row"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.saveProf()">Save profile</button></div></div>`, 580));
+  sc.prev();
+}
+function keysModal() {
+  const r = (a: string, b: string) => `<div class="sc-row" style="justify-content:space-between;padding:5px 0"><span>${b}</span><kbd style="background:rgba(255,255,255,.08);border-radius:6px;padding:2px 8px">${a}</kbd></div>`;
+  ctx.modal(mcard(`<div class="k" style="margin-bottom:6px">Keyboard shortcuts</div>${r('n', 'New post')}${r('/', 'Search')}${r('g then h', 'Home')}${r('g then n', 'Notifications')}${r('Ctrl/Cmd + Enter', 'Send the post you are writing')}${r('Esc', 'Close a window')}${r('?', 'Show this list')}<div class="sc-row" style="justify-content:flex-end;margin-top:8px"><button class="sc-btn ghost" onclick="sc.close()">Close</button></div>`, 340));
+}
+
+// ---------- tipping: any amount, any token you hold ----------
+interface TipOpt { c: string; i: string; name: string; bal: number; ok: boolean }
+let TS: { ref: string; to: string; opts: TipOpt[]; sel: number; amt: string; note: string; load: boolean; err: string; busy: boolean } | null = null;
+async function loadHold(to: string): Promise<TipOpt[]> {
+  const m = me(), out: TipOpt[] = [];
+  const [ai, al, bl] = await Promise.all([ctx.req('account_info', { account: m, ledger_index: 'validated' }).catch(() => null), ctx.req('account_lines', { account: m, ledger_index: 'validated', limit: 400 }).catch(() => ({ lines: [] })), ctx.req('account_lines', { account: to, ledger_index: 'validated', limit: 400 }).catch(() => ({ lines: [] }))]);
+  const lum = ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0; out.push({ c: 'LUMA', i: '', name: 'LUMA', bal: lum, ok: true });
+  const theirs = new Set(((bl && bl.lines) || []).map((l: any) => l.currency + '|' + l.account));
+  for (const l of (al && al.lines) || []) { const bal = Number(l.balance); if (!(bal > 0)) continue; out.push({ c: l.currency, i: l.account, name: hexName(l.currency), bal, ok: l.account === to || theirs.has(l.currency + '|' + l.account) }); }
+  return out.sort((a, b) => (a.name === 'LUMA' ? -1 : b.name === 'LUMA' ? 1 : Number(b.ok) - Number(a.ok) || a.name.localeCompare(b.name)));
+}
+function tipModal(ref: string, to: string) {
+  const a = to || (IX.posts.get(ref)?.a || ''); if (!a || !need()) return;
+  if (a === me()) { ctx.toast('You cannot tip yourself', true); return; }
+  TS = { ref: to ? '' : ref, to: a, opts: [], sel: 0, amt: '1', note: '', load: true, err: '', busy: false }; renderTip();
+  void loadHold(a).then(o => { if (!TS || TS.to !== a) return; TS.opts = o; TS.load = false; renderTip(); }).catch(() => { if (TS) { TS.load = false; TS.opts = [{ c: 'LUMA', i: '', name: 'LUMA', bal: 0, ok: true }]; renderTip(); } });
+}
+const pres = (o: TipOpt) => (o.name === 'LUMA' ? [1, 5, 25, 100].map(n => ({ l: String(n), v: String(n) })) : [0.1, 0.25, 0.5, 1].map(f => ({ l: f === 1 ? 'Max' : f * 100 + '%', v: String(Number((o.bal * f).toPrecision(6))) })));
+function renderTip() {
+  const t = TS; if (!t) return; const o = t.opts[t.sel], a = t.to;
+  ctx.modal(mcard(`<div class="k">Send a tip</div><div class="sc-row" style="margin:10px 0">${avatar(a, 42)}<div><b>${esc(nameOf(a))}</b>${badge(a)}<div class="sc-m">${esc(tagOf(a))}${t.ref ? ' · for this post' : ''}</div></div></div>
+  <div class="muted" style="margin-bottom:8px">Pick any token in your wallet. 100% goes to ${esc(nameOf(a))}, straight to their wallet.</div>
+  ${t.load ? '<div class="sc-m" style="padding:14px 0">Reading your wallet…</div>' : `<div class="sc-row" style="gap:6px;max-height:150px;overflow:auto;margin-bottom:6px">${t.opts.map((x, i) => `<button class="sc-chipt ${i === t.sel ? 'on' : ''} ${x.ok ? '' : 'off'}" onclick="sc.tipPick(${i})" title="${x.ok ? 'You hold ' + fmt(x.bal, 6) : esc(nameOf(a)) + ' needs to add this token to their wallet first'}">${esc(x.name)}<small>${x.ok ? fmt(x.bal, 4) : 'not accepted'}</small></button>`).join('')}</div>
+  ${o ? `<div class="sc-row" style="margin-top:8px">${pres(o).map(p => `<button class="sc-btn sm ghost" onclick="sc.tipPreset('${p.v}')">${p.l}</button>`).join('')}</div><label class="muted">Amount in ${esc(o.name)}<input class="sc-in" id="sc-tip" type="number" min="0" step="any" value="${esc(t.amt)}" oninput="sc.tipUpd()"></label>` : ''}
+  <label class="muted">Message (optional, public)<input class="sc-in" id="sc-tipn" maxlength="60" placeholder="Great post" value="${esc(t.note)}" oninput="sc.tipUpd()"></label>
+  <div class="sc-m" style="margin:6px 0">Adds a public tip note on the post for ${COST.tipn} LUMA (plus the network fee).</div>`}
+  ${t.err ? `<div class="sc-warn" style="margin:6px 0">${esc(t.err)}</div>` : ''}<div class="sc-row" style="margin-top:10px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn gold" ${t.load || t.busy || !o || !o.ok ? 'disabled' : ''} onclick="sc.tipSend()">${t.busy ? 'Sending…' : ic('coin', 16) + 'Send tip'}</button></div>`, 420));
+}
+async function tipSend() {
+  const t = TS; if (!t || t.busy) return; const o = t.opts[t.sel]; if (!o || !o.ok) return; sc.tipUpd();
+  const n = Number(t.amt); if (!(n > 0) || !isFinite(n)) { t.err = 'Enter an amount above zero.'; renderTip(); return; }
+  if (n > o.bal) { t.err = `You only hold ${fmt(o.bal, 6)} ${o.name}.`; renderTip(); return; }
+  let amount: any; try { amount = amtTx(o.name === 'LUMA' ? { c: 'native', i: '' } : { c: o.c, i: o.i }, n); } catch (e: any) { t.err = String(e?.message || e); renderTip(); return; }
+  t.busy = true; t.err = ''; renderTip();
+  const note = t.note.trim().slice(0, 60), memo: any = { t: 'tip' }; if (t.ref) memo.ref = t.ref; if (note) memo.m = note;
+  const r = await pay(t.to, amount, memo, 'Sending tip…');
+  if (!r.ok || !r.hash) { t.busy = false; t.err = r.msg || 'The tip was not sent.'; renderTip(); return; }
+  const to = t.to, ref = t.ref; TS = null; ctx.closeModal();
+  const th = r.hash.toUpperCase(); TV[th] = { by: me(), to, c: o.name === 'LUMA' ? 'LUMA' : o.c, i: o.i, v: n };
+  const d: any = { t: 'tipn', th, to, c: o.name === 'LUMA' ? 'LUMA' : o.c, i: o.i, n }; if (ref) d.ref = ref; if (note) d.m = note;
+  ctx.toast(`Sent ${fmt(n, 4)} ${o.name} to ${nameOf(to)}`, false);
+  const lr = await pay(hub(), drops(COST.tipn), d, 'Listing the tip…');
+  if (lr.ok && lr.hash) { local(d, lr.hash, COST.tipn); saveCache(); setTimeout(() => { void pull().then(paint); }, 5000); } else ctx.toast('The tip was delivered, but it could not be added to the public list: ' + (lr.msg || 'try again later'), true);
+  paint();
+}
+
+// ---------- actions ----------
+async function onClick(el: HTMLElement, ev: Event) {
+  const a = el.dataset.act!, v = el.dataset.v || '';
+  ev.stopPropagation();
+  switch (a) {
+    case 'nav': if (v === 'me') { if (need()) go({ k: 'profile', a: me() }); } else if (v === 'compose') { go({ k: 'home' }); setTimeout(() => (document.getElementById('sc-txt') as HTMLElement | null)?.focus(), 30); } else { go({ k: v } as any); if (v === 'notif') { LS.set(seenKey(), Math.floor(Date.now() / 1000)); paint(); } } break;
+    case 'back': { const p = hist.pop(); S.view = p || { k: 'home' }; paint(); break; }
+    case 'tab': S.tab = v as any; S.shown = 25; paint(); break;
+    case 'xtab': S.xtab = v as any; S.shown = 25; paint(); break;
+    case 'more': S.shown += 25; paint(); break;
+    case 'open': go({ k: 'thread', id: v }); break;
+    case 'user': go({ k: 'profile', a: v }); break;
+    case 'handle': { const o = IX.owner.get(v); if (o) go({ k: 'profile', a: o }); else ctx.toast('Nobody has @' + v + ' yet'); break; }
+    case 'tag': go({ k: 'tag', tag: v }); break;
+    case 'ptab': if (S.view.k === 'profile') { S.view = { ...S.view, tab: v }; S.shown = 25; paint(); } break;
+    case 'showmedia': { const i = document.getElementById('sc-media') as HTMLInputElement; i.style.display = ''; i.focus(); break; }
+    case 'poll': S.pollOn = !S.pollOn; paint(); break;
+    case 'addopt': if (S.poll.length < 4) S.poll.push(''); paint(); break;
+    case 'reply': go({ k: 'thread', id: v }); setTimeout(() => (document.getElementById('sc-txt') as HTMLElement | null)?.focus(), 30); break;
+    case 'noquote': S.quote = ''; paint(); break;
+    case 'reveal': S.rev.add(v); paint(); break;
+    case 'chk': if (need() && !S.busy) { if ((IX.chk.get(me()) || new Set()).has(today())) { ctx.toast('Already checked in today'); break; } await act({ t: 'chk' }, 'Checking in…', 'Checked in. Keep your streak going!'); } break;
+    case 'invite': { const u = linkFor('ref', me()); try { void navigator.clipboard.writeText(u); ctx.toast('Invite link copied. You earn reputation for each friend who follows through it.'); } catch { ctx.toast(u); } break; }
+    case 'export': if (me()) exportMine(); break;
+    case 'lopen': MK_S.img = 0; go({ k: 'listing', id: v }); break;
+    case 'lsave': { const b: string[] = LS.get(mkSaveKey(), []), i = b.indexOf(v); if (i >= 0) b.splice(i, 1); else b.unshift(v); LS.set(mkSaveKey(), b.slice(0, 200)); paint(); break; }
+    case 'sell': if (need()) void listModal('', true); break;
+    case 'mkcat': MK_S.cat = v; paint(); break;
+    case 'mkview': MK_S.view = v; paint(); break;
+    case 'limg': MK_S.img = Number(v) || 0; paint(); break;
+    case 'lbuy': if (need()) void buyModal(v); break;
+    case 'loffer': if (need()) offerModal(v); break;
+    case 'lask': if (need()) askModal(v); break;
+    case 'lans': if (need()) ansModal(v, el.dataset.q || ''); break;
+    case 'lrev': if (need()) revModal(v); break;
+    case 'ledit': if (need()) void listModal(v, true); break;
+    case 'lset': if (need() && !S.busy) { const w = el.dataset.s || ''; void act(w === 'price' ? { t: 'lup', ref: v, pr: Number(el.dataset.p) } : { t: 'lup', ref: v, st: w }, 'Updating listing…', w === 'del' ? 'Listing removed' : 'Listing updated'); } break;
+    case 'lshare': { const u = linkFor('l', v); try { void navigator.clipboard.writeText(u); ctx.toast('Listing link copied'); } catch { ctx.toast(u); } break; }
+    case 'lrep': if (need()) reportModal(v); break;
+    case 'flist': flistModal(v, el.dataset.k || 'followers'); break;
+    case 'plink': sc.m('copyu', v); break;
+    case 'pcx': S.noCard.add(v); updCard(); break;
+    case 'nftpick': await openNfts('post'); break;
+    case 'nftx': S.nft = null; S.media = ''; paint(); break;
+    case 'nftshare': { if (!need()) break; const n = nftFind(v); if (!n) break; const m = await nftMeta(n); if (!m.img) { ctx.toast('Still loading this NFT picture. Try again in a moment.', true); break; } if (!okImg(m.img)) { ctx.toast('This network does not allow pictures from that source.', true); break; } S.nft = { id: v, img: m.img, name: m.name || 'NFT #' + n.serial }; S.media = m.img; go({ k: 'home' }); setTimeout(() => (document.getElementById('sc-txt') as HTMLElement | null)?.focus(), 30); break; }
+    case 'noblur': LS.set('sc.noblur', !LS.get('sc.noblur', false)); paint(); break;
+    case 'like': if (need() && !S.busy) await act(iLike(v) ? { t: 'unl', ref: v } : { t: 'like', ref: v }, 'Liking…'); break;
+    case 'rt': if (need() && !S.busy) { if (iRt(v)) ctx.toast('You already reposted this'); else await act({ t: 'rt', ref: v }, 'Reposting…', 'Reposted'); } break;
+    case 'follow': if (need() && !S.busy) { if (v === me()) break; await act(iFollow(v) ? { t: 'unf', a: v } : folEv(v), 'Updating…', iFollow(v) ? 'Unfollowed' : 'Following ' + nameOf(v)); } break;
+    case 'tip': tipModal(v, el.dataset.to || ''); break;
+    case 'react': if (need()) reactModal(v); break;
+    case 'rx': if (need() && !S.busy) { const cur = (IX.rx.get(v) || new Map()).get(me()); await act({ t: 'rx', ref: v, e: cur === el.dataset.e ? '' : el.dataset.e }, 'Reacting…'); } break;
+    case 'menu': postMenu(v); break;
+    case 'menuu': ctx.modal(mcard(`<div class="k" style="margin-bottom:6px">${esc(nameOf(v))}</div>${mi('link', 'Copy profile link', `sc.m('copyu','${v}')`)}${mi('slash', isMuted(v) ? 'Unmute' : 'Mute', `sc.m('${isMuted(v) ? 'unmute' : 'mute'}','${v}')`, isMuted(v) ? '' : 'bad')}`, 320)); break;
+    case 'sup': supModal(IX.tipsRef.get(v) || [], 'Tips on this post'); break;
+    case 'supu': supModal(IX.tipsTo.get(v) || [], 'Tip jar of ' + nameOf(v)); break;
+    case 'unmute': LS.set(muteKey(), muted().filter(x => x !== v)); paint(); break;
+    case 'img': S.lb = v; ctx.modal(`<div onclick="sc.close()" style="cursor:zoom-out"><img class="sc-lb" src="${esc(v)}" alt="" referrerpolicy="no-referrer"></div>`); break;
+    case 'vote': if (need() && !S.busy) { const m = IX.votes.get(v); if (m && m.has(me())) { ctx.toast('You already voted'); break; } await act({ t: 'vote', ref: v, o: Number(el.dataset.o) }, 'Voting…', 'Vote counted'); } break;
+    case 'editprof': if (need()) { ED = {}; editModal(); } break;
+    case 'post': await doPost(el.dataset.reply || '', el.dataset.quote || ''); break;
+  }
+}
+function splitThread(s: string): string[] {
+  s = s.trim(); if (s.length <= MAXTXT) return [s];
+  const parts: string[] = [], LIM = 470;
+  while (s.length > LIM) {
+    let cut = s.lastIndexOf('\n\n', LIM); if (cut < LIM * 0.5) cut = s.lastIndexOf('\n', LIM); if (cut < LIM * 0.5) cut = s.lastIndexOf('. ', LIM) + 1; if (cut < LIM * 0.5) cut = s.lastIndexOf(' ', LIM); if (cut < LIM * 0.5) cut = LIM;
+    parts.push(s.slice(0, cut).trim()); s = s.slice(cut).trim();
+  }
+  if (s) parts.push(s);
+  return parts.map((p, i) => `${p} (${i + 1}/${parts.length})`);
+}
+async function doPost(reply: string, quote: string) {
+  if (!need() || S.busy) return;
+  const x = ((document.getElementById('sc-txt') as HTMLTextAreaElement | null)?.value ?? S.draft).trim(), media = ((document.getElementById('sc-media') as HTMLInputElement | null)?.value ?? S.media).trim();
+  const m = media ? [safeUrl(media)].filter(Boolean) : []; if (media && !m.length) { S.err = 'The image link must start with https:// or ipfs://'; paint(); return; }
+  const poll = S.pollOn ? S.poll.map(o => o.trim()).filter(Boolean) : []; if (S.pollOn && poll.length < 2) { S.err = 'A poll needs at least two options.'; paint(); return; }
+  if (!x && !m.length) { S.err = 'Write something first.'; paint(); return; }
+  const bad = violates(x + ' ' + poll.join(' ')); if (bad) { S.err = `This post was not sent. It contains ${WHY[bad]}, which is not allowed on LUMA Social.`; paint(); return; }
+  if (m.length && !okImg(m[0])) { S.err = 'Pictures from that link are not allowed on this network. Use an NFT or an image from an approved source.'; paint(); return; }
+  const parts = splitThread(x);
+  if (parts.length > MAXPARTS) { S.err = `That is too long even for a thread (up to ${MAXPARTS} posts). Shorten it.`; paint(); return; }
+  if (parts.some(p => enc.encode(JSON.stringify({ v: 1, t: 'post', x: p, r: 'F'.repeat(64) })).length > MAXMEMO)) { S.err = 'Part of the text has too many special characters to fit in one transaction. Shorten it or split it yourself.'; paint(); return; }
+  let prev = reply, first = true;
+  for (let i = 0; i < parts.length; i++) {
+    const d: any = { t: 'post', x: parts[i] }; if (first) { if (m.length) d.m = m; if (S.nft && m[0] === S.nft.img) d.n = S.nft.id; if (quote) d.q = quote; if (poll.length) d.p = poll; } if (prev) d.r = prev;
+    const h = await act(d, parts.length > 1 ? `Posting ${i + 1} of ${parts.length}…` : 'Posting…', i === parts.length - 1 ? (parts.length > 1 ? `Thread of ${parts.length} posted on the chain` : 'Posted on the chain') : undefined);
+    if (!h) { if (i) ctx.toast(`Only ${i} of ${parts.length} posts went through.`, true); return; }
+    if (h === 'ok' && i < parts.length - 1) { S.err = 'The network did not return the transaction hash, so the thread was stopped.'; paint(); return; }
+    prev = h; first = false;
+  }
+  S.draft = ''; S.media = ''; S.nft = null; S.poll = ['', '']; S.pollOn = false; S.quote = ''; LS.set(draftKey(), ''); ctx.closeModal(); paint();
+}
+let draftT: any = 0;
+function bind() {
+  const root = document.getElementById('sc-root'); if (!root || bound === root) return; bound = root;
+  root.addEventListener('click', e => { const el = (e.target as HTMLElement).closest('[data-act]') as HTMLElement | null; if (!el || !root.contains(el)) return; if ((e.target as HTMLElement).closest('a[href]')) return; void onClick(el, e); });
+  root.addEventListener('input', e => {
+    const t = e.target as HTMLInputElement;
+    if (t.id === 'sc-txt') { S.draft = t.value; grow(t as any); const r = document.getElementById('sc-ring'); if (r) r.outerHTML = ringHtml(t.value.length); updCard(); const c = document.getElementById('sc-cost'); if (c) c.textContent = fmt(t.value.length > MAXTXT ? Math.ceil(t.value.length / 470) * COST.post : COST.post, 4) + ' LUMA'; clearTimeout(draftT); draftT = setTimeout(() => LS.set(draftKey(), S.draft), 400); }
+    else if (t.id === 'sc-media') S.media = t.value; else if (t.classList.contains('sc-po')) S.poll[Number(t.dataset.i)] = t.value;
+    else if (t.id === 'sc-q' || t.id === 'sc-q2') S.q = t.value;
+  });
+  root.addEventListener('keydown', e => { const t = e.target as HTMLInputElement; if (e.key === 'Enter' && (t.id === 'sc-q' || t.id === 'sc-q2')) { go({ k: 'search', q: t.value }); } if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && t.id === 'sc-txt') { const b = document.getElementById('sc-go'); b && (b as HTMLElement).click(); } });
+  let g = 0;
+  KD = (e: KeyboardEvent) => {
+    if (!document.getElementById('sc')) return; const t = e.target as HTMLElement;
+    if (e.key === 'Escape') { ctx.closeModal(); if (t && /INPUT|TEXTAREA/.test(t.tagName)) t.blur(); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey || (t && (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable))) return;
+    if (e.key === 'n') { e.preventDefault(); go({ k: 'home' }); setTimeout(() => (document.getElementById('sc-txt') as HTMLElement | null)?.focus(), 30); }
+    else if (e.key === '/') { e.preventDefault(); const q = (document.getElementById('sc-q') || document.getElementById('sc-q2')) as HTMLElement | null; if (q) q.focus(); else { go({ k: 'explore' }); setTimeout(() => (document.getElementById('sc-q2') as HTMLElement | null)?.focus(), 30); } }
+    else if (e.key === '?') keysModal();
+    else if (e.key === 'g') { g = Date.now(); }
+    else if (Date.now() - g < 1200 && e.key === 'h') { g = 0; go({ k: 'home' }); } else if (Date.now() - g < 1200 && e.key === 'n') { g = 0; go({ k: 'notif' }); LS.set(seenKey(), Math.floor(Date.now() / 1000)); }
+  };
+}
+
+export const sc: any = {
+  close: () => { TS = null; ED = {}; ctx.closeModal(); },
+  m(a: string, id: string) {
+    ctx.closeModal();
+    switch (a) {
+      case 'copy': case 'copyu': { const u = linkFor(a === 'copy' ? 'post' : 'u', id); try { void navigator.clipboard.writeText(u); ctx.toast('Link copied'); } catch { ctx.toast(u); } break; }
+      case 'share': try { void (navigator as any).share({ url: linkFor('post', id), title: 'LUMA Social' }); } catch {} break;
+      case 'sx': { const q = IX.posts.get(id); const u = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent((q ? q.x.slice(0, 200) : '') + '\n') + '&url=' + encodeURIComponent(linkFor('post', id)); window.open(u, '_blank', 'noopener,noreferrer'); break; }
+      case 'quote': if (need()) { S.quote = id; S.view = { k: 'home' }; window.scrollTo({ top: 0 }); paint(); setTimeout(() => (document.getElementById('sc-txt') as HTMLElement | null)?.focus(), 30); } break;
+      case 'bm': { const b = bookmarks(), i = b.indexOf(id); if (i >= 0) b.splice(i, 1); else b.unshift(id); LS.set(bmKey(), b); ctx.toast(i >= 0 ? 'Removed from bookmarks' : 'Saved to bookmarks'); paint(); break; }
+      case 'boost': if (need()) boostModal(id); break;
+      case 'report': if (need()) reportModal(id); break;
+      case 'react': if (need()) reactModal(id); break;
+      case 'edit': if (need()) editPostModal(id); break;
+      case 'pin': if (need() && !S.busy) void act({ t: 'pin', ref: id }, 'Pinning…', 'Pinned to your profile'); break;
+      case 'unpin': if (need() && !S.busy) void act({ t: 'pin', ref: '' }, 'Unpinning…', 'Unpinned'); break;
+      case 'del': if (need() && !S.busy && confirm('Delete this post? It stays in the chain history but disappears from LUMA Social.')) void act({ t: 'del', ref: id }, 'Deleting…', 'Deleted'); break;
+      case 'mute': LS.set(muteKey(), Array.from(new Set([...muted(), id]))); ctx.toast('Muted. You can undo this in Creator, Muted accounts.'); paint(); break;
+      case 'unmute': LS.set(muteKey(), muted().filter(x => x !== id)); paint(); break;
+    }
+  },
+  async report(id: string, r: string) { ctx.closeModal(); if (need() && !S.busy) await act({ t: 'rep', ref: id, r }, 'Reporting…', 'Thanks. Your report went to the moderators.'); },
+  nftPick: (id: string) => void nftPick(id),
+  pickFor(kind: string) { ED = collectProf(); void openNfts(kind); },
+  async rx(id: string, e: string) { ctx.closeModal(); if (need() && !S.busy) await act({ t: 'rx', ref: id, e }, 'Reacting…', e ? 'Reacted ' + e : 'Reaction removed'); },
+  async boost(id: string) { const n = Number((document.getElementById('sc-bst') as HTMLInputElement)?.value); if (!(n >= 1)) { ctx.toast('The smallest boost is 1 LUMA', true); return; } ctx.closeModal(); if (need() && !S.busy) await act({ t: 'boost', ref: id }, 'Boosting…', 'Boosted with ' + fmt(n, 2) + ' LUMA', n); },
+  async edit(id: string) { const x = ((document.getElementById('sc-ed') as HTMLTextAreaElement)?.value || '').trim(); if (!x) { ctx.toast('The text cannot be empty', true); return; } const bd = violates(x); if (bd) { ctx.toast(`Not saved: it contains ${WHY[bd]}, which is not allowed here.`, true); return; } ctx.closeModal(); if (need() && !S.busy) await act({ t: 'edit', ref: id, x }, 'Saving…', 'Post updated'); },
+  tipPick(i: number) { if (!TS || !TS.opts[i] || !TS.opts[i].ok) return; sc.tipUpd(); TS.sel = i; TS.amt = pres(TS.opts[i])[0].v; TS.err = ''; renderTip(); },
+  tipPreset(v: string) { if (!TS) return; sc.tipUpd(); TS.amt = v; renderTip(); },
+  tipUpd() { if (!TS) return; const a = document.getElementById('sc-tip') as HTMLInputElement | null, n = document.getElementById('sc-tipn') as HTMLInputElement | null; if (a) TS.amt = a.value; if (n) TS.note = n.value; },
+  tipSend: () => void tipSend(),
+  mkf(k: string, v: string) { (MK_S as any)[k] = v; paint(); },
+  lpick() { ED = { ...collectListing(), __mk: 1 }; void openNfts('mk'); },
+  async lsubmit() { await listSubmit(); },
+  buyQty(v: string) { if (BS) { BS.qty = Math.max(1, Math.min(999, Math.floor(Number(v) || 1))); renderBuy(); } },
+  async buySend() { await buySend(); },
+  async offerSend(id: string) { await offerSend(id); },
+  async askSend(id: string) { await askSend(id); },
+  async ansSend(id: string, q: string) { await ansSend(id, q); },
+  async revSend(id: string) { await revSend(id); },
+  prev() { const v = collectProf(), pv = document.getElementById('pf-prev'); if (pv) pv.innerHTML = prevHtml(v); const sz = enc.encode(JSON.stringify({ v: 1, ...profEvent(v) })).length, el = document.getElementById('pf-size'); if (el) { el.textContent = `Profile size ${sz} of ${MAXMEMO - 20} bytes`; (el as HTMLElement).style.color = sz > MAXMEMO - 20 ? '#f87171' : ''; } },
+  swatch(c: string) { const i = document.getElementById('pf-c') as HTMLInputElement | null; if (i) i.value = c; sc.prev(); },
+  goU(a: string) { ctx.closeModal(); go({ k: 'profile', a }); },
+  async fol(a: string) { ctx.closeModal(); if (need() && !S.busy) await act(iFollow(a) ? { t: 'unf', a } : folEv(a), 'Updating…', iFollow(a) ? 'Unfollowed' : 'Following ' + nameOf(a)); },
+  async saveProf() {
+    const v = collectProf(), d = profEvent(v), txt = [v.n, v.b, v.l, v.pr, v.jb, v.st, v.l1t, v.l2t].join(' '), bp = violates(txt);
+    if (bp) { ctx.toast(`Not saved: your profile contains ${WHY[bp]}, which is not allowed here.`, true); return; }
+    for (const [k, nm] of [['i', 'photo'], ['k', 'cover picture'], ['w', 'website'], ['l1u', 'link 1'], ['l2u', 'link 2']] as const) if (v[k] && !safeUrl(v[k])) { ctx.toast(`The ${nm} must start with https:// or ipfs://`, true); return; }
+    if ((v.i && !okImg(safeUrl(v.i))) || (v.k && !okImg(safeUrl(v.k)))) { ctx.toast('Pictures from that link are not allowed on this network. Use an NFT or an approved source.', true); return; }
+    if (enc.encode(JSON.stringify({ v: 1, ...d })).length > MAXMEMO - 20) { ctx.toast('Your profile is too long to store in one transaction. Shorten the bio, links or text.', true); return; }
+    ED = {}; ctx.closeModal(); await act(d, 'Saving profile…', 'Profile saved on the chain'); },
+  async claim() { const h = ((document.getElementById('pf-h') as HTMLInputElement)?.value || '').trim().toLowerCase().replace(/^@/, ''); const m = document.getElementById('pf-hm');
+    if (!/^[a-z0-9_]{3,15}$/.test(h)) { if (m) m.textContent = 'Use 3 to 15 letters, numbers or _'; return; } const o = IX.owner.get(h); if (o && o !== me()) { if (m) m.textContent = '@' + h + ' is taken'; return; }
+    ctx.closeModal(); await act({ t: 'hdl', h }, 'Claiming…', 'You are @' + h); },
+};
+(window as any).sc = sc;
+
+function deepLink() {
+  if (S.deep) return; S.deep = true;
+  try {
+    const q = new URLSearchParams(location.search).get('social'); if (!q) return; const i = q.indexOf(':'), kind = q.slice(0, i), id = decodeURIComponent(q.slice(i + 1));
+    if (kind === 'post' && isHash(id)) S.view = { k: 'thread', id: id.toUpperCase() }; else if (kind === 'u' && isAddr(id)) S.view = { k: 'profile', a: id }; else if (kind === 'tag' && id) S.view = { k: 'tag', tag: id.toLowerCase() }; else if (kind === 'ref' && isAddr(id)) { LS.set(refKey(), id); } else if (kind === 'l' && isHash(id)) S.view = { k: 'listing', id: id.toUpperCase() };
+  } catch {}
+}
+export async function mount() {
+  if (!document.getElementById('sc-root')) return;
+  cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
+  await pull(); paint();
+  timer = setInterval(() => { if (document.hidden || !document.getElementById('sc')) { if (!document.getElementById('sc')) stop(); return; } void pull().then(() => { const a = document.activeElement as HTMLElement | null; if (!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) && !document.getElementById('m')?.innerHTML) paint(); }); }, 9000);
+}
+function stop() { if (timer) { clearInterval(timer); timer = 0; } if (kd) { document.removeEventListener('keydown', kd); kd = null; } }
+export function unmount() { stop(); bound = null; }

@@ -15,6 +15,7 @@ import * as PL from './live/poolinfo.ts';
 import * as Bn from './live/burn.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
+import * as Social from './live/social.ts';
 import * as Nft from './live/nft.ts';
 import * as Hist from './live/history.ts';
 import * as Hold from './live/holders.ts';
@@ -299,7 +300,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -442,6 +443,7 @@ export const st: AppState = {
     searchResult: null,
   },
 };
+try { if (new URLSearchParams(location.search).get('social')) (st as any).tab = 'social'; } catch {}
 
 // Market Pair Helpers
 export const NATIVE = { c: 'native', i: '' };
@@ -1170,6 +1172,7 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['burn', 'Burns'],
   ['claim', 'Free LUMA'],
   ['rewards', 'Rewards'],
+  ['social', 'Social'],
   ['bot', 'Trading Bot'],
   ['margin', 'Leverage'],
   ['more', 'Settings'],
@@ -1597,6 +1600,10 @@ export function renderApp() {
       body = Rewards.shell();
       break;
 
+    case 'social':
+      body = Social.shell();
+      break;
+
     case 'bot':
       body = Bot.botShell();
       break;
@@ -1817,6 +1824,7 @@ export function renderApp() {
         ${renderNavItem('bridge', 'Bridge')}
         ${renderNavItem('claim', 'Free LUMA')}
         ${renderNavItem('rewards', 'Rewards')}
+        ${renderNavItem('social', 'Social')}
 
         <div class="nav-section">Explorer</div>
         ${renderNavItem('network', 'Network')}
@@ -1929,6 +1937,8 @@ export function renderApp() {
   if (st.tab === 'claim') Claim.mount();
   if (st.tab === 'rewards') Rewards.mount();
   else Rewards.unmount();
+  if (st.tab === 'social') void Social.mount();
+  else Social.unmount();
   if (st.tab === 'home') Pages.assetsMount();
   if (st.tab === 'send') Xs.afterRender();
   Extras.afterRender(st.tab, { unfunded: !!(b && b.unfunded), online: st.status === 'online', lockMin: CFG.lockMin });
