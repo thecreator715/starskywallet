@@ -302,7 +302,11 @@ const need0 = () => !!me();
 function topView(): string {
   const c = TOPC[TOPD], rows = (c ? c.rows : []).filter(r => { const p = IX.posts.get(r.id); return p && !p.del && !isMuted(p.a) && !wordMuted(p.x); });
   const tab = (d: number, l: string) => `<button class="${TOPD === d ? 'on' : ''}" data-act="topd" data-v="${d}">${l}</button>`;
-  return `<div class="sc-head">Top posts<span class="sc-sub">most viewed, by accounts</span></div><div class="sc-tabs">${tab(1, 'Today')}${tab(7, 'This week')}${tab(30, 'This month')}${tab(0, 'All time')}</div>${!c ? '<div class="sc-empty">Counting views…</div>' : c.err ? `<div class="sc-empty">${esc(c.err)}</div>` : rows.length ? rows.map((r, i) => `<div class="sc-m" style="padding:8px 14px 0;font-weight:800">#${i + 1} · ${r.v} ${r.v === 1 ? 'account viewed' : 'accounts viewed'} this</div>${postCard(IX.posts.get(r.id)!)}`).join('') : '<div class="sc-empty">No views counted for this period yet. A view counts when a signed-in account scrolls a post into view.</div>'}`;
+  // boosted posts (paid in the last day) lead the page, strongest boost first
+  const bsum = (id: string) => (IX.boosts.get(id) || []).reduce((n, b) => (Date.now() / 1000 - b.t < 86400 ? n + b.v : n), 0);
+  const bst = Array.from(IX.posts.values()).filter(p => !p.del && !isMuted(p.a) && !wordMuted(p.x) && boostedNow(p.id)).sort((x, y) => bsum(y.id) - bsum(x.id)).slice(0, 20);
+  const bstHtml = bst.length ? `<div class="sc-m" style="padding:10px 14px 0;font-weight:800;color:#22d3ee">Boosted now</div>` + bst.map(p => `<div class="sc-m" style="padding:6px 14px 0">${fmt(bsum(p.id), 2)} LUMA boosted</div>${postCard(p)}`).join('') : '';
+  return `${bstHtml}<div class="sc-head">Top posts<span class="sc-sub">most viewed, by accounts</span></div><div class="sc-tabs">${tab(1, 'Today')}${tab(7, 'This week')}${tab(30, 'This month')}${tab(0, 'All time')}</div>${!c ? '<div class="sc-empty">Counting views…</div>' : c.err ? `<div class="sc-empty">${esc(c.err)}</div>` : rows.length ? rows.map((r, i) => `<div class="sc-m" style="padding:8px 14px 0;font-weight:800">#${i + 1} · ${r.v} ${r.v === 1 ? 'account viewed' : 'accounts viewed'} this</div>${postCard(IX.posts.get(r.id)!)}`).join('') : '<div class="sc-empty">No views counted for this period yet. A view counts when a signed-in account scrolls a post into view.</div>'}`;
 }
 function settingsView(): string {
   const s = SET(), a = me(), back = `<button class="sc-ib" data-act="back" title="Back">${ic('back')}</button>`;
