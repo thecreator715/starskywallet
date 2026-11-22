@@ -1356,8 +1356,10 @@ function deepLink() {
     if (kind === 'post' && isHash(id)) S.view = { k: 'thread', id: id.toUpperCase() }; else if (kind === 'u' && isAddr(id)) S.view = { k: 'profile', a: id }; else if (kind === 'tag' && id) S.view = { k: 'tag', tag: id.toLowerCase() }; else if (kind === 'ref' && isAddr(id)) { LS.set(refKey(), id); } else if (kind === 'l' && isHash(id)) S.view = { k: 'listing', id: id.toUpperCase() };
   } catch {}
 }
+let LASTACC: string | null = null;
 export async function mount() {
   if (!document.getElementById('sc-root')) return;
+  if (LASTACC !== me()) { const first = LASTACC === null; LASTACC = me(); if (!first) { S.view = { k: 'home' } as any; hist.length = 0; S.draft = ''; S.media = ''; S.nft = null; S.quote = ''; S.err = ''; S.loaded = false; POL.at = 0; } }
   cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
   await pull(); paint();
   timer = setInterval(() => { if (document.hidden || !document.getElementById('sc')) { if (!document.getElementById('sc')) stop(); return; } void pull().then(() => { const a = document.activeElement as HTMLElement | null; if (!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) && !document.getElementById('m')?.innerHTML) paintSoft(); }); }, 9000);
