@@ -17,6 +17,9 @@ const MAXTXT = 500, MAXMEMO = 900, MAXPARTS = 10, RIPPLE_EPOCH = 946684800;
 const EMOJI = ['🔥', '😂', '🚀', '👏', '😮', '😢'];
 
 const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
+/** Boosts are paid to the Genesis wallet (network config, or the Genesis address saved in Starsky). Falls back to the hub if none is known. */
+const genesis = (): string => { const c = (window as any).STARSKY_CONFIG || {}; let g = ''; try { g = (c.genesis && c.genesis[net()]) || localStorage.getItem('starsky.genesis.' + ctx.netKey()) || ''; } catch { /* */ } return /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(g) ? g : ''; };
+const boostDest = (): string => genesis() || hub();
 const hub = () => { const c = (window as any).STARSKY_CONFIG || {}; return (c.socialHub && c.socialHub[net()]) || HUBS[net()]; };
 const enc = new TextEncoder(), dec = new TextDecoder();
 const toHex = (s: string) => Array.from(enc.encode(s)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
@@ -200,14 +203,14 @@ function rebuild() {
 const KEY = () => 'sc.ev.' + net() + '.' + hub(), TKEY = () => 'sc.tipv.' + net();
 function loadCache() { try { const j = JSON.parse(localStorage.getItem(KEY()) || '[]'); if (Array.isArray(j)) EV = j; } catch { EV = []; } try { TV = JSON.parse(localStorage.getItem(TKEY()) || '{}') || {}; } catch { TV = {}; } rebuild(); }
 function saveCache() { try { let a = EV; if (a.length > 6000) a = a.slice(-6000); const s = JSON.stringify(a); if (s.length < 3.5e6) localStorage.setItem(KEY(), s); const k = Object.keys(TV); if (k.length > 4000) for (const x of k.slice(0, k.length - 4000)) delete TV[x]; localStorage.setItem(TKEY(), JSON.stringify(TV)); } catch {} }
-function parseTx(x: any): Ev | null {
+function parseTx(x: any, dest: string = hub(), only = ''): Ev | null {
   const tx = x.tx || x.tx_json || {}, meta = x.meta || x.metaData || {};
-  if (!(x.validated ?? true) || tx.TransactionType !== 'Payment' || tx.Destination !== hub() || meta.TransactionResult !== 'tesSUCCESS') return null;
+  if (!(x.validated ?? true) || tx.TransactionType !== 'Payment' || tx.Destination !== dest || meta.TransactionResult !== 'tesSUCCESS') return null;
   const amt = meta.delivered_amount ?? tx.Amount ?? tx.DeliverMax; if (typeof amt !== 'string') return null;
   for (const m of tx.Memos || []) {
     const mm = m.Memo || {}; if (fromHex(mm.MemoType) !== MT) continue;
     let d: any; try { d = JSON.parse(fromHex(mm.MemoData)); } catch { continue; }
-    if (!d || d.v !== 1 || typeof d.t !== 'string' || !(d.t in COST)) continue;
+    if (!d || d.v !== 1 || typeof d.t !== 'string' || !(d.t in COST) || (only && d.t !== only)) continue;
     if (Number(amt) < COST[d.t] * 1e6 * 0.999) continue;      // underpaid actions do not count
     const h = String(x.hash || tx.hash || '').toUpperCase(); if (!isHash(h)) continue;
     const date = tx.date ?? x.date, t = date != null ? Number(date) + RIPPLE_EPOCH : x.close_time_iso ? Math.floor(Date.parse(x.close_time_iso) / 1000) : Math.floor(Date.now() / 1000);
@@ -227,6 +230,7 @@ export async function pull(full = false) {
       for (const x of r.transactions || []) { const e = parseTx(x); const l = Number((x.tx || x.tx_json || {}).ledger_index ?? x.ledger_index ?? 0); if (stop && l && l < stop - 1) old = true; if (e && !have.has(e.h)) { EV.push(e); have.add(e.h); added++; } }
       marker = r.marker; if (!marker || old) break;
     }
+    const gn = genesis(); if (gn && gn !== hub()) { try { let mk: any; for (let pg = 0; pg < 3; pg++) { const r = await ctx.req('account_tx', { account: gn, ledger_index_min: -1, ledger_index_max: -1, limit: 200, forward: false, ...(mk ? { marker: mk } : {}) }); for (const x of r.transactions || []) { const e = parseTx(x, gn, 'boost'); if (e && !have.has(e.h)) { EV.push(e); have.add(e.h); added++; } } mk = r.marker; if (!mk) break; } } catch { /* genesis history unavailable: boosts just do not show yet */ } }
     S.hubErr = ''; if (added || full) { rebuild(); saveCache(); }
     S.loaded = true;
   } catch (e: any) { const m = String(e?.message || e); S.hubErr = /actNotFound|Account not found/i.test(m) ? 'The LUMA Social hub is not switched on yet on this network. The network operator turns it on from the control panel (Social tab).' : m; S.loaded = true; }
@@ -381,7 +385,7 @@ async function pay(dest: string, amount: any, d: any, label: string): Promise<{ 
 function local(d: any, hash: string, v: number) { const e: Ev = { h: hash.toUpperCase(), a: me(), t: Math.floor(Date.now() / 1000), l: IX.maxLedger + 1, i: 9999, v, d }; if (!EV.some(x => x.h === e.h)) { EV.push(e); rebuild(); } }
 // one network action: pay the hub, show it at once, confirm from the chain a few seconds later. Returns the transaction hash ('' when it failed).
 async function act(d: any, label: string, ok?: string, amount?: number): Promise<string> {
-  const v = amount ?? COST[d.t], r = await pay(hub(), drops(v), d, label);
+  const v = amount ?? COST[d.t], r = await pay(d.t === 'boost' ? boostDest() : hub(), drops(v), d, label);
   if (!r.ok) { S.err = r.msg || 'The transaction was not accepted.'; ctx.toast(S.err, true); paint(); return ''; }
   S.err = ''; if (r.hash) local(d, r.hash, v); if (ok) ctx.toast(ok, false); paint(); setTimeout(() => { void pull().then(paintSoft); }, 5000); return r.hash || 'ok';
 }
@@ -536,7 +540,7 @@ function postCard(p: Post, opts: { quoted?: boolean; rtBy?: string; pinned?: boo
   if (p.del) { const w = p.mod ? 'This post was removed by the network moderators.' : 'This post was deleted.'; return opts.quoted ? `<div class="sc-quote sc-m">${w}</div>` : `<div class="sc-post" style="cursor:default"><div class="sc-m">${w}</div></div>`; }
   const imgs = p.m.filter(okImg), blur = (POL.blurMedia || SET().blurAll) && !(LS.get('sc.noblur', false) && !SET().blurAll) && !S.rev.has(p.id);
   const nftBar = p.n ? nftBadge(p) : (p.a === me() && p.m.some(u => /^ipfs:\/\//.test(u)) && !opts.quoted ? `<div class="sc-m" style="margin:6px 0;display:flex;align-items:center;gap:8px">${ic('image', 14)} Only you see this: <button class="sc-btn" data-act="mintnft" data-v="${p.id}" style="padding:4px 10px">Mint this picture as an NFT</button></div>` : '');
-  const media = imgs.length ? `${nftBar}<div class="sc-media n${imgs.length} ${blur ? 'blurred' : ''}">${blur ? `<button class="sc-reveal" data-act="reveal" data-v="${p.id}">${ic('eye', 18)}Show image</button>` : ''}${imgs.map(u => `<img src="${esc(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-act="img" data-v="${esc(u)}" onerror="this.remove()">`).join('')}</div>` : (p.m.length && !imgs.length ? `<div class="sc-m" style="margin:6px 0">${ic('image', 14)} Image hidden: this network only allows ${POL.imageMode === 'off' ? 'no images' : 'images from approved sources'}.</div>` : '');
+  const media = imgs.length ? `${nftBar}<div class="sc-media n${imgs.length} ${blur ? 'blurred' : ''}">${blur ? `<button class="sc-reveal" data-act="reveal" data-v="${p.id}">${ic('eye', 18)}Show image</button>` : ''}${imgs.map(u => CAM.isVideoUrl(u) ? `<video src="${esc(u)}" controls playsinline preload="metadata" loop style="width:100%;max-height:70vh;border-radius:12px;background:#000" onerror="this.remove()"></video>` : `<img src="${esc(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-act="img" data-v="${esc(u)}" onerror="this.remove()">`).join('')}</div>` : (p.m.length && !imgs.length ? `<div class="sc-m" style="margin:6px 0">${ic('image', 14)} Image hidden: this network only allows ${POL.imageMode === 'off' ? 'no images' : 'images from approved sources'}.</div>` : '');
   const q = p.q && IX.posts.get(p.q) && !opts.quoted ? `<div class="sc-quote" data-act="open" data-v="${p.q}">${postCard(IX.posts.get(p.q)!, { quoted: true })}</div>` : '';
   let poll = '';
   if (p.p) {
@@ -578,12 +582,12 @@ function composer(opts: { reply?: string; quote?: string } = {}): string {
   return `<div class="sc-comp" id="sc-comp">${avatar(me())}<div style="flex:1;min-width:0">${rep ? `<div class="sc-m" style="margin-bottom:2px">Replying to ${esc(tagOf(rep.a))}</div>` : ''}<textarea id="sc-txt" maxlength="${MAXTXT * MAXPARTS - 200}" rows="2" placeholder="${rep ? 'Post your reply' : qq ? 'Add your take' : 'What is happening on the chain?  Try $LUMA or #tags'}">${esc(S.draft)}</textarea>
   <div id="sc-card">${cardSyms(S.draft, true).map(t => priceCard(t, { close: true })).join('')}</div><div id="sc-yt">${ytId(S.draft) ? ytCard(ytId(S.draft)) : ''}</div>
   ${S.nft ? `<div class="sc-nftat"><img src="${esc(S.nft.img)}" alt="" referrerpolicy="no-referrer"><div><b>${esc(S.nft.name)}</b><div class="sc-m">NFT attached. It will be shown with a check that you own it.</div></div><button class="sc-ib" data-act="nftx" title="Remove">${ic('x', 16)}</button></div>` : ''}
-  ${S.media && !S.nft ? `<div class="sc-nftat"><img src="${esc(safeUrl(S.media))}" alt="" referrerpolicy="no-referrer"><div><b>Picture attached</b><div class="sc-m">${UP ? 'Uploading…' : 'It will be shown in your post.'}</div></div><button class="sc-ib" data-act="mediax" title="Remove">${ic('x', 16)}</button></div>` : ''}
+  ${S.media && !S.nft ? `<div class="sc-nftat">${CAM.isVideoUrl(S.media) ? `<video src="${esc(safeUrl(S.media))}" muted playsinline style="width:64px;height:64px;object-fit:cover;border-radius:8px"></video>` : `<img src="${esc(safeUrl(S.media))}" alt="" referrerpolicy="no-referrer">`}<div><b>${CAM.isVideoUrl(S.media) ? 'Video attached' : 'Picture attached'}</b><div class="sc-m">${UP ? 'Uploading…' : 'It will be shown in your post.'}</div></div><button class="sc-ib" data-act="mediax" title="Remove">${ic('x', 16)}</button></div>` : ''}
   ${qq ? `<div class="sc-quote">${postCard(qq, { quoted: true })}<button class="sc-btn sm ghost" data-act="noquote" style="margin-top:6px">Remove quote</button></div>` : ''}
   ${PP.barHtml()}
   <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
   ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
-  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib ${S.media && !S.nft ? 'on' : ''}" data-act="upl" title="Upload a picture from your computer (5 MB max)">${ic('up')}</button><input type="file" id="sc-file" accept="image/*" hidden onchange="sc.upload(this,'post')"><button class="sc-ib" data-act="cam" title="Take a photo, edit it and post it">${ic('image')}</button><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
+  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib ${S.media && !S.nft ? 'on' : ''}" data-act="upl" title="Upload a picture from your computer (5 MB max)">${ic('up')}</button><input type="file" id="sc-file" accept="image/*,video/*" hidden onchange="sc.upload(this,'post')"><button class="sc-ib" data-act="cam" title="Take a photo, edit it and post it">${ic('image')}</button><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
   <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 6)} LUMA</span></button></div></div></div>`;
 }
 
@@ -838,15 +842,20 @@ let UP = false;
 function sc_cam(kind: string) {
   if (!need()) return;
   CAM.openCamera(async f => {
-    const u = await uploadFiles([f], 1); if (!u[0]) return;
-    if (kind === 'post') { S.media = u[0]; S.nft = null as any; paint(); ctx.toast('Photo added. Write something and press Post.'); }
+    const u = await uploadFiles([f], 1, kind === 'post'); if (!u[0]) return;
+    if (kind === 'post') { S.media = u[0]; S.nft = null as any; paint(); ctx.toast(CAM.isVideoUrl(u[0]) ? 'Video added. Write something and press Post.' : 'Photo added. Write something and press Post.'); }
     else if (kind === 'mk') { ED = { ...collectListing(), __mk: 1, eid: (ED && ED.eid) || '' }; const mm: string[] = ED.m || []; if (mm.length < 4) mm.push(u[0]); ED.m = mm; void listModal(ED.eid); }
     else { const i = document.getElementById(kind === 'avatar' ? 'pf-i' : 'pf-k') as HTMLInputElement | null; if (i) { i.value = u[0]; i.dispatchEvent(new Event('input')); } }
   }, (m, b) => ctx.toast(m, b));
 }
-async function uploadFiles(files: FileList | File[], max: number): Promise<string[]> {
+async function uploadFiles(files: FileList | File[], max: number, allowVid = false): Promise<string[]> {
   const out: string[] = [], list = Array.from(files).slice(0, max);
   for (let f of list) {
+    if (/^video\//i.test(f.type) || /\.(mp4|webm|mov|m4v)$/i.test(f.name)) {
+      if (!allowVid) { ctx.toast('Videos can only be added to posts.', true); continue; }
+      try { ctx.toast('Checking video…'); const g = await CAM.prepareVideo(f, m => ctx.toast(m)); ctx.toast('Uploading video…'); const c = await ipfsAdd(g, g.name), ext = /mp4/.test(g.type) || /\.(mp4|mov|m4v)$/i.test(g.name) ? 'mp4' : 'webm'; out.push(pubGw() + c + '?filename=clip.' + ext); } catch (e: any) { ctx.toast(String(e?.message || e), true); }
+      continue;
+    }
     if (!/^image\//i.test(f.type)) { ctx.toast(`${f.name}: choose a picture.`, true); continue; }
     if (f.size > MAXIMG || !/^image\/(png|jpe?g|gif|webp)$/i.test(f.type)) { try { ctx.toast(`Shrinking ${f.name} to fit 5 MB…`); const g = !/^image\/(png|jpe?g|gif|webp)$/i.test(f.type) ? await CAM.compressImage(f, 0, undefined).catch(() => f) : await CAM.compressImage(f, MAXIMG * 0.94); if (g.size > MAXIMG) throw new Error('Could not shrink that picture under 5 MB.'); f = g; } catch (e: any) { ctx.toast(String(e?.message || e), true); continue; } }
     try { ctx.toast('Uploading ' + f.name + '…'); out.push('ipfs://' + await ipfsAdd(f, f.name)); } catch (e: any) { ctx.toast(String(e?.message || e), true); break; }
@@ -1184,7 +1193,7 @@ function reactModal(id: string) {
   ctx.modal(mcard(`<div class="k" style="margin-bottom:10px">React (${COST.rx} LUMA)</div><div class="sc-row" style="gap:8px;justify-content:center">${EMOJI.map(e => `<button class="sc-rxc ${mineRx === e ? 'on' : ''}" style="font-size:1.6rem;padding:8px 12px" onclick="sc.rx('${id}','${e}')">${e}</button>`).join('')}</div>${mineRx ? `<div style="text-align:center;margin-top:10px"><button class="sc-btn sm ghost" onclick="sc.rx('${id}','')">Remove my reaction</button></div>` : ''}`, 340));
 }
 function boostModal(id: string) {
-  ctx.modal(mcard(`<div class="k">Boost this post</div><div class="muted" style="margin:6px 0 10px;line-height:1.5">A boost lifts the post in For you and Explore for about a day, and the post shows a Boosted label. The more LUMA, the stronger the lift (counts up to 100 LUMA). It goes to the network hub, not to the author.</div><div class="sc-row">${[1, 5, 25, 100].map(n => `<button class="sc-btn sm ghost" onclick="document.getElementById('sc-bst').value=${n}">${n}</button>`).join('')}</div><input class="sc-in" id="sc-bst" type="number" min="1" step="any" value="1" style="margin-top:8px"><div class="sc-row" style="margin-top:10px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.boost('${id}')">${ic('zap', 16)}Boost</button></div>`));
+  ctx.modal(mcard(`<div class="k">Boost this post</div><div class="muted" style="margin:6px 0 10px;line-height:1.5">A boost lifts the post in For you and Explore for about a day, and the post shows a Boosted label. The more LUMA, the stronger the lift (counts up to 100 LUMA). It is paid from your connected wallet to the Genesis wallet${genesis() ? ' (' + genesis().slice(0, 6) + '…' + genesis().slice(-4) + ')' : ', or to the network hub until a Genesis address is set in Create token'}, not to the author.</div><div class="sc-row">${[1, 5, 25, 100].map(n => `<button class="sc-btn sm ghost" onclick="document.getElementById('sc-bst').value=${n}">${n}</button>`).join('')}</div><input class="sc-in" id="sc-bst" type="number" min="1" step="any" value="1" style="margin-top:8px"><div class="sc-row" style="margin-top:10px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.boost('${id}')">${ic('zap', 16)}Boost</button></div>`));
 }
 function editPostModal(id: string) {
   const p = IX.posts.get(id); if (!p) return;
@@ -1469,7 +1478,7 @@ export const sc: any = {
   async upload(inp: HTMLInputElement, kind: string) {
     const files = inp.files; if (!files || !files.length || UP || !need()) { inp.value = ''; return; } UP = true;
     try {
-      if (kind === 'post') { const u = await uploadFiles(files, 1); if (u[0]) { S.media = u[0]; S.nft = null as any; } paint(); }
+      if (kind === 'post') { const u = await uploadFiles(files, 1, true); if (u[0]) { S.media = u[0]; S.nft = null as any; } paint(); }
       else { ED = { ...collectListing(), __mk: 1, eid: (ED && ED.eid) || '' }; const mm: string[] = ED.m || [], u = await uploadFiles(files, 4 - mm.length); ED.m = mm.concat(u); void listModal(ED.eid); }
     } finally { UP = false; inp.value = ''; }
   },
@@ -1514,7 +1523,7 @@ import * as PP from './postplus.ts';
 export async function mount() {
   if (!document.getElementById('sc-root')) return;
   if (me() && LASTACC !== me()) { const first = LASTACC === null; LASTACC = me(); if (!first) { S.view = { k: 'home' } as any; hist.length = 0; S.draft = ''; S.media = ''; S.nft = null; S.quote = ''; S.err = ''; S.loaded = false; POL.at = 0; } }
-  PP.init({ cam: () => sc_cam('post'), me, setMedia: u => { S.media = u; S.nft = null; paint(); }, post: () => { const b = document.getElementById('sc-go') as HTMLElement | null; if (b) b.click(); }, toast: (m, b) => ctx.toast(m, b), upload: async f => { const u = await uploadFiles([f], 1); if (u[0]) { S.media = u[0]; S.nft = null; paint(); } }, showL: a => ctx.showL(a) }); cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
+  PP.init({ cam: () => sc_cam('post'), me, setMedia: u => { S.media = u; S.nft = null; paint(); }, post: () => { const b = document.getElementById('sc-go') as HTMLElement | null; if (b) b.click(); }, toast: (m, b) => ctx.toast(m, b), upload: async f => { const u = await uploadFiles([f], 1, true); if (u[0]) { S.media = u[0]; S.nft = null; paint(); } }, showL: a => ctx.showL(a) }); cachedPolicy(); stop(); bind(); if (KD) { kd = KD; document.addEventListener('keydown', kd); } loadCache(); if (!S.draft) S.draft = LS.get(draftKey(), '') || ''; deepLink(); paint();
   await pull(); paint();
   timer = setInterval(() => { if (document.hidden || !document.getElementById('sc')) { if (!document.getElementById('sc')) stop(); return; } void pull().then(() => { const a = document.activeElement as HTMLElement | null; if (!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) && !document.getElementById('m')?.innerHTML) paintSoft(); }); }, 9000);
 }

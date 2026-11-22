@@ -33,6 +33,35 @@ export async function compressImage(f: File, max = TARGET, onStep?: (m: string) 
   } finally { d.done(); }
 }
 
+
+export const MAXVID = 15;
+export const isVideoUrl = (u: string): boolean => /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(u) || /[?&]filename=[^&]*\.(mp4|webm|mov|m4v)(&|$)/i.test(u);
+/** Makes sure a video is at most 15 s and about 5 MB: re-records it at a capped bitrate when it is bigger. */
+export async function prepareVideo(f: File, onStep?: (m: string) => void): Promise<File> {
+  const url = URL.createObjectURL(f);
+  try {
+    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+    await new Promise<void>((ok, no) => { v.onloadedmetadata = () => ok(); v.onerror = () => no(new Error('This video format cannot be read by your browser. Record it here, or use an MP4.')); });
+    const dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur > MAXVID + 0.5 || f.size > MAXBYTES) {
+      const cap = (v as any).captureStream || (v as any).mozCaptureStream;
+      if (!cap || !(window as any).MediaRecorder) { if (dur > MAXVID + 0.5) throw new Error(`That video is ${Math.round(dur)} seconds. Videos can be 15 seconds at most; trim it first.`); if (f.size > 25 * 1048576) throw new Error(`That video is ${(f.size / 1048576).toFixed(0)} MB and your browser cannot shrink it. Record it here instead.`); return f; }
+      const mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m)) || '';
+      const st: MediaStream = cap.call(v); const chunks: Blob[] = []; const rec = new MediaRecorder(st, { ...(mime ? { mimeType: mime } : {}), videoBitsPerSecond: 2_000_000, audioBitsPerSecond: 96_000 });
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      const done = new Promise<void>(r => { rec.onstop = () => r(); });
+      v.muted = false; v.volume = 0.0001; rec.start(500); await v.play(); const t0 = Date.now();
+      const tick = setInterval(() => onStep?.(`Shrinking video… ${Math.min(MAXVID, Math.round((Date.now() - t0) / 1000))}s`), 500);
+      await new Promise<void>(r => { v.onended = () => r(); setTimeout(r, MAXVID * 1000 + 600); });
+      clearInterval(tick); v.pause(); if (rec.state !== 'inactive') rec.stop(); await done;
+      const type = (rec.mimeType || mime || 'video/webm').split(';')[0], blob = new Blob(chunks, { type });
+      if (blob.size > MAXBYTES * 1.4) throw new Error('That video is still too big after shrinking. Try a shorter or simpler clip.');
+      return new File([blob], renamed(f.name, /mp4/.test(type) ? 'mp4' : 'webm'), { type });
+    }
+    return f;
+  } finally { URL.revokeObjectURL(url); }
+}
+
 /* ---------- editor ---------- */
 interface Adj { br: number; ct: number; sa: number; wm: number; fx: string }
 const FX: Record<string, string> = { Original: '', Vivid: 'vivid', Warm: 'warm', Cool: 'cool', 'B&W': 'bw', Fade: 'fade', Noir: 'noir', Sepia: 'sepia' };
@@ -90,26 +119,60 @@ export function openCamera(onDone: (f: File) => Promise<void> | void, toast: (m:
   const box = () => document.getElementById('cam-box') as HTMLElement;
   const pickFile = (capture = false) => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; if (capture) i.setAttribute('capture', 'environment'); i.onchange = () => { const f = i.files && i.files[0]; if (f) void edit(f); }; i.click(); };
 
-  async function live(facing: 'environment' | 'user' = 'environment') {
+  async function live(facing: 'environment' | 'user' = 'environment', mode: 'photo' | 'video' = 'photo') {
     stop();
-    box().innerHTML = `<div class="cam-hd"><span>Camera</span><button class="cam-b" id="cam-x">✕</button></div><video class="cam-v" id="cam-vid" playsinline muted autoplay></video><div class="cam-m" id="cam-msg">Allow camera access when your browser asks.</div><div class="cam-row" style="justify-content:space-between"><button class="cam-b" id="cam-flip">Flip camera</button><button class="cam-shot" id="cam-snap" aria-label="Take picture"></button><button class="cam-b" id="cam-gal">Choose photo</button></div>`;
+    const tabs = `<div class="cam-row"><button class="cam-b ${mode === 'photo' ? 'on' : ''}" id="cam-tp">Photo</button><button class="cam-b ${mode === 'video' ? 'on' : ''}" id="cam-tv">Video (15 s max)</button></div>`;
+    box().innerHTML = `<div class="cam-hd"><span>Camera</span><button class="cam-b" id="cam-x">✕</button></div>${tabs}<video class="cam-v" id="cam-vid" playsinline muted autoplay></video><div class="cam-m" id="cam-msg">Allow camera access when your browser asks.</div><div class="cam-row" style="justify-content:space-between"><button class="cam-b" id="cam-flip">Flip camera</button><button class="cam-shot" id="cam-snap" aria-label="${mode === 'photo' ? 'Take picture' : 'Record video'}" style="${mode === 'video' ? 'background:#ef4444;border-color:#fff' : ''}"></button><button class="cam-b" id="cam-gal">Choose file</button></div>`;
     (document.getElementById('cam-x') as HTMLElement).onclick = closeCam;
-    (document.getElementById('cam-gal') as HTMLElement).onclick = () => pickFile(false);
-    (document.getElementById('cam-flip') as HTMLElement).onclick = () => void live(facing === 'environment' ? 'user' : 'environment');
-    const v = document.getElementById('cam-vid') as HTMLVideoElement, msg = document.getElementById('cam-msg') as HTMLElement;
-    if (!navigator.mediaDevices?.getUserMedia) { msg.innerHTML = 'Live camera is not available in this browser or page. Use the button to take or choose a photo.'; (document.getElementById('cam-snap') as HTMLElement).onclick = () => pickFile(true); return; }
+    (document.getElementById('cam-tp') as HTMLElement).onclick = () => void live(facing, 'photo');
+    (document.getElementById('cam-tv') as HTMLElement).onclick = () => void live(facing, 'video');
+    (document.getElementById('cam-gal') as HTMLElement).onclick = () => { if (mode === 'photo') pickFile(false); else pickVideo(false); };
+    (document.getElementById('cam-flip') as HTMLElement).onclick = () => void live(facing === 'environment' ? 'user' : 'environment', mode);
+    const v = document.getElementById('cam-vid') as HTMLVideoElement, msg = document.getElementById('cam-msg') as HTMLElement, snap = document.getElementById('cam-snap') as HTMLElement;
+    const native = () => { snap.onclick = () => (mode === 'photo' ? pickFile(true) : pickVideo(true)); };
+    const help = (why: string) => { msg.innerHTML = `${why}<br>Tap the big button to use your device's own camera app instead, or <a href="#" id="cam-retry" style="color:#34d399">try again</a>.<br><span class="cam-m">To allow it here: tap the camera or lock icon in the address bar, set Camera${mode === 'video' ? ' and Microphone' : ''} to Allow, then try again. In Brave, also open Settings → Site settings if it stays blocked.</span>`; const r = document.getElementById('cam-retry'); if (r) r.onclick = e => { e.preventDefault(); void live(facing, mode); }; native(); };
+    if (!navigator.mediaDevices?.getUserMedia) { help('Live camera is not available in this browser or page.'); return; }
+    try { const st = await navigator.permissions?.query({ name: 'camera' as PermissionName }); if (st && st.state === 'denied') { help('Camera access is blocked for this site.'); /* still try below: some browsers re-prompt */ } } catch { /* not supported */ }
+    let withAudio = mode === 'video';
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 3000 }, height: { ideal: 3000 } }, audio: false });
-      v.srcObject = stream; await v.play().catch(() => { /* */ }); msg.textContent = facing === 'user' ? 'Front camera' : 'Back camera';
+      const vc = { facingMode: { ideal: facing }, width: { ideal: mode === 'video' ? 1280 : 3000 }, height: { ideal: mode === 'video' ? 720 : 3000 } };
+      try { stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: withAudio }); }
+      catch (e1: any) { if (withAudio && /NotAllowed|NotFound|Overconstrained|Permission/i.test(String(e1?.name))) { withAudio = false; stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: false }); } else throw e1; }
+      v.srcObject = stream; await v.play().catch(() => { /* */ }); msg.textContent = (facing === 'user' ? 'Front camera' : 'Back camera') + (mode === 'video' ? (withAudio ? ' · sound on' : ' · no microphone (video only)') : '');
       if (facing === 'user') v.style.transform = 'scaleX(-1)';
-    } catch (e: any) { msg.innerHTML = `Could not open the camera (${String(e?.name || 'blocked')}). Allow camera access in your browser, or use the button to take or choose a photo.`; (document.getElementById('cam-snap') as HTMLElement).onclick = () => pickFile(true); return; }
-    (document.getElementById('cam-snap') as HTMLElement).onclick = () => {
-      const c = document.createElement('canvas'); c.width = v.videoWidth || 1280; c.height = v.videoHeight || 720; const x = c.getContext('2d')!;
-      if (facing === 'user') { x.translate(c.width, 0); x.scale(-1, 1); } x.drawImage(v, 0, 0, c.width, c.height);
-      c.toBlob(b => { if (b) void edit(new File([b], 'camera-' + Date.now() + '.jpg', { type: 'image/jpeg' })); }, 'image/jpeg', 0.95);
+    } catch (e: any) { const n = String(e?.name || ''); help(/NotFound|DevicesNotFound/i.test(n) ? 'No camera was found on this device.' : /NotReadable|TrackStart/i.test(n) ? 'The camera is being used by another app. Close it and try again.' : 'Could not open the camera (' + (n || 'blocked') + ').'); return; }
+    if (mode === 'photo') {
+      snap.onclick = () => {
+        const c = document.createElement('canvas'); c.width = v.videoWidth || 1280; c.height = v.videoHeight || 720; const x = c.getContext('2d')!;
+        if (facing === 'user') { x.translate(c.width, 0); x.scale(-1, 1); } x.drawImage(v, 0, 0, c.width, c.height);
+        c.toBlob(b => { if (b) void edit(new File([b], 'camera-' + Date.now() + '.jpg', { type: 'image/jpeg' })); }, 'image/jpeg', 0.95);
+      };
+      return;
+    }
+    // ---- video: record up to 15 s, sized to stay under 5 MB ----
+    let rec: MediaRecorder | null = null, chunks: Blob[] = [], tmr: any = 0, t0 = 0;
+    const mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => (window as any).MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+    const fin = () => { clearInterval(tmr); const type = (rec && rec.mimeType) || mime || 'video/webm'; const blob = new Blob(chunks, { type }); stop(); void review(new File([blob], 'clip-' + Date.now() + (/mp4/.test(type) ? '.mp4' : '.webm'), { type: type.split(';')[0] })); };
+    snap.onclick = () => {
+      if (rec && rec.state === 'recording') { rec.stop(); return; }
+      if (!(window as any).MediaRecorder) { help('This browser cannot record video here.'); return; }
+      try { rec = new MediaRecorder(stream!, { ...(mime ? { mimeType: mime } : {}), videoBitsPerSecond: 2_000_000, audioBitsPerSecond: 96_000 }); } catch { help('This browser cannot record video here.'); return; }
+      chunks = []; rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); }; rec.onstop = fin; rec.start(500); t0 = Date.now(); snap.style.borderRadius = '12px';
+      tmr = setInterval(() => { const s = (Date.now() - t0) / 1000; msg.textContent = `● Recording ${s.toFixed(1)} / 15 s · tap to stop`; if (s >= 15 && rec && rec.state === 'recording') rec.stop(); }, 100);
     };
   }
-
+  function pickVideo(capture: boolean) { const i = document.createElement('input'); i.type = 'file'; i.accept = 'video/*'; if (capture) i.setAttribute('capture', 'environment'); i.onchange = () => { const f = i.files && i.files[0]; if (f) void review(f); }; i.click(); }
+  async function review(f: File) {
+    stop(); const url = URL.createObjectURL(f);
+    box().innerHTML = `<div class="cam-hd"><span>Your video</span><button class="cam-b" id="cam-x">✕</button></div><video class="cam-v" id="cam-rv" src="${url}" controls playsinline></video><div class="cam-m" id="cam-info">${(f.size / 1048576).toFixed(1)} MB. Videos are limited to 15 seconds.</div><div class="cam-row" style="justify-content:space-between"><button class="cam-b" id="cam-retake">Retake</button><button class="cam-b pri" id="cam-use">Use this video</button></div>`;
+    (document.getElementById('cam-x') as HTMLElement).onclick = () => { URL.revokeObjectURL(url); closeCam(); };
+    (document.getElementById('cam-retake') as HTMLElement).onclick = () => { URL.revokeObjectURL(url); void live('environment', 'video'); };
+    (document.getElementById('cam-use') as HTMLElement).onclick = async () => {
+      const b = document.getElementById('cam-use') as HTMLButtonElement; b.disabled = true; b.textContent = 'Preparing…';
+      try { const out = await prepareVideo(f, m => { b.textContent = m; }); URL.revokeObjectURL(url); closeCam(); await onDone(out); }
+      catch (e: any) { toast(String(e?.message || e), true); b.disabled = false; b.textContent = 'Use this video'; }
+    };
+  }
   async function edit(file: File) {
     stop();
     let src: HTMLCanvasElement;
