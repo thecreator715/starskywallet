@@ -244,7 +244,10 @@ export async function load(keepSelection = true) {
     if (!keepSelection || !DX.markets.find((m: M.Market) => m.id === DX.mid)) {
       const last = lastPair();
       const native = DX.markets.filter((m: M.Market) => isNative(m.quote));
-      if (last && DX.markets.find((m: M.Market) => m.id === last.id)) { DX.mid = last.id; DX.inv = !!last.inv; DX.flipped = last.fl; }
+      const lusd = DX.markets.find((m: M.Market) => (isNative(m.base) && Mg.isUsdKey(akey(m.quote))) || (isNative(m.quote) && Mg.isUsdKey(akey(m.base))));
+      const phone = (() => { try { return window.matchMedia('(pointer:coarse)').matches || window.innerWidth <= 820; } catch { return false; } })();
+      if (phone && lusd && !(DX as any).picked) { DX.mid = lusd.id; DX.inv = false; DX.flipped = false; }
+      else if (last && DX.markets.find((m: M.Market) => m.id === last.id)) { DX.mid = last.id; DX.inv = !!last.inv; DX.flipped = last.fl; }
       else { DX.mid = (native[0] || DX.markets[0]).id; DX.inv = false; }
     }
     if (!DX.flipped) orient();
@@ -388,6 +391,7 @@ function renderHead() {
     setHtml('dx_head', `<span class="mut">${esc(DX.err || 'Loading markets…')}</span>`);
     return;
   }
+  { const cur = document.querySelector('#dx_head .dxsel'); if (cur && document.activeElement === cur) return; }   // never rebuild the pair list while it is open (price ticks used to close it)
   const opts = DX.markets.map((x: M.Market) => `<option value="${esc(x.id)}" ${x.id === DX.mid ? 'selected' : ''}>${esc(x.id === DX.mid ? m.label : x.label)}${x.pool ? '' : ' (book)'}</option>`).join('');
   const p = livePrice();
   const d24 = DX.pc ? DX.pc.ch['24h'] : null;
@@ -954,7 +958,7 @@ export const api: any = {
     return m ? m.id : '';
   },
   pick(id: string) {
-    DX.mid = id;
+    (DX as any).picked = true; DX.mid = id;
     DX.inv = false;
     DX.flipped = false;
     orient();
