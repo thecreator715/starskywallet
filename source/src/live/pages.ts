@@ -2,7 +2,7 @@
 import * as xrpl from 'xrpl';
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
-import { Asset, NATIVE, akey, amtNum, amtTx, dur, esc, fmt, fromKey, hexName, isNative, nameToCur, pctHtml, short, usd, ago, rippleToMs, assetOf } from './util.ts';
+import { Asset, NATIVE, akey, amtNum, amtTx, dur, esc, fmt, fromKey, hexName, isNative, nameToCur, pctHtml, short, usd, ago, rippleToMs, assetOf, tkLetters } from './util.ts';
 import * as TK from './tokens.ts';
 import { loadXAssets } from './xassets.ts';
 import { cached, header, info, ledgerAgo, pool as poolMap, req, secPerLedger, tryReq, WINDOWS } from './chain.ts';
@@ -373,7 +373,7 @@ const srt = <T,>(a: T[], get: (x: T) => any, fav: (x: T) => boolean) => {
 };
 const coinIcon = (key: string, name: string) => {
   const ic = TK.iconOf(key);
-  return ic ? `<img class="coinimg" src="${ic}" alt="">` : `<i>${esc(name.slice(0, 2).toUpperCase())}</i>`;
+  return ic ? `<img class="coinimg" src="${ic}" alt="">` : `<i>${tkLetters(name)}</i>`;
 };
 export function assetsShell() {
   const tabs = [['all', 'All'], ['dollar', 'Dollar tokens'], ['bridged', 'Bridged'], ['others', 'Others'], ['lp', 'LP tokens'], ['pools', 'All pools'], ['fav', '★ Favorites']];

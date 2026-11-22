@@ -88,3 +88,9 @@ export const dur = (sec: number) => {
 export const short = (s: string, a = 6, b = 4) => (s && s.length > a + b + 1 ? s.slice(0, a) + '…' + s.slice(-b) : s || '');
 export const RIPPLE_EPOCH = 946684800;
 export const rippleToMs = (t: number) => (t + RIPPLE_EPOCH) * 1000;
+
+/** token avatar letters: up to 6 characters, sized so they always fit inside the circle */
+export const tkLetters = (name: string): string => {
+  const t = String(name || '').replace(/^\$/, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 6) || '?';
+  return `<span class="tkl tkl${Math.min(6, t.length)}">${t}</span>`;
+};

@@ -1379,3 +1379,9 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 .wcard .mono{overflow-wrap:anywhere;word-break:break-all;min-width:0}
 .wcard button{white-space:nowrap}
 @media(max-width:640px){.wcard .row .grow{flex-basis:100%;height:0}.wcard .row button.sm{flex:1 1 auto}}
+
+/* token avatar letters: 1-6 characters always fit the circle */
+.tkl{display:block;max-width:100%;white-space:nowrap;overflow:hidden;text-align:center;letter-spacing:-.03em;line-height:1;font-weight:800}
+.tkl1,.tkl2{font-size:1em}.tkl3{font-size:.78em}.tkl4{font-size:.6em}.tkl5{font-size:.5em}.tkl6{font-size:.43em}
+.dxav2,.dxav,.dxchip,.coinimg+i{overflow:hidden}
+.dxchip .tkl{font-size:inherit}.dxchip .tkl4{font-size:.7em}.dxchip .tkl5{font-size:.6em}.dxchip .tkl6{font-size:.52em}
