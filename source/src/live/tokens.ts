@@ -157,8 +157,9 @@ interface Form {
   tf: string;
   nf: boolean;
   pay: string;
+  gen: string;
 }
-const F0 = (): Form => ({ name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false, x: '', tg: '', dc: '', cat: '', tf: '', nf: false, pay: 'native' });
+const F0 = (): Form => ({ name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false, x: '', tg: '', dc: '', cat: '', tf: '', nf: false, pay: 'native', gen: '' });
 let F: Form = F0();
 /** what the $100 creation fee can be paid in: LUMA, or a LUMA ecosystem token minted from the Genesis wallet (never a token made in Starsky) */
 interface FeeOpt { key: string; sym: string; cur?: string; iss?: string; px: number; need: number; have: number; ok: boolean; why: string }
@@ -210,6 +211,7 @@ export async function openCreate() {
   if (!OPTS.some(o => o.key === F.pay && o.ok)) F.pay = (OPTS.find(o => o.ok) || OPTS[0] || { key: 'native' }).key;
   ctx.page(`<h2>Create a token</h2>
     <p class="mut" style="margin:.2rem 0 .6rem;font-size:.85rem">Creates a new issuer wallet for your token, issues the supply to <b>this wallet</b>, and records the token on the network so it appears under Others with trading and pools.</p>
+    <div class="lpcard" style="margin:.5rem 0"><div class="k">Network for this token</div><div class="row" style="gap:.4rem;margin:.4rem 0">${[['main', 'LUMA Mainnet'], ['test', 'LUMA Testnet']].map(([id, nm]) => `<button class="sm grow ${ctx.netKey() === id ? 'pri acc' : ''}" onclick="window.tk.net('${id}')">${nm}</button>`).join('')}</div><div class="mut" style="font-size:.74rem">The token is created on the network selected here, ${ctx.netKey() === 'test' ? 'the Testnet (practice coins, no real value)' : 'the Mainnet (real LUMA)'}. A token exists only on the network it was made on.</div></div>
     <div class="fgrid">
       <input id="tk_name" placeholder="Token name (e.g. Sun Coin)" maxlength="24" value="${esc(F.name)}">
       <input id="tk_sym" placeholder="Symbol (3 letters, or up to 20)" maxlength="20" value="${esc(F.sym)}">
@@ -220,7 +222,7 @@ export async function openCreate() {
     <div class="row" style="margin-top:.6rem;gap:.8rem;align-items:center"><div id="tk_prev" class="tkicon">${ICON ? `<img src="${ICON.url}">` : '<span class="mut">icon</span>'}</div>
       <div><input id="tk_file" type="file" accept="image/png,image/jpeg,image/webp" onchange="window.tk.icon(this)"><div id="tk_ist" class="mut" style="font-size:.75rem">Uploaded to the network picture storage (IPFS) like Social pictures, plus a tiny copy stored on the ledger so the icon shows everywhere, even if storage is offline.</div></div></div>
     <label class="mut" style="display:block;margin:.6rem 0;font-size:.82rem"><input id="tk_lock" type="checkbox" ${F.lock ? 'checked' : ''}> Lock the supply forever (disables the issuer key so nobody can ever issue more. Cannot be undone.)</label>
-    ${g ? '' : `<div class="lpcard" style="margin:.5rem 0"><div class="k">Genesis wallet (receives the creation fee)</div><input id="tk_gen" style="width:100%" placeholder="Genesis address (L… / T…)" value="${esc(cand ? ctx.showL(cand) : '')}"><div class="mut" style="font-size:.74rem">${cand ? 'Filled with the largest holder of the native coin, which is normally the genesis wallet. Check it, it is saved for this network.' : 'Paste the genesis address from the control panel.'}</div></div>`}
+    ${g ? '' : `<div class="lpcard" style="margin:.5rem 0"><div class="k">Genesis wallet (receives the creation fee)</div><input id="tk_gen" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" style="width:100%" placeholder="Genesis address (L… / T…)" value="${esc(F.gen || (cand ? ctx.showL(cand) : ''))}" oninput="window.tk.gen(this.value)"><div class="mut" style="font-size:.74rem">${cand ? 'Filled with the largest holder of the native coin, which is normally the genesis wallet. Check it, it is saved for this network.' : 'Paste the genesis address from the control panel.'}</div></div>`}
     <div class="lpcard" style="margin-top:.6rem"><div class="k">More options</div>
       <div class="fgrid" style="margin-top:.4rem">
         <input id="tk_x" placeholder="X / Twitter link (optional)" value="${esc(F.x)}"><input id="tk_tg" placeholder="Telegram link (optional)" value="${esc(F.tg)}">
@@ -239,7 +241,7 @@ export async function openCreate() {
     <div class="row"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" id="tk_go" onclick="window.tk.create(this)">Create token</button></div>`, 'Create a token');
 }
 const keepForm = () => {
-  F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked, x: val('tk_x'), tg: val('tk_tg'), dc: val('tk_dc'), cat: val('tk_cat'), tf: val('tk_tf'), nf: !!$('tk_nf')?.checked, pay: val('tk_pay') || F.pay };
+  F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked, x: val('tk_x'), tg: val('tk_tg'), dc: val('tk_dc'), cat: val('tk_cat'), tf: val('tk_tf'), nf: !!$('tk_nf')?.checked, pay: val('tk_pay') || F.pay, gen: val('tk_gen') || F.gen };
 };
 async function bigBlob(file: File): Promise<Blob> {
   const bmp = await createImageBitmap(file), k = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
@@ -372,4 +374,4 @@ export function openPool(key: string) {
     set('cp_i2', ctx.showL(a[1]));
   }, 300);
 }
-export const tkApi: any = { openCreate, create, icon: pickIcon, openPool };
+export const tkApi: any = { openCreate, create, icon: pickIcon, openPool, gen: (v: string) => { F.gen = v; }, net: (id: string) => { keepForm(); F.gen = ''; (window as any).switchNet?.(id); setTimeout(() => { void openCreate(); }, 1500); } };
