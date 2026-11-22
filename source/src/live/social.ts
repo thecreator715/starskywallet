@@ -1169,7 +1169,7 @@ export const sc: any = {
       case 'report': if (need()) reportModal(id); break;
       case 'react': if (need()) reactModal(id); break;
       case 'edit': if (need()) editPostModal(id); break;
-      case 'mintnft': { const p = IX.posts.get(id), u = p && p.m.find(x => /^ipfs:\/\//.test(x)); if (!p || !u || !need()) break; ctx.toast('Loading your picture…'); fetch(safeUrl(u)).then(r => r.blob()).then(bl => mintFromImage(new File([bl], 'post-' + String(id).slice(0, 6) + '.' + ((bl.type.split('/')[1] || 'png').replace('+xml', '')), { type: bl.type }), (p.t || '').slice(0, 40) || 'My NFT')).catch(() => ctx.toast('Could not load the picture to mint it.', true)); break; }
+      case 'mintnft': { const p = IX.posts.get(id), u = p && p.m.find(x => /^ipfs:\/\//.test(x)); if (!p || !u || !need()) break; ctx.toast('Loading your picture…'); fetch(safeUrl(u)).then(r => r.blob()).then(bl => mintFromImage(new File([bl], 'post-' + String(id).slice(0, 6) + '.' + ((bl.type.split('/')[1] || 'png').replace('+xml', '')), { type: bl.type }), String((p as any).x || '').slice(0, 40) || 'My NFT')).catch(() => ctx.toast('Could not load the picture to mint it.', true)); break; }
       case 'pin': if (need() && !S.busy) void act({ t: 'pin', ref: id }, 'Pinning…', 'Pinned to your profile'); break;
       case 'unpin': if (need() && !S.busy) void act({ t: 'pin', ref: '' }, 'Unpinning…', 'Unpinned'); break;
       case 'del': if (need() && !S.busy && confirm('Delete this post? It stays in the chain history but disappears from LUMA Social.')) void act({ t: 'del', ref: id }, 'Deleting…', 'Deleted'); break;
