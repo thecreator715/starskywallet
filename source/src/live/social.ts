@@ -151,7 +151,7 @@ function updCard() { const el = document.getElementById('sc-card'); if (el) el.i
 const ytId = (t: string): string => { const m = String(t || '').match(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^\s#]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i); return m ? m[1] : ''; };
 const ytCard = (id: string): string => `<div class="sc-yt" data-yt="${id}"><button class="sc-ytb" data-act="ytplay" data-v="${id}" aria-label="Play video"><img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'"><span class="sc-ytp"><svg viewBox="0 0 24 24" width="30" height="30"><path d="M8 5v14l11-7z" fill="#fff"/></svg></span><span class="sc-ytl">YouTube</span></button></div>`;
 const playing = (): boolean => !!document.querySelector('#sc .sc-yt iframe');
-function paintSoft() { if (!playing() && S.view.k !== 'editprof') paint(); }
+function paintSoft() { if (!playing() && S.view.k !== 'editprof' && !PP.isOpen()) paint(); }
 
 function rebuild() {
   const ix = blank(); EV.sort((x, y) => x.l - y.l || x.i - y.i);
@@ -808,7 +808,7 @@ function paint() {
   const nb = (id: string, icon: string, label: string, extra = '', cls = '') => `<button class="${cls}" data-act="nav" data-v="${id}" aria-label="${label}">${ic(icon, 21)}<span class="t">${label}</span>${extra}</button>`;
   root.innerHTML = `<div class="sc-rail"><div class="sc-brand">${LOGO}<span>LUMA Social<small>on-chain, owned by you</small></span></div>${miniProfile()}<div class="sc-nav">${nb('home', 'home', 'Home', '', on('home'))}${nb('explore', 'search', 'Explore', '', on('explore') || on('search') || on('tag'))}${nb('notif', 'bell', 'Notifications', un ? `<span class="sc-badge">${un > 99 ? '99+' : un}</span>` : '', on('notif'))}${nb('top', 'zap', 'Top posts', '', on('top'))}${nb('bm', 'bm', 'Bookmarks', '', on('bm'))}${nb('settings', 'more', 'Settings', '', on('settings'))}${nb('market', 'shop', 'Marketplace', '', on('market') || on('listing'))}${nb('dash', 'chart', 'Creator', '', on('dash'))}${nb('me', 'user', 'Profile', '', v.k === 'profile' && v.a === me() ? 'on' : '')}${nb('compose', 'pen', 'Post', '', 'sc-big')}</div></div>
   <div class="sc-col">${POL.banner ? `<div class="sc-note">${esc(POL.banner)}</div>` : ''}${S.hubErr ? `<div class="sc-warn">${esc(S.hubErr)}</div>` : ''}${S.err ? `<div class="sc-warn">${esc(S.err)}</div>` : ''}${center()}</div>${sidebar()}`;
-  const ta = document.getElementById('sc-txt') as HTMLTextAreaElement | null; if (ta) grow(ta); void fillNft(); { const st = SET(); root.style.fontSize = st.fs + '%'; root.classList.toggle('sc-compact', st.compact); } vwObserve();
+  const ta = document.getElementById('sc-txt') as HTMLTextAreaElement | null; if (ta) grow(ta); void fillNft(); { const st = SET(); root.style.fontSize = st.fs + '%'; root.classList.toggle('sc-compact', st.compact); } vwObserve(); PP.restore();
   if (kid) { const el = document.getElementById(kid) as HTMLInputElement | null; if (el) { el.focus(); try { if (ss != null) el.setSelectionRange(ss, ss); } catch {} } }
 }
 const grow = (t: HTMLTextAreaElement) => { t.style.height = 'auto'; t.style.height = Math.min(360, Math.max(64, t.scrollHeight)) + 'px'; };

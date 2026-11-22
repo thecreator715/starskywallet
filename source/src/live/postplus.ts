@@ -8,7 +8,7 @@ const esc = (s: string) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '
 const ta = () => document.getElementById('sc-txt') as HTMLTextAreaElement | null;
 const DEFKEY = 'dc6zaTOxFJmzC';
 const CATS: [string, string[]][] = [['Smileys', '😀😃😄😁😆😅😂🤣😊😇🙂😉😍🥰😘😋😎🤩🥳😏😴🤔🫡🤯😱😭😤😡🥺😬🙄'.match(/\p{Extended_Pictographic}/gu) || []], ['Hands', '👍👎👏🙌🙏💪🤝✌️🤞👌🤙👋🫶🤟👀🫰'.match(/\p{Extended_Pictographic}️?/gu) || []], ['Crypto', ['🚀', '🌕', '💎', '🔥', '💰', '📈', '📉', '🪙', '⚡', '🧠', '🐂', '🐻', '🏦', '🔒', '🛰️', '🌐']], ['Fun', '🎉🎊🎁🏆🥇🎮🎵🎧🎬🍕🍔🍻☕🌴🌈⭐✨💥💯❤️🧡💛💚💙💜🖤'.match(/\p{Extended_Pictographic}️?/gu) || []]];
-const GCATS = ['trending', 'reactions', 'funny', 'celebrate', 'money', 'crypto', 'rocket', 'mind blown', 'thumbs up', 'wow', 'lol', 'cat', 'dog', 'gaming', 'space', 'dance'];
+const GCATS = ['wave', 'hug', 'laugh', 'dance', 'clap', 'celebrate', 'cool', 'happy', 'love', 'kiss', 'cry', 'sad', 'mad', 'facepalm', 'shrug', 'no', 'surprised', 'smug', 'sleep', 'sing'];
 const FONT: Record<string, [number, number]> = { b: [0x1d5d4, 0x1d5ee], i: [0x1d608, 0x1d622], m: [0x1d670, 0x1d68a] };
 const fmtTxt = (s: string, k: string) => Array.from(s).map(c => { const [u, l] = FONT[k]; if (/[A-Z]/.test(c)) return String.fromCodePoint(u + c.charCodeAt(0) - 65); if (/[a-z]/.test(c)) return String.fromCodePoint(l + c.charCodeAt(0) - 97); return c; }).join('');
 const hist: string[] = []; let redo: string[] = [];
@@ -17,23 +17,39 @@ let panelEl: HTMLElement | null = null;
 function put(txt: string, replace = false) { const t = ta(); if (!t) return; if (replace) t.value = txt; else { const a = t.selectionStart ?? t.value.length, b = t.selectionEnd ?? a; t.value = t.value.slice(0, a) + txt + t.value.slice(b); t.selectionStart = t.selectionEnd = a + txt.length; } t.dispatchEvent(new Event('input', { bubbles: true })); t.focus(); }
 function snap() { const t = ta(); if (t && hist[hist.length - 1] !== t.value) { hist.push(t.value); if (hist.length > 60) hist.shift(); redo = []; } }
 function wrapSel(k: string) { const t = ta(); if (!t) return; snap(); const a = t.selectionStart, b = t.selectionEnd; const sel = t.value.slice(a, b); if (!sel) { h.toast('Select some text first, then pick a style.', true); return; } put(fmtTxt(sel, k)); }
-function close() { if (panelEl) { panelEl.remove(); panelEl = null; } }
-function open(title: string, body: string) { close(); const bar = document.getElementById('pp-bar'); if (!bar) return; panelEl = document.createElement('div'); panelEl.className = 'pp-pn'; panelEl.innerHTML = `<div class="pp-hd"><b>${title}</b><button class="pp-x" data-pp="close" aria-label="Close">✕</button></div>${body}`; bar.after(panelEl); }
+function close() { if (panelEl) { panelEl.remove(); panelEl = null; } curP = ''; }
+function open(title: string, body: string) { close(); curP = title; const bar = document.getElementById('pp-bar'); if (!bar) return; panelEl = document.createElement('div'); panelEl.className = 'pp-pn'; panelEl.innerHTML = `<div class="pp-hd"><b>${title}</b><button class="pp-x" data-pp="close" aria-label="Close">✕</button></div>${body}`; bar.after(panelEl); }
 const wordStats = (s: string) => { const w = (s.trim().match(/\S+/g) || []).length; return `${w} words · ${s.length} characters · ${Math.max(1, Math.round(w / 200 * 60))} sec read`; };
 // ----- GIFs (Giphy) -----
-const gkey = () => String(J('giphyKey', '') || DEFKEY);
+const gkey = () => String(J('giphyKey', '') || '');
+// Free GIFs without any account: reaction GIFs from OtakuGIFs and a search of every animated GIF on Wikimedia Commons. A personal Giphy key (optional) switches search to Giphy.
+const U = (s: string) => String(s).split('?')[0];
 async function gifLoad(reset: boolean) {
   if (G.busy || (G.end && !reset)) return; if (reset) { G.items = []; G.off = 0; G.end = false; G.err = ''; } G.busy = true; paintGifs();
   try {
-    const trend = !G.q || G.q === 'trending', url = `https://api.giphy.com/v1/gifs/${trend ? 'trending' : 'search'}?api_key=${encodeURIComponent(gkey())}&limit=24&offset=${G.off}&rating=pg-13${trend ? '' : '&q=' + encodeURIComponent(G.q)}`;
-    const r = await fetch(url, { referrerPolicy: 'no-referrer' }); if (!r.ok) throw new Error(r.status === 429 || r.status === 403 || r.status === 401 ? 'The shared GIF key is out of requests. Add your own free Giphy key (Settings under GIF) to keep searching.' : 'GIF search failed (' + r.status + ').');
-    const j = await r.json(); const d = j.data || []; for (const g of d) { const im = g.images || {}; const p = (im.fixed_height_small || im.fixed_height || {}).url; if (g.id && p) G.items.push({ u: 'https://i.giphy.com/' + g.id + '.gif', p: p.split('?')[0], t: g.title || '' }); }
-    G.off += d.length; if (d.length < 24) G.end = true;
+    const trend = !G.q || G.q === 'trending', react = GCATS.includes(G.q);
+    if (gkey() && !react) {
+      const url = `https://api.giphy.com/v1/gifs/${trend ? 'trending' : 'search'}?api_key=${encodeURIComponent(gkey())}&limit=24&offset=${G.off}&rating=pg-13${trend ? '' : '&q=' + encodeURIComponent(G.q)}`;
+      const r = await fetch(url, { referrerPolicy: 'no-referrer' }); if (!r.ok) throw new Error('Your Giphy key was refused (' + r.status + ').');
+      const j = await r.json(); const d = j.data || []; for (const g of d) { const im = g.images || {}; const p = (im.fixed_height_small || im.fixed_height || {}).url; if (g.id && p) G.items.push({ u: 'https://i.giphy.com/' + g.id + '.gif', p: U(p), t: g.title || '' }); }
+      G.off += d.length; if (d.length < 24) G.end = true;
+    } else if (react) {
+      const rs = await Promise.all(Array.from({ length: 12 }, () => fetch('https://api.otakugifs.xyz/gif?reaction=' + encodeURIComponent(G.q)).then(r => r.json()).catch(() => null)));
+      const seen = new Set(G.items.map(x => x.u)); for (const x of rs) { const u = x && x.url; if (u && !seen.has(u)) { seen.add(u); G.items.push({ u, p: u, t: G.q }); } }
+      if (!rs.some(x => x && x.url)) throw new Error('Could not reach the GIF service from this connection.');
+    } else {
+      const q = trend ? 'funny' : G.q, url = 'https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent('filemime:gif ' + q) + '&gsrnamespace=6&gsrlimit=24&gsroffset=' + G.off + '&prop=imageinfo&iiprop=url|size&iiurlwidth=240&format=json&origin=*';
+      const r = await fetch(url); if (!r.ok) throw new Error('GIF search failed (' + r.status + ').');
+      const j = await r.json(), pages: any[] = Object.values((j.query && j.query.pages) || {}); pages.sort((a, b) => (a.index || 0) - (b.index || 0));
+      for (const p of pages) { const ii = p.imageinfo && p.imageinfo[0]; if (ii && ii.url && ii.url.length <= 150 && (ii.size || 0) < 9e6) G.items.push({ u: ii.url, p: ii.thumburl || ii.url, t: String(p.title || '').replace(/^File:|\.gif$/g, '') }); }
+      const nx = j.continue && j.continue.gsroffset; if (nx != null) G.off = nx; else G.end = true; if (!pages.length) G.end = true;
+    }
   } catch (e: any) { G.err = String(e.message || e).includes('Failed to fetch') ? 'Could not reach the GIF service from this connection.' : String(e.message || e); }
   G.busy = false; paintGifs();
 }
 function paintGifs() { const el = document.getElementById('pp-gifs'); if (!el) return; el.innerHTML = (G.items.map((g, i) => `<button class="pp-g" data-pp="gifpick" data-i="${i}" title="${esc(g.t)}"><img src="${esc(g.p)}" alt="${esc(g.t)}" loading="lazy" referrerpolicy="no-referrer"></button>`).join('') || (G.busy ? '' : '<div class="sc-m">No GIFs found.</div>')) + (G.busy ? '<div class="sc-m" style="grid-column:1/-1">Searching…</div>' : '') + (G.err ? `<div class="sc-warn" style="grid-column:1/-1">${esc(G.err)}</div>` : '') + (!G.end && !G.busy && G.items.length ? '<button class="sc-btn sm ghost" data-pp="gifmore" style="grid-column:1/-1">Load more</button>' : ''); }
-function gifPanel() { open('GIFs', `<div class="sc-row" style="gap:6px"><input class="sc-in" id="pp-gq" placeholder="Search a big library of GIFs" value="${G.q === 'trending' ? '' : esc(G.q)}"><button class="sc-btn sm" data-pp="gifgo">Search</button></div><div class="pp-chips">${GCATS.map(c => `<button class="pp-chip ${G.q === c ? 'on' : ''}" data-pp="gifcat" data-v="${c}">${c}</button>`).join('')}</div><div id="pp-gifs" class="pp-gr"></div><div class="sc-m" style="margin-top:6px">Powered by GIPHY · <a class="sc-l" data-pp="gifkey">use my own key</a> · or paste any .gif link in the picture box</div>`); if (!G.items.length) void gifLoad(true); else paintGifs(); }
+function gifPanel() { open('GIFs', `<div class="sc-row" style="gap:6px"><input class="sc-in" id="pp-gq" placeholder="Search GIFs (cat, dance, space…)" value="${G.q === 'trending' ? '' : esc(G.q)}"><button class="sc-btn sm" data-pp="gifgo">Search</button></div><div class="pp-chips">${GCATS.map(c => `<button class="pp-chip ${G.q === c ? 'on' : ''}" data-pp="gifcat" data-v="${c}">${c}</button>`).join('')}</div><div id="pp-gifs" class="pp-gr"></div><div class="sc-m" style="margin-top:6px">Free, no account needed. Tap a mood for reaction GIFs, or search any word. <a class="sc-l" data-pp="gifkey">Use my own Giphy key</a> for the big Giphy library.</div>`); if (!G.items.length) void gifLoad(true); else paintGifs(); }
+let curP = '';
 function emojiPanel(q = '') { const rec: string[] = J('recent', []); const all = CATS.flatMap(c => c[1]); const list = q ? all.filter(e => e.includes(q)) : []; open('Emoji', `<input class="sc-in" id="pp-eq" placeholder="Type or paste an emoji to filter" value="${esc(q)}">${rec.length ? `<div class="sc-m">Recent</div><div class="pp-em">${rec.map(e => `<button data-pp="em" data-v="${e}">${e}</button>`).join('')}</div>` : ''}${q ? `<div class="pp-em">${list.map(e => `<button data-pp="em" data-v="${e}">${e}</button>`).join('')}</div>` : CATS.map(c => `<div class="sc-m">${c[0]}</div><div class="pp-em">${c[1].map(e => `<button data-pp="em" data-v="${e}">${e}</button>`).join('')}</div>`).join('')}`); }
 function draftsPanel() { const d: { t: string; at: number }[] = J('drafts', []); open('Saved drafts', `<button class="sc-btn sm" data-pp="dsave">Save current draft</button>${d.length ? d.map((x, i) => `<div class="pp-it"><div class="pp-tx">${esc(x.t.slice(0, 140))}</div><div class="sc-row" style="gap:6px"><button class="sc-btn sm ghost" data-pp="duse" data-i="${i}">Use</button><button class="sc-btn sm ghost" data-pp="ddel" data-i="${i}">Delete</button></div></div>`).join('') : '<div class="sc-m" style="margin-top:8px">No saved drafts yet.</div>'}`); }
 const SNIP0 = ['Gm LUMA family ☀️', 'Tips are welcome and 100% go to the creator.', 'New $LUMA update is live. Details below 👇', 'What are you building on LUMA today?'];
@@ -55,7 +71,7 @@ export function onClick(e: Event): boolean {
     case 'gifcat': G.q = v; (document.getElementById('pp-gq') as HTMLInputElement).value = v === 'trending' ? '' : v; document.querySelectorAll('.pp-chip').forEach(c => c.classList.toggle('on', (c as HTMLElement).dataset.v === v)); void gifLoad(true); break;
     case 'gifmore': G.off = G.off; void gifLoad(false); break;
     case 'gifpick': { const g = G.items[i]; if (g) { h.setMedia(g.u); close(); } break; }
-    case 'gifkey': { const k = prompt('Paste your free Giphy API key (developers.giphy.com). Leave empty to use the shared key.', String(J('giphyKey', ''))); if (k !== null) { W('giphyKey', k.trim()); G.items = []; void gifLoad(true); } break; }
+    case 'gifkey': { const k = prompt('Optional: paste your own free Giphy API key (developers.giphy.com) to search the Giphy library. Leave empty for the free built-in GIFs.', String(J('giphyKey', ''))); if (k !== null) { W('giphyKey', k.trim()); G.items = []; void gifLoad(true); } break; }
     case 'em': { snap(); put(v); const r: string[] = J('recent', []); W('recent', [v, ...r.filter(x => x !== v)].slice(0, 16)); break; }
     case 'fmt': wrapSel(v); break;
     case 'cw': snap(); { const t = ta(); if (t && !/^\[CW\]/.test(t.value)) put('[CW] ' + t.value, true); } break;
@@ -80,7 +96,11 @@ export function onClick(e: Event): boolean {
   }
   e.stopPropagation(); return true;
 }
-export function onKey(e: KeyboardEvent) { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && (e.target as HTMLElement)?.id === 'sc-txt') { e.preventDefault(); h.post(); } }
-export function onInput(e: Event) { const t = e.target as HTMLElement; if (t.id === 'pp-eq') emojiPanel((t as HTMLInputElement).value); if (t.id === 'pp-gq') { /* search on enter */ } const st = document.getElementById('pp-st'); if (st && ta()) st.textContent = wordStats(ta()!.value); }
+export function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && (e.target as HTMLElement)?.id === 'pp-gq') { e.preventDefault(); G.q = (e.target as HTMLInputElement).value.trim() || 'trending'; void gifLoad(true); return; } if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && (e.target as HTMLElement)?.id === 'sc-txt') { e.preventDefault(); h.post(); } }
+export function onInput(e: Event) { const t = e.target as HTMLElement; if (t.id === 'pp-eq') { const v = (t as HTMLInputElement).value; emojiPanel(v); const n = document.getElementById('pp-eq') as HTMLInputElement | null; if (n) { n.focus(); n.setSelectionRange(v.length, v.length); } } if (t.id === 'pp-gq') { /* search on enter */ } const st = document.getElementById('pp-st'); if (st && ta()) st.textContent = wordStats(ta()!.value); }
 export function onPaste(e: ClipboardEvent) { if ((e.target as HTMLElement)?.id !== 'sc-txt') return; const f = Array.from(e.clipboardData?.files || []).find(x => x.type.startsWith('image/')); if (f) { e.preventDefault(); void h.upload(f); } }
 export function onDrop(e: DragEvent) { if (!(e.target as HTMLElement)?.closest?.('#sc-comp')) return; const f = Array.from(e.dataTransfer?.files || []).find(x => x.type.startsWith('image/')); if (f) { e.preventDefault(); void h.upload(f); } }
+
+const REOPEN: Record<string, () => void> = { GIFs: () => gifPanel(), Emoji: () => emojiPanel(), 'Saved drafts': () => draftsPanel(), Snippets: () => snipPanel(), Schedule: () => schedPanel(), Preview: () => previewPanel(), 'Writing tools': () => morePanel() };
+export function isOpen() { return !!document.querySelector('.pp-pn'); }
+export function restore() { const w = curP; if (w && !document.querySelector('.pp-pn') && document.getElementById('pp-bar') && REOPEN[w]) { REOPEN[w](); } }
