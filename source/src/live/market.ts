@@ -348,6 +348,7 @@ export interface RangeDef {
   candles: number;
 }
 export const RANGES: RangeDef[] = [
+  { k: '1m', label: '1m', sec: 60, candles: 12 },   // 5-second candles (a ledger closes every 3 to 5 seconds)
   { k: '5m', label: '5m', sec: 300, candles: 30 },
   { k: '15m', label: '15m', sec: 900, candles: 45 },
   { k: '30m', label: '30m', sec: 1800, candles: 60 },
