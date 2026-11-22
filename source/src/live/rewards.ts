@@ -46,7 +46,7 @@ const pend = () => { const d = S.d; if (!d || !d.ok || !d.exists) return 0; retu
 const f8 = (n: number) => (Number(n) || 0).toLocaleString('en', { minimumFractionDigits: 8, maximumFractionDigits: 8 });
 const dt = () => Math.max(0, (Date.now() - S.at) / 1000);
 const earnTok = (r: any) => (r.earnedTok || 0) + (r.perDayTok || 0) / 86400 * dt();
-const canNow = (r: any, c: any) => c.open && earnTok(r) * r.priceLuma - Math.min(c.fee, earnTok(r) * r.priceLuma) >= c.minNet && earnTok(r) * r.priceLuma > c.fee;
+const canNow = (r: any, c: any) => !!c.open && earnTok(r) > 0;
 export function shell() { return `<div id="rw" class="grid"><div class="card c12"><div class="k">Rewards</div><div class="muted" style="margin-top:.4rem">Loading…</div></div></div>`; }
 
 function paint() {
@@ -96,7 +96,7 @@ function paint() {
     <div class="card c6"><div class="k">How rewards work</div><ul class="muted" style="margin:.5rem 0 0 1.1rem;line-height:1.6">
       <li>Every token on the LUMA network that has a price earns on its balance: LUMA ${fmt(c.apyLuma, 0)}% a year, every other token ${fmt(c.apyOther, 0)}%.</li>
       <li>Rewards are worth the token's value in LUMA and are paid in LUMA, from the genesis wallet.</li>
-      <li>Collect as many times as you like. Each collect costs ${fmt(c.fee, 2)} LUMA, taken from what you collect.</li>
+      <li>Collect as many times as you like. Each collect costs ${fmt(c.fee, 2)} LUMA, taken from what you collect (waived on tiny amounts).</li>
       <li>Only tokens you really held count: each period uses the smaller of your balance at the start and now.</li>
       <li>You prove the wallet by signing a message with its own key. Nothing else leaves your wallet.</li>
     </ul></div>`;

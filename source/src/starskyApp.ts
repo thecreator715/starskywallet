@@ -1874,7 +1874,7 @@ export function renderApp() {
         </div>
 
 
-        <div id="netstrip"><div class="nsrow"><input id="gs" placeholder="Search a transaction hash or wallet address" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')window.globalSearch(this.value)"><button class="sm pri" onclick="window.globalSearch(document.getElementById('gs').value)">Search</button></div><div id="nsstats"></div></div>
+        ${st.tab === 'home' || st.tab === 'wallets' ? `<div id="netstrip"><div class="nsrow"><input id="gs" placeholder="Search a transaction hash or wallet address" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')window.globalSearch(this.value)"><button class="sm pri" onclick="window.globalSearch(document.getElementById('gs').value)">Search</button></div><div id="nsstats"></div></div>` : ''}
         <div id="banner"></div>
         <div id="view">${body}</div>
       </main>
