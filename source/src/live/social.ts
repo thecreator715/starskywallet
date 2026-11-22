@@ -97,6 +97,42 @@ function spark(h: number[], up: boolean) {
   const pts = a.map((v, i) => `${(i / (a.length - 1) * W).toFixed(1)},${(H - 4 - ((v - mn) / dy) * (H - 10)).toFixed(1)}`);
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}" aria-hidden="true"><defs><linearGradient id="spg${up ? 'u' : 'd'}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".35"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs><polygon points="0,${H} ${pts.join(' ')} ${W},${H}" fill="url(#spg${up ? 'u' : 'd'})"/><polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
 }
+
+// ---------- autocomplete while typing: $tokens (with price), @handles, #tags ----------
+let SG: { items: { ins: string; html: string }[]; i: number; from: number; to: number } | null = null;
+function sugClose() { SG = null; document.getElementById('sc-sug')?.remove(); }
+function sugPaint() {
+  const comp = document.getElementById('sc-comp'); if (!comp || !SG) { sugClose(); return; }
+  let el = document.getElementById('sc-sug'); if (!el) { el = document.createElement('div'); el.id = 'sc-sug'; comp.style.position = 'relative'; comp.appendChild(el); }
+  el.innerHTML = SG.items.map((x, n) => `<button type="button" class="sc-sgi ${n === SG!.i ? 'on' : ''}" data-n="${n}">${x.html}</button>`).join('');
+  el.onmousedown = e => { const b = (e.target as HTMLElement).closest('.sc-sgi') as HTMLElement | null; if (b) { e.preventDefault(); sugPick(Number(b.dataset.n)); } };
+}
+function sugPick(n: number) {
+  const ta = document.getElementById('sc-txt') as HTMLTextAreaElement | null; if (!ta || !SG || !SG.items[n]) return;
+  const ins = SG.items[n].ins + ' '; ta.value = ta.value.slice(0, SG.from) + ins + ta.value.slice(SG.to); const c = SG.from + ins.length; ta.setSelectionRange(c, c); ta.focus(); sugClose();
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function sugUpdate(ta: HTMLTextAreaElement) {
+  const pos = ta.selectionStart || 0, m = /([$@#])([A-Za-z0-9_]{0,15})$/.exec(ta.value.slice(0, pos));
+  if (!m || (m.index > 0 && /[A-Za-z0-9_]/.test(ta.value[m.index - 1]))) { sugClose(); return; }
+  const k = m[1], q = m[2].toLowerCase(), items: { ins: string; html: string }[] = [];
+  if (k === '$') {
+    void loadPrices();
+    const seen = new Set<string>(), keys = Object.keys(PX); if (!keys.some(x => x.toUpperCase() === 'LUMA')) keys.unshift('LUMA');
+    for (const sym of keys.sort((a, b) => (a.toUpperCase() === 'LUMA' ? -1 : b.toUpperCase() === 'LUMA' ? 1 : (PX[b]?.usd || 0) - (PX[a]?.usd || 0)))) {
+      const u = sym.toUpperCase(); if (seen.has(u) || !u.toLowerCase().startsWith(q) || !/^[A-Za-z][A-Za-z0-9]{1,9}$/.test(sym)) continue; seen.add(u); const px = PX[sym];
+      items.push({ ins: '$' + u, html: `<b class="sc-cash">$${esc(u)}</b><span class="sc-m">${px ? usdFmt(px.usd) : 'LUMA network token'}</span>${px ? `<span style="margin-left:auto;color:${px.chg >= 0 ? '#34d399' : '#f87171'}">${px.chg >= 0 ? '+' : ''}${(px.chg || 0).toFixed(2)}%</span>` : ''}` });
+      if (items.length >= 7) break;
+    }
+  } else if (k === '@') {
+    for (const [h, a] of IX.owner) { if (!h.startsWith(q)) continue; items.push({ ins: '@' + h, html: `<b>@${esc(h)}</b><span class="sc-m">${esc(nameOf(a))}</span>` }); if (items.length >= 7) break; }
+  } else {
+    const cnt = new Map<string, number>(); for (const id of IX.order) { const p = IX.posts.get(id); if (p && !p.del) for (const t of tagsIn(p.x)) cnt.set(t, (cnt.get(t) || 0) + 1); }
+    for (const [t, n] of Array.from(cnt).sort((a, b) => b[1] - a[1])) { if (!t.slice(1).startsWith(q)) continue; items.push({ ins: t, html: `<b class="sc-l">${esc(t)}</b><span class="sc-m">${n} post${n === 1 ? '' : 's'}</span>` }); if (items.length >= 7) break; }
+  }
+  if (!items.length) { sugClose(); return; }
+  SG = { items, i: 0, from: m.index, to: pos }; sugPaint();
+}
 function priceCard(tagTxt: string, opts: { close?: boolean } = {}): string {
   const f = pxFor(tagTxt); if (!f) return ''; const up = f.p.chg >= 0, nm = f.sym;
   return `<div class="sc-pc" data-act="tag" data-v="$${esc(nm.toLowerCase())}"><span class="sc-pcl" style="background:linear-gradient(135deg,hsl(${hue(nm)} 70% 50%),hsl(${(hue(nm) + 60) % 360} 70% 38%))">${esc(nm[0])}</span><div class="sc-pci"><b>${esc(nm)}</b><div><span class="sc-m">${esc(nm)}</span> <b>${usdFmt(f.p.usd)}</b> <span style="color:${up ? '#34d399' : '#f87171'};font-weight:600">${up ? '+' : ''}${f.p.chg.toFixed(2)}%</span></div></div><div class="sc-pcs">${spark(f.p.hist, up)}</div>${opts.close ? `<span class="sc-pcb"><button class="sc-ib" data-act="tag" data-v="$${esc(nm.toLowerCase())}" title="Open">${ic('expand', 16)}</button><button class="sc-ib" data-act="pcx" data-v="${esc(nm)}" title="Remove card">${ic('x', 16)}</button></span>` : ''}</div>`;
@@ -360,6 +396,7 @@ const CSS = `
 .sc-nftat{display:flex;gap:12px;align-items:center;border:1px solid rgba(139,92,246,.4);border-radius:14px;padding:8px;margin:8px 0;background:rgba(139,92,246,.08)}.sc-nftat img{width:56px;height:56px;border-radius:10px;object-fit:cover}.sc-nftat>div{flex:1;min-width:0}
 .sc-nftg{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}.sc-nftc{border:1px solid var(--sl);border-radius:14px;padding:8px;display:flex;flex-direction:column;gap:6px;background:rgba(255,255,255,.025)}.sc-nftc img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:rgba(255,255,255,.05)}.sc-nftc .nm{font-size:.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sc-note{background:linear-gradient(135deg,rgba(245,183,59,.14),rgba(245,183,59,.06));border:1px solid rgba(245,183,59,.4);border-radius:12px;padding:10px 14px;margin:10px 0;font-size:.92rem}
+.sc-sgi{all:unset;box-sizing:border-box;display:flex;gap:10px;align-items:center;width:100%;padding:9px 12px;cursor:pointer;font-size:.92rem}.sc-sgi:hover,.sc-sgi.on{background:rgba(99,102,241,.22)}#sc-sug{position:absolute;left:0;right:0;top:100%;margin-top:-6px;z-index:60;background:#12162b;border:1px solid var(--sl);border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.55);overflow:hidden;max-width:420px}
 .sc-lbx-x{all:unset;position:absolute;top:14px;right:14px;width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}.sc-lbx-x:hover{background:rgba(255,255,255,.3)}
 .sc-lb{max-width:94vw;max-height:88vh;border-radius:12px;display:block}
 @media(max-width:1120px){.sc{grid-template-columns:72px minmax(0,640px);gap:18px}.sc-side{display:none}.sc-nav button span.t,.sc-brand span{display:none}.sc-brand{padding:6px 12px 12px}.sc-nav button{justify-content:center;padding:12px}.sc-badge{position:absolute;top:2px;right:2px;margin:0}.sc-kpis{grid-template-columns:repeat(2,1fr)}}
@@ -1140,11 +1177,11 @@ function bind() {
   root.addEventListener('click', e => { const el = (e.target as HTMLElement).closest('[data-act]') as HTMLElement | null; if (!el || !root.contains(el)) return; if ((e.target as HTMLElement).closest('a[href]')) return; void onClick(el, e); });
   root.addEventListener('input', e => {
     const t = e.target as HTMLInputElement;
-    if (t.id === 'sc-txt') { S.draft = t.value; grow(t as any); const r = document.getElementById('sc-ring'); if (r) r.outerHTML = ringHtml(t.value.length); updCard(); const c = document.getElementById('sc-cost'); if (c) c.textContent = fmt(t.value.length > MAXTXT ? Math.ceil(t.value.length / 470) * COST.post : COST.post, 4) + ' LUMA'; clearTimeout(draftT); draftT = setTimeout(() => LS.set(draftKey(), S.draft), 400); }
+    if (t.id === 'sc-txt') { sugUpdate(t as any); S.draft = t.value; grow(t as any); const r = document.getElementById('sc-ring'); if (r) r.outerHTML = ringHtml(t.value.length); updCard(); const c = document.getElementById('sc-cost'); if (c) c.textContent = fmt(t.value.length > MAXTXT ? Math.ceil(t.value.length / 470) * COST.post : COST.post, 4) + ' LUMA'; clearTimeout(draftT); draftT = setTimeout(() => LS.set(draftKey(), S.draft), 400); }
     else if (t.id === 'sc-media') S.media = t.value; else if (t.classList.contains('sc-po')) S.poll[Number(t.dataset.i)] = t.value;
     else if (t.id === 'sc-q' || t.id === 'sc-q2') S.q = t.value;
   });
-  root.addEventListener('keydown', e => { const t = e.target as HTMLInputElement; if (e.key === 'Enter' && (t.id === 'sc-q' || t.id === 'sc-q2')) { go({ k: 'search', q: t.value }); } if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && t.id === 'sc-txt') { const b = document.getElementById('sc-go'); b && (b as HTMLElement).click(); } });
+  root.addEventListener('keydown', e => { const t = e.target as HTMLInputElement; if (SG && t.id === 'sc-txt') { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); SG.i = (SG.i + (e.key === 'ArrowDown' ? 1 : SG.items.length - 1)) % SG.items.length; sugPaint(); return; } if ((e.key === 'Enter' && !e.metaKey && !e.ctrlKey) || e.key === 'Tab') { e.preventDefault(); sugPick(SG.i); return; } if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); sugClose(); return; } } if (e.key === 'Enter' && (t.id === 'sc-q' || t.id === 'sc-q2')) { go({ k: 'search', q: t.value }); } if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && t.id === 'sc-txt') { const b = document.getElementById('sc-go'); b && (b as HTMLElement).click(); } });
   let g = 0;
   KD = (e: KeyboardEvent) => {
     if (!document.getElementById('sc')) return; const t = e.target as HTMLElement;
