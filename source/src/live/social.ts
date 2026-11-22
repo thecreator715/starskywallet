@@ -72,7 +72,7 @@ setPol({}); POL.at = 0; POL.ok = false;
 const violates = (t: string): string => { t = String(t || ''); if (!t) return ''; for (const [k, r] of RXC) if (r.test(t)) return k; return ''; };
 const hiddenPost = (p: Post) => POL.hidden.has(p.id) || POL.banned.has(p.a) || !!violates(p.x + ' ' + (p.p || []).join(' '));
 const NFTHOSTS = ['ipfs.io', 'nftstorage.link', 'cloudflare-ipfs.com', 'arweave.net', 'w3s.link', 'dweb.link'];
-const okImg = (u: string): boolean => { if (!u) return false; const m = POL.imageMode; if (m === 'any') return true; if (m === 'off') return false; let h = ''; try { h = new URL(u).hostname.toLowerCase(); } catch { return false; } const hs = POL.imageHosts.length ? POL.imageHosts : NFTHOSTS; return hs.some(x => h === x || h.endsWith('.' + x)); };
+const okImg = (u: string): boolean => { if (!u) return false; const m = POL.imageMode; if (m === 'any') return true; if (m === 'off') return false; let h = ''; try { h = new URL(u).hostname.toLowerCase(); } catch { return false; } const hs = (POL.imageHosts.length ? POL.imageHosts : NFTHOSTS).concat((() => { try { return [new URL(nodeGw()).hostname.toLowerCase()]; } catch { return []; } })()); return hs.some(x => h === x || h.endsWith('.' + x)); };
 const WHY: Record<string, string> = { child: 'content that sexualises children', sexual: 'sexual or explicit content', violence: 'graphic violence or threats', custom: 'words this network does not allow' };
 const roots = (): string[] => { const k = net(), port = k === 'test' ? 8091 : 8090; const c = (window as any).STARSKY_CONFIG || {}, pn = String((c[k] || c.main || {}).panel || '').replace(/\/+$/, ''); const r = [`${base()}/panel/${k}`]; if (pn) r.push(pn); r.push(`http://127.0.0.1:${port}`, `http://localhost:${port}`); return r; };
 let RIGHT = 0;
@@ -645,18 +645,27 @@ const grow = (t: HTMLTextAreaElement) => { t.style.height = 'auto'; t.style.heig
 
 // ---------- NFTs: use them as pictures and share the ones you own ----------
 interface Nft { id: string; uri: string; issuer: string; serial: number }
-const NFTS = new Map<string, { at: number; list: Nft[] }>(), NM: Record<string, { name: string; img: string }> = LS.get('sc.nftm', {}), askOwner = new Set<string>();
+const NFTS = new Map<string, { at: number; list: Nft[] }>(), NM: Record<string, { name: string; img: string }> = LS.get('sc.nftm2', {}), askOwner = new Set<string>();
 async function loadNfts(a: string, force = false): Promise<Nft[]> {
   const c = NFTS.get(a); if (c && !force && Date.now() - c.at < 120000) return c.list;
   const list: Nft[] = []; try { let marker: any; for (let i = 0; i < 4; i++) { const r = await ctx.req('account_nfts', { account: a, limit: 100, ...(marker ? { marker } : {}) }); for (const n of r.account_nfts || []) list.push({ id: String(n.NFTokenID).toUpperCase(), uri: fromHex(n.URI || ''), issuer: n.Issuer || '', serial: n.nft_serial || 0 }); marker = r.marker; if (!marker) break; } } catch {}
   NFTS.set(a, { at: Date.now(), list }); return list;
 }
 const gw = (u: string) => { u = String(u || '').trim(); if (/^ipfs:\/\//.test(u)) return 'https://ipfs.io/ipfs/' + u.slice(7).replace(/^ipfs\//, ''); return /^https:\/\/[^\s"'<>\\]{4,400}$/.test(u) ? u : ''; };
+const nodeGw = (): string => { try { const c = (window as any).STARSKY_CONFIG || {}, u = String((c[net()] || c.main || {}).url || ''); return /^wss?:\/\//.test(u) ? u.replace(/^ws/, 'http').replace(/\/+$/, '') + '/ipfs/' : ''; } catch { return ''; } };
+const GWS = (): string[] => [nodeGw(), 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://w3s.link/ipfs/'].filter(Boolean);
+const ipfsPath = (u: string): string => { u = String(u || '').trim(); if (/^ipfs:\/\//.test(u)) return u.slice(7).replace(/^ipfs\//, ''); const m = u.match(/^https:\/\/[^/]+\/ipfs\/(.+)$/); return m ? m[1] : ''; };
+async function fetchT(u: string, ms = 7000): Promise<Response | null> { try { const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), ms); const r = await fetch(u, { signal: ctl.signal }); clearTimeout(to); return r.ok ? r : null; } catch { return null; } }
 async function nftMeta(n: Nft): Promise<{ name: string; img: string }> {
   if (NM[n.id]) return NM[n.id];
-  const out = { name: '', img: '' }, u = gw(n.uri);
-  if (u) { try { const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 7000); const r = await fetch(u, { signal: ctl.signal }); clearTimeout(to); const ct = r.headers.get('content-type') || ''; if (/^image\//.test(ct)) out.img = u; else { const t = await r.text(); if (t.trim()[0] === '{') { const j = JSON.parse(t); out.name = clip(j.name || '', 60); out.img = gw(String(j.image || j.image_url || j.imageUri || '')); } } } catch { if (/\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(u)) out.img = u; } }
-  if (out.img) { NM[n.id] = out; const k = Object.keys(NM); if (k.length > 150) delete NM[k[0]]; LS.set('sc.nftm', NM); }
+  const out = { name: '', img: '' }, path = ipfsPath(n.uri), plain = gw(n.uri), list = path ? GWS().map(g => g + path) : plain ? [plain] : [];
+  for (const u of list) {
+    const r = await fetchT(u); if (!r) continue; const g = path ? u.slice(0, u.length - path.length) : '', ct = r.headers.get('content-type') || '';
+    if (/^image\//.test(ct)) { out.img = u; break; }
+    try { const t = await r.text(); if (t.trim()[0] === '{') { const j = JSON.parse(t), im = String(j.image || j.image_url || j.imageUri || ''), ip = ipfsPath(im); out.name = clip(j.name || '', 60); out.img = ip && g ? g + ip : gw(im); if (out.img) break; } } catch {}
+  }
+  if (!out.img && plain && /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(plain)) out.img = plain;
+  if (out.img) { NM[n.id] = out; const k = Object.keys(NM); if (k.length > 150) delete NM[k[0]]; LS.set('sc.nftm2', NM); }
   return out;
 }
 const nftFind = (id: string): Nft | undefined => { for (const v of NFTS.values()) { const n = v.list.find(x => x.id === id); if (n) return n; } return undefined; };
