@@ -504,7 +504,7 @@ export async function trades(m: Market, limit = 120): Promise<Trade[]> {
 }
 const VOLC = new Map<string, { at: number; t: Trade[] }>();
 /** every swap in the pool since `sinceMs` (pages back through the pool's history, up to ~4000 transactions) */
-export async function tradesSince(m: Market, sinceMs: number): Promise<Trade[]> {
+export async function tradesSince(m: Market, sinceMs: number, maxPages = 10): Promise<Trade[]> {
   const refs = await poolRefs();
   const dp = directPool(refs, m.base, m.quote);
   if (!dp) return [];
@@ -513,7 +513,7 @@ export async function tradesSince(m: Market, sinceMs: number): Promise<Trade[]> 
   if (hit && Date.now() - hit.at < 45000) return hit.t;
   const out: Trade[] = [];
   let marker: any = undefined;
-  for (let pg = 0; pg < 10; pg++) {
+  for (let pg = 0; pg < maxPages; pg++) {
     const r: any = await tryReq('account_tx', { account: dp.account, limit: 400, ledger_index_min: -1, ledger_index_max: -1, ...(marker ? { marker } : {}) }, 8000);
     if (!r) break;
     const part = parseTrades(r, dp, m);
@@ -691,7 +691,7 @@ export async function quickCandles(m: Market, range: RangeDef): Promise<{ list: 
   const refs = await poolRefs(), dp = directPool(refs, m.base, m.quote);
   if (!dp || !isFinite(range.sec)) return null;
   const nowMs = Date.now(), span = range.sec * 1000, start = nowMs - span, step = span / range.candles;
-  const [st, trs] = await Promise.all([poolState(dp).catch(() => null), tradesSince(m, start - span).catch(() => [] as Trade[])]);
+  const [st, trs] = await Promise.all([poolState(dp).catch(() => null), tradesSince(m, start, 2).catch(() => [] as Trade[])]);
   const pts = trs.filter(t => (t.kind === 'buy' || t.kind === 'sell') && t.price != null && t.price > 0 && t.ms > 0).sort((a, b) => a.ms - b.ms);
   const cur = st ? poolPrice(st, m.base) : null;
   if (!pts.length && cur == null) return null;
