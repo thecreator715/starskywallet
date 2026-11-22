@@ -1306,3 +1306,18 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 .sc-lbx-x{all:unset;position:absolute;top:14px;right:14px;width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
 
 @media(min-width:760px){.top{overflow:hidden}.top h1{font-size:1.05rem}.top .pill{font-size:.72rem;padding:.3rem .5rem}.top .ts:nth-of-type(n+4){display:none}}@media(min-width:760px) and (max-width:1300px){.top .acrow button{display:none}.top .acrow select{max-width:130px}.top .tstat .ts:nth-child(n+3){display:none}}@media(min-width:760px) and (max-width:1000px){.top .tstat{display:none}.top h1{font-size:.95rem}}
+
+/* mobile: slide-open menu (hamburger) instead of the bottom icon dock */
+.hamb,.navbd{display:none}
+@media(max-width:920px){
+  .tabs{display:none!important}
+  aside{display:flex!important;position:fixed;top:0;left:0;bottom:0;height:100dvh;width:min(82vw,300px);z-index:90;transform:translateX(-105%);transition:transform .25s ease;box-shadow:none;background:rgba(8,3,18,.97);padding-top:calc(1.2rem + env(safe-area-inset-top))}
+  body.navopen aside{transform:none;box-shadow:12px 0 40px rgba(0,0,0,.55)}
+  .navbd{display:block;position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .2s}
+  body.navopen .navbd{opacity:1;pointer-events:auto}
+  body.navopen{overflow:hidden}
+  .hamb{display:grid;place-items:center;position:fixed;top:calc(.6rem + env(safe-area-inset-top));left:.6rem;z-index:70;width:2.5rem;height:2.5rem;border-radius:.8rem;border:1px solid var(--line);background:rgba(8,3,18,.88);backdrop-filter:blur(14px);color:var(--tx,#fff);padding:0}
+  .hamb svg{width:1.3rem;height:1.3rem}
+  .top{padding-left:3.4rem!important}
+  main{padding-bottom:1.5rem!important}
+}

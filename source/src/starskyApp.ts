@@ -1880,18 +1880,8 @@ export function renderApp() {
       </main>
     </div>
 
-    <div class="tabs">
-      ${TABS.filter(t => ['home', 'send', 'markets', 'dex', 'nftmarket', 'pools', 'bridge', 'network', 'supply', 'burn', 'bot', 'margin'].includes(t[0]))
-        .map(
-          ([k, l]) => `
-        <button class="nav ${st.tab === k ? 'on' : ''}" onclick="window.goTab('${k}')">
-          ${ic(k)}
-          ${l.replace('Markets & Tokens', 'Markets').replace('Liquidity Pools', 'Pools')}
-        </button>
-      `
-        )
-        .join('')}
-    </div>
+    <button class="hamb" aria-label="Menu" onclick="window.toggleNav()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <div class="navbd" onclick="window.toggleNav(false)"></div>
   `;
 
   renderTop();
@@ -2398,7 +2388,9 @@ export function initWindowBindings() {
     showL: (r: string) => { try { return LumaAddr.toL(r); } catch { return r; } },
   });
   (window as any).xmImport = (rows: Array<{ name: string; addr: string }>) => { let n = 0; for (const r of rows) if (!CFG.book.some(b => b.addr === r.addr)) { CFG.book.push(r); n++; } if (n) { saveCfg(); renderApp(); } };
+  (window as any).toggleNav = (on?: boolean) => { document.body.classList.toggle('navopen', typeof on === 'boolean' ? on : !document.body.classList.contains('navopen')); };
   (window as any).goTab = (t: AppState['tab']) => {
+    document.body.classList.remove('navopen');
     st.tab = t;
     renderApp();
     if (t === 'pools') discoverPools();
