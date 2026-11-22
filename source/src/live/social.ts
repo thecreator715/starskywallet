@@ -5,12 +5,13 @@
 // No company server holds anything. Anyone can rebuild the same network from the chain, and nobody can post as you without your key.
 import { ctx } from './ctx.ts';
 import { amtTx, esc, fmt, hexName } from './util.ts';
+import { ipfsAdd } from './nft.ts';
 import { base } from './nodelink.ts';
 
 const MT = 'luma-social';
 const HUBS: Record<string, string> = { main: 'rHNDrZSmSH6TqDCfA1KENwwZyKwHmStvPL', test: 'rGeYQ26dzMz3TfTqz34dpBfmpHZpHbeFdE' };
 // what each action costs (LUMA). The network fee of the chain is on top. All of it lands in the hub; tips go straight to the person tipped.
-const COST: Record<string, number> = { post: 0.000001, rt: 0.001, like: 0.0001, unl: 0.0001, fol: 0.001, unf: 0.001, prof: 0.01, hdl: 1, vote: 0.0001, del: 0.0001, rx: 0.0001, boost: 1, edit: 0.001, pin: 0.0001, tipn: 0.0001, rep: 0.0001, lst: 0.01, lup: 0.001, ofr: 0.0001, ask: 0.0001, ans: 0.0001, rev: 0.0001, chk: 0.0001 };
+const COST: Record<string, number> = { post: 0.000001, rt: 0.001, like: 0.0001, unl: 0.0001, fol: 0.001, unf: 0.001, prof: 0.01, hdl: 1, vote: 0.0001, del: 0.0001, rx: 0.0001, boost: 1, edit: 0.001, pin: 0.0001, tipn: 0.0001, rep: 0.0001, lst: 0.01, lup: 0.001, ofr: 0.0001, ask: 0.0001, ans: 0.0001, rev: 0.0001, chk: 0.000001 };
 const MAXTXT = 500, MAXMEMO = 900, MAXPARTS = 10, RIPPLE_EPOCH = 946684800;
 const EMOJI = ['🔥', '😂', '🚀', '👏', '😮', '😢'];
 
@@ -43,7 +44,7 @@ const listOf = <V>(m: Map<string, V[]>, k: string) => { let s = m.get(k); if (!s
 const clip = (v: any, n: number) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 const safeUrl = (u: any): string => {
   if (typeof u !== 'string') return ''; u = u.trim();
-  if (/^ipfs:\/\/[A-Za-z0-9/_.\-]{10,200}$/.test(u)) return 'https://ipfs.io/ipfs/' + u.slice(7);
+  if (/^ipfs:\/\/[A-Za-z0-9/_.\-]{10,200}$/.test(u)) return pubGw() + u.slice(7).replace(/^ipfs\//, '');
   return /^https:\/\/[^\s"'<>\\]{4,300}$/.test(u) ? u : '';
 };
 const tokName = (c: string) => (c === 'LUMA' || c === 'native' || c === 'XRP' ? 'LUMA' : hexName(c));
@@ -224,7 +225,7 @@ const isMuted = (a: string) => muted().includes(a);
 
 // ---------- icons ----------
 const P: Record<string, string> = {
-  shop: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9a3 3 0 006 0 3 3 0 006 0 3 3 0 006 0"/><path d="M5 12v8h14v-8"/>', home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>',
+  up: '<path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M5 20h14"/>', shop: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9a3 3 0 006 0 3 3 0 006 0 3 3 0 006 0"/><path d="M5 12v8h14v-8"/>', home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>',
   bell: '<path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/>', bm: '<path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>',
   user: '<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>', pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>',
   heart: '<path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 00-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 000-7.8z"/>',
@@ -485,10 +486,11 @@ function composer(opts: { reply?: string; quote?: string } = {}): string {
   return `<div class="sc-comp" id="sc-comp">${avatar(me())}<div style="flex:1;min-width:0">${rep ? `<div class="sc-m" style="margin-bottom:2px">Replying to ${esc(tagOf(rep.a))}</div>` : ''}<textarea id="sc-txt" maxlength="${MAXTXT * MAXPARTS - 200}" rows="2" placeholder="${rep ? 'Post your reply' : qq ? 'Add your take' : 'What is happening on the chain?  Try $LUMA or #tags'}">${esc(S.draft)}</textarea>
   <div id="sc-card">${cardSym(S.draft, true) ? priceCard(cardSym(S.draft, true), { close: true }) : ''}</div><div id="sc-yt">${ytId(S.draft) ? ytCard(ytId(S.draft)) : ''}</div>
   ${S.nft ? `<div class="sc-nftat"><img src="${esc(S.nft.img)}" alt="" referrerpolicy="no-referrer"><div><b>${esc(S.nft.name)}</b><div class="sc-m">NFT attached. It will be shown with a check that you own it.</div></div><button class="sc-ib" data-act="nftx" title="Remove">${ic('x', 16)}</button></div>` : ''}
+  ${S.media && !S.nft ? `<div class="sc-nftat"><img src="${esc(safeUrl(S.media))}" alt="" referrerpolicy="no-referrer"><div><b>Picture attached</b><div class="sc-m">${UP ? 'Uploading…' : 'It will be shown in your post.'}</div></div><button class="sc-ib" data-act="mediax" title="Remove">${ic('x', 16)}</button></div>` : ''}
   ${qq ? `<div class="sc-quote">${postCard(qq, { quoted: true })}<button class="sc-btn sm ghost" data-act="noquote" style="margin-top:6px">Remove quote</button></div>` : ''}
   <input class="sc-in" id="sc-media" placeholder="Image link (https:// or ipfs://)" value="${esc(S.media)}" style="${S.media || (document.activeElement as any)?.id === 'sc-media' ? '' : 'display:none'}">
   ${S.pollOn ? `<div id="sc-poll">${S.poll.map((o, i) => `<input class="sc-in sc-po" data-i="${i}" maxlength="40" placeholder="Option ${i + 1}" value="${esc(o)}">`).join('')}${S.poll.length < 4 ? `<button class="sc-btn sm ghost" data-act="addopt">Add option</button>` : ''}</div>` : ''}
-  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
+  <div class="sc-row" style="justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--sl)"><div class="sc-row" style="gap:4px"><div class="sc-tool"><button class="sc-ib ${S.media && !S.nft ? 'on' : ''}" data-act="upl" title="Upload a picture from your computer (5 MB max)">${ic('up')}</button><input type="file" id="sc-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onchange="sc.upload(this,'post')"><button class="sc-ib" data-act="showmedia" title="Add an image link">${ic('image')}</button><button class="sc-ib ${S.nft ? 'on' : ''}" data-act="nftpick" title="Use one of your NFTs">${ic('gem')}</button>${!opts.reply && !qq ? `<button class="sc-ib ${S.pollOn ? 'on' : ''}" data-act="poll" title="Add a poll">${ic('list')}</button>` : ''}</div>${ringHtml(S.draft.length)}</div>
   <button class="sc-btn" id="sc-go" data-act="post" data-reply="${opts.reply || ''}" data-quote="${opts.quote || ''}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.step || 'Working…') : (rep ? 'Reply' : 'Post')}<span id="sc-cost" style="font-weight:500;opacity:.8;font-size:.8em">${fmt(cost, 6)} LUMA</span></button></div></div></div>`;
 }
 
@@ -666,6 +668,18 @@ const nodeGws = (): string[] => {
   return out;
 };
 const GWS = (): string[] => nodeGws().concat(['https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://w3s.link/ipfs/']);
+const pubGw = (): string => nodeGws().find(g => g.startsWith('https://')) || 'https://ipfs.io/ipfs/';
+const MAXIMG = 5 * 1024 * 1024;
+let UP = false;
+async function uploadFiles(files: FileList | File[], max: number): Promise<string[]> {
+  const out: string[] = [], list = Array.from(files).slice(0, max);
+  for (const f of list) {
+    if (!/^image\/(png|jpe?g|gif|webp)$/i.test(f.type)) { ctx.toast(`${f.name}: choose a PNG, JPG, GIF or WebP picture.`, true); continue; }
+    if (f.size > MAXIMG) { ctx.toast(`${f.name} is ${(f.size / 1048576).toFixed(1)} MB. Pictures can be 5 MB at most.`, true); continue; }
+    try { ctx.toast('Uploading ' + f.name + '…'); out.push('ipfs://' + await ipfsAdd(f, f.name)); } catch (e: any) { ctx.toast(String(e?.message || e), true); break; }
+  }
+  return out;
+}
 const ipfsPath = (u: string): string => { u = String(u || '').trim(); if (/^ipfs:\/\//.test(u)) return u.slice(7).replace(/^ipfs\//, ''); const m = u.match(/^https:\/\/[^/]+\/ipfs\/(.+)$/); return m ? m[1] : ''; };
 async function fetchT(u: string, ms = 7000): Promise<Response | null> { try { const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), ms); const r = await fetch(u, { signal: ctl.signal }); clearTimeout(to); return r.ok ? r : null; } catch { return null; } }
 async function nftMeta(n: Nft): Promise<{ name: string; img: string }> {
@@ -791,8 +805,8 @@ async function listModal(editId = '', fresh = false) {
   <div class="sc-row"><label class="sc-fl" style="flex:1">Category<select class="sc-in" id="mk-cat">${CATS.map(c => `<option ${e.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label><label class="sc-fl" style="flex:1">Condition<select class="sc-in" id="mk-cd"><option value="">Not applicable</option>${CONDS.map(c => `<option ${e.cd === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label></div>
   ${O('mk-lc', 'Location', e.lc, 40, 'City or "Ships worldwide"')}
   <label class="sc-fl">Description<textarea class="sc-in" id="mk-ds" maxlength="300" rows="4" placeholder="Condition, size, what is included, how to receive it">${esc(e.ds || '')}</textarea></label>
-  <div class="sc-sec">Photos (up to 4)</div>${[0, 1, 2, 3].map(i => `<input class="sc-in" id="mk-m${i}" value="${esc(ms[i] || '')}" placeholder="Photo ${i + 1}: https:// or ipfs://">`).join('')}
-  <div class="sc-row" style="margin-top:6px"><button class="sc-btn sm ghost" onclick="sc.lpick()">${ic('gem', 15)}Add a photo from your NFTs</button></div>
+  <div class="sc-sec">Photos (up to 4, 5 MB each)</div>${[0, 1, 2, 3].map(i => `<input class="sc-in" id="mk-m${i}" value="${esc(ms[i] || '')}" placeholder="Photo ${i + 1}: https:// or ipfs://">`).join('')}
+  <div class="sc-row" style="margin-top:6px"><button class="sc-btn sm" onclick="document.getElementById('mk-file').click()">${ic('up', 15)}Upload from your computer</button><input type="file" id="mk-file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onchange="sc.upload(this,'mk')"><button class="sc-btn sm ghost" onclick="sc.lpick()">${ic('gem', 15)}Add a photo from your NFTs</button></div>
   <div class="sc-row" style="margin-top:14px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.lsubmit()">${e.eid ? 'Save changes' : 'Publish listing'}</button></div>`, 580));
 }
 async function listSubmit() {
@@ -1062,6 +1076,8 @@ async function onClick(el: HTMLElement, ev: Event) {
     case 'flist': flistModal(v, el.dataset.k || 'followers'); break;
     case 'plink': sc.m('copyu', v); break;
     case 'ytplay': { const box = el.closest('.sc-yt') as HTMLElement | null; if (box) box.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(v)}?autoplay=1&rel=0&playsinline=1" title="YouTube video" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; break; }
+    case 'upl': (document.getElementById('sc-file') as HTMLInputElement | null)?.click(); break;
+    case 'mediax': S.media = ''; paint(); break;
     case 'pcx': S.noCard.add(v); updCard(); break;
     case 'nftpick': await openNfts('post'); break;
     case 'nftx': S.nft = null; S.media = ''; paint(); break;
@@ -1174,6 +1190,13 @@ export const sc: any = {
   dtog(id: string) { const c = dashCfg(), i = c.off.indexOf(id); if (i >= 0) c.off.splice(i, 1); else c.off.push(id); saveDash(c); paint(); custModal(); },
   dmove(id: string, d: number) { const c = dashCfg(), i = c.order.indexOf(id), j = i + d; if (i < 0 || j < 0 || j >= c.order.length) return; c.order.splice(j, 0, c.order.splice(i, 1)[0]); saveDash(c); paint(); custModal(); },
   dreset() { LS.set(dashKey(), {}); paint(); custModal(); },
+  async upload(inp: HTMLInputElement, kind: string) {
+    const files = inp.files; if (!files || !files.length || UP || !need()) { inp.value = ''; return; } UP = true;
+    try {
+      if (kind === 'post') { const u = await uploadFiles(files, 1); if (u[0]) { S.media = u[0]; S.nft = null as any; } paint(); }
+      else { ED = { ...collectListing(), __mk: 1, eid: (ED && ED.eid) || '' }; const mm: string[] = ED.m || [], u = await uploadFiles(files, 4 - mm.length); ED.m = mm.concat(u); void listModal(ED.eid); }
+    } finally { UP = false; inp.value = ''; }
+  },
   mkf(k: string, v: string) { (MK_S as any)[k] = v; paint(); },
   lpick() { ED = { ...collectListing(), __mk: 1 }; void openNfts('mk'); },
   async lsubmit() { await listSubmit(); },

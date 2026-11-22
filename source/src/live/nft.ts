@@ -1350,3 +1350,14 @@ export const nmApi = {
   /* ---- mint: full page ---- */
   mint() { nsApi.open($('mn') ? 'nfts' : 'nftmarket'); }
 };
+
+/** Upload one file to the network IPFS (the same storage NFT minting uses). Returns its CID. */
+export async function ipfsAdd(blob: Blob, name: string): Promise<string> {
+  const api = IP().api, fd = new FormData(); fd.append('file', blob, name);
+  let r: Response;
+  try { r = await fetch(`${api}/api/v0/add?pin=true&cid-version=1&raw-leaves=true`, { method: 'POST', body: fd, headers: { 'ngrok-skip-browser-warning': '1' } }); }
+  catch { throw new Error('Cannot reach the picture storage on the LUMA node. Make sure the control panel is running with NFT storage started, then try again.'); }
+  if (!r.ok) throw new Error('Picture storage answered ' + r.status + '. Try again in a moment.');
+  const lines = (await r.text()).trim().split('\n'); const h = JSON.parse(lines[lines.length - 1]).Hash;
+  if (!h) throw new Error('Picture storage did not return an address.'); return String(h);
+}
