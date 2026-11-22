@@ -375,3 +375,74 @@ export function openPool(key: string) {
   }, 300);
 }
 export const tkApi: any = { openCreate, create, icon: pickIcon, openPool, gen: (v: string) => { F.gen = v; }, net: (id: string) => { keepForm(); F.gen = ''; (window as any).switchNet?.(id); setTimeout(() => { void openCreate(); }, 1500); } };
+
+// ---------- manage supply: mint more, burn, cap (lock) ----------
+interface Mg { wallet: string; issuer: string; seed: string; label: string; cur: string; name: string; supply: number; mine: number; locked: boolean }
+let MGL: Mg[] = [], MGSEL = 0;
+async function loadManaged() {
+  const out: Mg[] = [], me = ctx.account() as string;
+  for (const w of ctx.wallets()) {
+    if (!/^Issuer:/.test(w.label)) continue;
+    try {
+      const [ai, gb, al] = await Promise.all([
+        ctx.req('account_info', { account: w.address, ledger_index: 'validated' }),
+        ctx.req('gateway_balances', { account: w.address, ledger_index: 'validated' }).catch(() => ({ obligations: {} })),
+        ctx.req('account_lines', { account: me, peer: w.address, ledger_index: 'validated' }).catch(() => ({ lines: [] })),
+      ]);
+      const locked = !!((ai.account_data.Flags || 0) & 0x00100000);
+      for (const [cur, v] of Object.entries((gb && gb.obligations) || {})) {
+        const ln = ((al && al.lines) || []).find((l: any) => l.currency === cur);
+        out.push({ wallet: w.address, issuer: w.address, seed: w.seed, label: w.label.replace(/^Issuer:\s*/, ''), cur, name: hexName(cur), supply: Number(v), mine: ln ? Number(ln.balance) : 0, locked });
+      }
+    } catch { /* wallet not funded yet */ }
+  }
+  MGL = out; if (MGSEL >= out.length) MGSEL = 0;
+}
+function drawManage() {
+  const box = document.getElementById('tkm'); if (!box) return;
+  if (!MGL.length) { box.innerHTML = '<div class="mut" style="padding:1rem">No tokens made in this wallet vault yet on this network. Create one first, or switch network (Mainnet/Testnet) at the top.</div>'; return; }
+  const m = MGL[MGSEL];
+  box.innerHTML = `<select id="tkm_sel" style="width:100%" onchange="window.tk.msel(this.value)">${MGL.map((x, i) => `<option value="${i}" ${i === MGSEL ? 'selected' : ''}>${esc(x.label)} (${esc(x.name)})</option>`).join('')}</select>
+  <div class="lpcard" style="margin-top:.6rem"><div class="dxkv"><span class="mut">Total supply</span><b>${fmt(m.supply)} ${esc(m.name)}</b></div><div class="dxkv"><span class="mut">In your wallet</span><b>${fmt(m.mine)} ${esc(m.name)}</b></div><div class="dxkv"><span class="mut">Supply cap</span><b>${m.locked ? 'Capped forever: nobody can mint more' : 'Open: you can still mint more'}</b></div></div>
+  <div class="lpcard" style="margin-top:.6rem"><div class="k">Mint more</div><div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Creates new tokens and sends them to your wallet. ${m.locked ? 'Not possible: the supply is capped.' : ''}</div>
+    <div class="row" style="gap:.5rem"><input id="tkm_mint" class="grow" inputmode="decimal" placeholder="Amount to mint" ${m.locked ? 'disabled' : ''}><button class="pri acc" ${m.locked ? 'disabled' : ''} onclick="window.tk.mint(this)">Mint</button></div></div>
+  <div class="lpcard" style="margin-top:.6rem"><div class="k">Burn</div><div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Destroys tokens from your wallet and lowers the total supply. Cannot be undone.</div>
+    <div class="row" style="gap:.5rem"><input id="tkm_burn" class="grow" inputmode="decimal" placeholder="Amount to burn"><button onclick="window.tk.burn(this)">Burn</button></div></div>
+  <div class="lpcard" style="margin-top:.6rem"><div class="k">Cap the supply</div><div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Locks the issuer key for good, so the supply can never grow past ${fmt(m.supply)} ${esc(m.name)}. Burning still works afterwards. Mint first if you want a higher final number. Cannot be undone.</div>
+    <button class="crit" ${m.locked ? 'disabled' : ''} onclick="window.tk.cap(this)">${m.locked ? 'Already capped' : 'Cap supply forever'}</button></div>
+  <div id="tkm_err" class="crit" style="min-height:1.2rem;font-size:.82rem;margin-top:.4rem"></div>`;
+}
+export async function openManage() {
+  if (!ctx.account()) return ctx.toast('Select a wallet first', true);
+  ctx.page('<h2>Manage token supply</h2><div id="tkm"><div class="mut" style="padding:1rem">Loading…</div></div>', 'Manage token supply');
+  await loadManaged(); drawManage();
+}
+const mErr = (s: string) => { const e = document.getElementById('tkm_err'); if (e) e.textContent = s; };
+async function mDone(msg: string) { ctx.toast('✓ ' + msg); clearCache(); await loadManaged(); drawManage(); }
+Object.assign(tkApi, {
+  openManage,
+  msel: (v: string) => { MGSEL = Number(v) || 0; drawManage(); },
+  async mint(b: HTMLButtonElement) {
+    const m = MGL[MGSEL], n = parseFloat(val('tkm_mint')); mErr('');
+    if (!(n > 0) || m.supply + n > 1e15) return mErr('Enter an amount above zero.');
+    b.disabled = true;
+    const r = await ctx.submitAs(m.seed, { TransactionType: 'Payment', Account: m.issuer, Destination: ctx.account() as string, Amount: { currency: m.cur, issuer: m.issuer, value: String(n) } });
+    if (r.ok) await mDone(`Minted ${fmt(n)} ${m.name}`); else { mErr('Mint failed: ' + (r.msg || '')); b.disabled = false; }
+  },
+  async burn(b: HTMLButtonElement) {
+    const m = MGL[MGSEL], n = parseFloat(val('tkm_burn')); mErr('');
+    if (!(n > 0) || n > m.mine) return mErr('Enter an amount up to what is in your wallet (' + fmt(m.mine) + ').');
+    if (!confirm(`Burn ${fmt(n)} ${m.name} for good?`)) return;
+    b.disabled = true;
+    const r = await ctx.submit({ TransactionType: 'Payment', Account: ctx.account() as string, Destination: m.issuer, Amount: { currency: m.cur, issuer: m.issuer, value: String(n) } });
+    if (r.ok) await mDone(`Burned ${fmt(n)} ${m.name}`); else { mErr('Burn failed: ' + (r.msg || '')); b.disabled = false; }
+  },
+  async cap(b: HTMLButtonElement) {
+    const m = MGL[MGSEL]; mErr('');
+    if (!confirm(`Cap ${m.name} at ${fmt(m.supply)} forever? Nobody, including you, can mint more after this. This cannot be undone.`)) return;
+    b.disabled = true;
+    const a = await ctx.submitAs(m.seed, { TransactionType: 'SetRegularKey', Account: m.issuer, RegularKey: 'rrrrrrrrrrrrrrrrrrrrBZbvji' });
+    const r = a.ok ? await ctx.submitAs(m.seed, { TransactionType: 'AccountSet', Account: m.issuer, SetFlag: 4 }) : a;
+    if (r.ok) await mDone(`${m.name} is capped at ${fmt(m.supply)}`); else { mErr('Could not cap: ' + (r.msg || '')); b.disabled = false; }
+  },
+});

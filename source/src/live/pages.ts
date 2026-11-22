@@ -34,7 +34,7 @@ export function marketsShell() {
   return `<div id="mk">
     <div class="row" style="gap:.6rem;margin-bottom:.8rem;align-items:center"><span class="mut" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.08em">Chart range</span>
       <div class="seg">${['1h', '24h', '7d', 'all'].map(x => `<button id="mk_r_${x}" class="${MK.range === x ? 'on' : ''}" onclick="window.mk.range('${x}')">${x}</button>`).join('')}</div>
-      <button class="sm ghost" onclick="window.mk.refresh()">Refresh now</button><span class="grow"></span><button class="sm pri acc" onclick="window.tk.openCreate()">+ Create token</button><span id="mk_meta" class="mut" style="font-size:.76rem"></span></div>
+      <button class="sm ghost" onclick="window.mk.refresh()">Refresh now</button><span class="grow"></span><button class="sm" onclick="window.tk.openManage()">Mint, burn &amp; cap</button><button class="sm pri acc" onclick="window.tk.openCreate()">+ Create token</button><span id="mk_meta" class="mut" style="font-size:.76rem"></span></div>
     <div class="pgrid" id="mk_tiles">${wait('Reading pools…')}</div>
     <div class="k" style="margin:1.2rem 0 .5rem">Growth</div>
     <div class="pgrid" id="mk_growth">${wait('')}</div>
@@ -377,7 +377,7 @@ const coinIcon = (key: string, name: string) => {
 };
 export function assetsShell() {
   const tabs = [['all', 'All'], ['dollar', 'Dollar tokens'], ['bridged', 'Bridged'], ['others', 'Others'], ['lp', 'LP tokens'], ['pools', 'All pools'], ['fav', '★ Favorites']];
-  return `<div class="card c12"><div class="row" style="align-items:center;gap:.6rem"><div class="k">Assets & tokens on the ${ctx.xrpl() ? 'XRP Ledger' : esc(ctx.native()) + ' network'}</div><span class="grow"></span><span id="pa_meta" class="mut" style="font-size:.76rem"></span><button class="sm pri acc" onclick="window.tk.openCreate()">+ Create token</button></div>
+  return `<div class="card c12"><div class="row" style="align-items:center;gap:.6rem"><div class="k">Assets & tokens on the ${ctx.xrpl() ? 'XRP Ledger' : esc(ctx.native()) + ' network'}</div><span class="grow"></span><span id="pa_meta" class="mut" style="font-size:.76rem"></span><button class="sm" onclick="window.tk.openManage()">Mint, burn &amp; cap</button><button class="sm pri acc" onclick="window.tk.openCreate()">+ Create token</button></div>
     <div class="dxtabs" id="pa_tabs" style="margin-top:.5rem">${tabs.map(([k, l]) => `<button class="${PA.tab === k ? 'on' : ''}" onclick="window.pa.tab('${k}')">${l}</button>`).join('')}</div>
     <div id="pa" style="overflow:auto">${keep.pa || wait('Reading tokens…')}</div></div>`;
 }

@@ -1833,6 +1833,7 @@ export function renderApp() {
         ${renderNavItem('receive', 'Receive')}
         ${renderNavItem('markets', 'Markets & Tokens')}
         <button class="nav" onclick="window.tk.openCreate()">${ic('markets')}Create token</button>
+        <button class="nav" onclick="window.tk.openManage()">${ic('markets')}Mint, burn & cap</button>
         ${renderNavItem('nfts', 'My NFTs')}
         ${renderNavItem('activity', 'History')}
         ${renderNavItem('holders', 'Token Holders')}
