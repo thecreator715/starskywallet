@@ -106,7 +106,7 @@ function updCard() { const el = document.getElementById('sc-card'); if (el) el.i
 const ytId = (t: string): string => { const m = String(t || '').match(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^\s#]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i); return m ? m[1] : ''; };
 const ytCard = (id: string): string => `<div class="sc-yt" data-yt="${id}"><button class="sc-ytb" data-act="ytplay" data-v="${id}" aria-label="Play video"><img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'"><span class="sc-ytp"><svg viewBox="0 0 24 24" width="30" height="30"><path d="M8 5v14l11-7z" fill="#fff"/></svg></span><span class="sc-ytl">YouTube</span></button></div>`;
 const playing = (): boolean => !!document.querySelector('#sc .sc-yt iframe');
-function paintSoft() { if (!playing()) paint(); }
+function paintSoft() { if (!playing() && S.view.k !== 'editprof') paint(); }
 
 function rebuild() {
   const ix = blank(); EV.sort((x, y) => x.l - y.l || x.i - y.i);
@@ -211,7 +211,7 @@ async function verifyTips() {
 }
 
 // ---------- state ----------
-type View = { k: 'home' } | { k: 'explore' } | { k: 'notif' } | { k: 'bm' } | { k: 'dash' } | { k: 'profile'; a: string; tab?: string } | { k: 'thread'; id: string } | { k: 'tag'; tag: string } | { k: 'search'; q: string } | { k: 'market' } | { k: 'stats' } | { k: 'listing'; id: string };
+type View = { k: 'home' } | { k: 'explore' } | { k: 'notif' } | { k: 'bm' } | { k: 'dash' } | { k: 'profile'; a: string; tab?: string } | { k: 'thread'; id: string } | { k: 'tag'; tag: string } | { k: 'search'; q: string } | { k: 'market' } | { k: 'stats' } | { k: 'listing'; id: string } | { k: 'editprof' };
 const S: { view: View; tab: 'foryou' | 'following'; xtab: 'hot' | 'new' | 'tipped'; draft: string; media: string; poll: string[]; pollOn: boolean; quote: string; busy: boolean; step: string; loaded: boolean; hubErr: string; shown: number; q: string; err: string; lb: string; deep: boolean; noCard: Set<string>; nft: { id: string; img: string; name: string } | null; rev: Set<string> } =
   { view: { k: 'home' }, tab: 'foryou', xtab: 'hot', draft: '', media: '', poll: ['', ''], pollOn: false, quote: '', busy: false, step: '', loaded: false, hubErr: '', shown: 25, q: '', err: '', lb: '', deep: false, noCard: new Set(), nft: null, rev: new Set() };
 const hist: View[] = [];
@@ -335,7 +335,7 @@ const CSS = `
 .sc-comp{display:flex;gap:12px;padding:16px 10px;border-bottom:1px solid var(--sl)}.sc-comp textarea{width:100%;min-height:64px;background:transparent;border:0;outline:0;color:var(--tx);font-size:1.12rem;resize:none;font-family:inherit;line-height:1.45;overflow:hidden}.sc-comp textarea::placeholder{color:var(--mut)}
 .sc-in{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--sl);border-radius:10px;color:var(--tx);padding:9px 12px;margin:4px 0;font-family:inherit;font-size:.95rem}.sc-in:focus{outline:2px solid rgba(139,92,246,.55);border-color:transparent}
 .sc-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.sc-btn{all:unset;cursor:pointer;background:var(--sg);color:#fff;font-weight:700;padding:9px 20px;border-radius:999px;font-size:.94rem;transition:filter .15s,transform .05s;display:inline-flex;align-items:center;gap:8px}.sc-btn:hover{filter:brightness(1.1)}.sc-btn:active{transform:scale(.98)}.sc-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}.sc-btn[disabled]{opacity:.45;cursor:default}
+.sc-editpg{padding:4px 2px 24px;max-width:680px}.sc-editpg{padding:4px 2px 24px;max-width:680px}.sc-btn{all:unset;cursor:pointer;background:var(--sg);color:#fff;font-weight:700;padding:9px 20px;border-radius:999px;font-size:.94rem;transition:filter .15s,transform .05s;display:inline-flex;align-items:center;gap:8px}.sc-btn:hover{filter:brightness(1.1)}.sc-btn:active{transform:scale(.98)}.sc-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}.sc-btn[disabled]{opacity:.45;cursor:default}
 .sc-btn.sm{padding:6px 14px;font-size:.84rem}.sc-btn.ghost{background:transparent;border:1px solid var(--sl);color:var(--tx)}.sc-btn.ghost:hover{background:var(--sh)}.sc-btn.on{background:transparent;border:1px solid var(--sl);color:var(--tx)}.sc-btn.gold{background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#1a1200}
 .sc-tool{display:flex;gap:2px;color:var(--sb)}.sc-tool .sc-ib{color:#7dd3fc;width:34px;height:34px}.sc-tool .sc-ib.on{background:var(--sh)}
 .sc-ring{display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:.8rem}
@@ -625,6 +625,7 @@ function center(): string {
   if (v.k === 'market') return `<div class="sc-head">Marketplace</div>${marketView()}`;
   if (v.k === 'stats') return `<div class="sc-head">${back}Network stats</div>${statsView()}`;
   if (v.k === 'listing') return `<div class="sc-head">${back}Listing</div>${listingView(v.id)}`;
+  if (v.k === 'editprof') return `<div class="sc-head">${back}Edit profile</div>${editHtml()}`;
   if (v.k === 'dash') return `<div class="sc-head">Creator dashboard</div>${dashView()}`;
   if (v.k === 'profile') return `<div class="sc-head">${back}${esc(nameOf(v.a))}</div>${profileView(v.a, v.tab || 'posts')}`;
   if (v.k === 'thread') return `<div class="sc-head">${back}Post</div>${threadView(v.id)}`;
@@ -959,10 +960,12 @@ function prevHtml(v: any): string {
   const a = me(), img = v.i && safeUrl(v.i) && okImg(safeUrl(v.i)), ban = v.k && safeUrl(v.k) && okImg(safeUrl(v.k)), acc = /^#[0-9a-f]{6}$/i.test(v.c || '') ? v.c : '#6366f1', ini = ((v.n || handleOf(a) || '?')[0] || '?').toUpperCase();
   return `<div class="sc-prof" style="margin:0;--pa:${acc}"><div class="sc-ban" style="height:84px;${ban ? `background:#0d1020 url('${esc(safeUrl(v.k))}') center/cover` : `background:linear-gradient(135deg,${acc},#312e81 60%,#0e7490)`}"></div><div class="sc-pinfo" style="padding-bottom:12px"><span class="sc-pav ${v.sh === 's' ? 'sq' : ''}" style="margin-top:-34px"><span class="sc-av" style="width:64px;height:64px;font-size:26px;background:linear-gradient(135deg,hsl(${hue(a)} 70% 48%),hsl(${(hue(a) + 50) % 360} 70% 36%))">${esc(ini)}${img ? `<img src="${esc(safeUrl(v.i))}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span></span><div style="font-weight:900;font-size:1.15em;margin-top:6px">${esc(v.n || nameOf(a))}</div>${v.st ? `<div class="sc-stt">${esc(v.st)}</div>` : ''}${v.b ? `<div class="sc-m" style="margin-top:4px">${esc(v.b)}</div>` : ''}<div class="sc-m" style="margin-top:4px">${[v.jb, v.l, v.pr].filter(Boolean).map(esc).join(' · ')}</div></div></div>`;
 }
-function editModal() {
+function editModal() { if (S.view.k !== 'editprof') go({ k: 'editprof' }); else paint(); setTimeout(() => (window as any).sc.prev(), 0); }
+function leaveEdit() { ED = {}; const p = hist.pop(); S.view = p && p.k !== 'editprof' ? p : { k: 'profile', a: me() }; }
+function editHtml(): string {
   const q: any = IX.prof.get(me()) || {}, h = handleOf(me()), p: any = { ...q, l1t: (q.ln && q.ln[0] && q.ln[0].t) || '', l1u: (q.ln && q.ln[0] && q.ln[0].u) || '', l2t: (q.ln && q.ln[1] && q.ln[1].t) || '', l2u: (q.ln && q.ln[1] && q.ln[1].u) || '', ...(ED.__mk ? {} : ED) };
   const L = (id: string, label: string, val: string, max: number, ph = '') => `<label class="sc-fl">${label}<input class="sc-in" id="${id}" maxlength="${max}" value="${esc(val || '')}" placeholder="${esc(ph)}" oninput="sc.prev()"></label>`;
-  ctx.modal(mcard(`<div class="k" style="font-size:1.1em">Edit profile</div><div class="muted" style="margin:4px 0 10px">Saved on the chain for ${COST.prof} LUMA and visible to everyone. Everything below is optional.</div>
+  return (`<div class="sc-editpg"><div class="k" style="font-size:1.1em">Edit profile</div><div class="muted" style="margin:4px 0 10px">Saved on the chain for ${COST.prof} LUMA and visible to everyone. Everything below is optional.</div>
   <div id="pf-prev">${prevHtml(p)}</div>
   <div class="sc-sec">Pictures</div>
   <label class="sc-fl">Profile photo<div class="sc-row"><input class="sc-in" id="pf-i" value="${esc(p.i || '')}" placeholder="https:// or ipfs://" style="flex:1" oninput="sc.prev()"><button class="sc-btn sm ghost" onclick="sc.pickFor('avatar')">${ic('gem', 15)}Use an NFT</button></div></label>
@@ -979,8 +982,7 @@ function editModal() {
   <div class="sc-row"><label class="sc-fl" style="width:34%">Link 1 label<input class="sc-in" id="pf-l1t" maxlength="20" value="${esc(p.l1t)}" placeholder="Shop" oninput="sc.prev()"></label><label class="sc-fl" style="flex:1">Link 1<input class="sc-in" id="pf-l1u" value="${esc(p.l1u)}" placeholder="https://" oninput="sc.prev()"></label></div>
   <div class="sc-row"><label class="sc-fl" style="width:34%">Link 2 label<input class="sc-in" id="pf-l2t" maxlength="20" value="${esc(p.l2t)}" placeholder="Music" oninput="sc.prev()"></label><label class="sc-fl" style="flex:1">Link 2<input class="sc-in" id="pf-l2u" value="${esc(p.l2u)}" placeholder="https://" oninput="sc.prev()"></label></div>
   <div class="sc-sec">Your @handle</div><div class="muted" style="margin:2px 0 6px">${h ? 'You are @' + esc(h) + '. ' : ''}A handle costs ${COST.hdl} LUMA and adds a check mark. First to claim it keeps it.</div><div class="sc-row"><input class="sc-in" id="pf-h" maxlength="15" placeholder="yourname" style="flex:1" value=""><button class="sc-btn sm" onclick="sc.claim()">Claim</button></div><div class="sc-m" id="pf-hm">3 to 15 letters, numbers or _</div>
-  <div class="sc-row" style="margin-top:14px;justify-content:space-between;position:sticky;bottom:-1px;padding:10px 0;background:#0d1020"><span class="sc-m" id="pf-size"></span><div class="sc-row"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn" onclick="sc.saveProf()">Save profile</button></div></div>`, 580));
-  sc.prev();
+  <div class="sc-row" style="margin-top:14px;justify-content:space-between;position:sticky;bottom:-1px;padding:10px 0;background:#0d1020"><span class="sc-m" id="pf-size"></span><div class="sc-row"><button class="sc-btn ghost" onclick="sc.editBack()">Cancel</button><button class="sc-btn" onclick="sc.saveProf()">Save profile</button></div></div></div>`);
 }
 function keysModal() {
   const r = (a: string, b: string) => `<div class="sc-row" style="justify-content:space-between;padding:5px 0"><span>${b}</span><kbd style="background:rgba(255,255,255,.08);border-radius:6px;padding:2px 8px">${a}</kbd></div>`;
@@ -1156,6 +1158,7 @@ function bind() {
 }
 
 export const sc: any = {
+  editBack() { leaveEdit(); paint(); },
   close: () => { TS = null; ED = {}; ctx.closeModal(); },
   m(a: string, id: string) {
     ctx.closeModal();
@@ -1218,10 +1221,10 @@ export const sc: any = {
     for (const [k, nm] of [['i', 'photo'], ['k', 'cover picture'], ['w', 'website'], ['l1u', 'link 1'], ['l2u', 'link 2']] as const) if (v[k] && !safeUrl(v[k])) { ctx.toast(`The ${nm} must start with https:// or ipfs://`, true); return; }
     if ((v.i && !okImg(safeUrl(v.i))) || (v.k && !okImg(safeUrl(v.k)))) { ctx.toast('Pictures from that link are not allowed on this network. Use an NFT or an approved source.', true); return; }
     if (enc.encode(JSON.stringify({ v: 1, ...d })).length > MAXMEMO - 20) { ctx.toast('Your profile is too long to store in one transaction. Shorten the bio, links or text.', true); return; }
-    ED = {}; ctx.closeModal(); await act(d, 'Saving profile…', 'Profile saved on the chain'); },
+    leaveEdit(); await act(d, 'Saving profile…', 'Profile saved on the chain'); },
   async claim() { const h = ((document.getElementById('pf-h') as HTMLInputElement)?.value || '').trim().toLowerCase().replace(/^@/, ''); const m = document.getElementById('pf-hm');
     if (!/^[a-z0-9_]{3,15}$/.test(h)) { if (m) m.textContent = 'Use 3 to 15 letters, numbers or _'; return; } const o = IX.owner.get(h); if (o && o !== me()) { if (m) m.textContent = '@' + h + ' is taken'; return; }
-    ctx.closeModal(); await act({ t: 'hdl', h }, 'Claiming…', 'You are @' + h); },
+    if (S.view.k === 'editprof') leaveEdit(); await act({ t: 'hdl', h }, 'Claiming…', 'You are @' + h); },
 };
 (window as any).sc = sc;
 
