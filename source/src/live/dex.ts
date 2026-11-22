@@ -86,6 +86,9 @@ const orient = () => {
   DX.inv = want;
   return changed;
 };
+const LPK = 'starsky.dex.lastpair';
+const lastPair = (): { id: string; inv: boolean; fl: boolean } | null => { try { const j = JSON.parse(localStorage.getItem(LPK) || 'null'); return j && j.id ? { id: String(j.id), inv: !!j.inv, fl: !!j.fl } : null; } catch { return null; } };
+const savePair = () => { try { if (DX.mid) localStorage.setItem(LPK, JSON.stringify({ id: DX.mid, inv: DX.inv, fl: DX.flipped })); } catch {} };
 const nm = (a: Asset) => M.labelOf(a);
 const RANGE = () => M.RANGES.find(r => r.k === DX.range) || M.RANGES[2];
 
@@ -238,9 +241,10 @@ export async function load(keepSelection = true) {
       }
     }
     if (!keepSelection || !DX.markets.find((m: M.Market) => m.id === DX.mid)) {
+      const last = lastPair();
       const native = DX.markets.filter((m: M.Market) => isNative(m.quote));
-      DX.mid = (native[0] || DX.markets[0]).id;
-      DX.inv = false;
+      if (last && DX.markets.find((m: M.Market) => m.id === last.id)) { DX.mid = last.id; DX.inv = !!last.inv; DX.flipped = last.fl; }
+      else { DX.mid = (native[0] || DX.markets[0]).id; DX.inv = false; }
     }
     if (!DX.flipped) orient();
     if (DX.loadedMid !== DX.mid + (DX.inv ? '~' : '')) DX.cd = DX.tr = DX.tok = DX.hold = DX.bookd = DX.pc = null;
@@ -937,6 +941,7 @@ export const api: any = {
     DX.inv = false;
     DX.flipped = false;
     orient();
+    savePair();
     DX.amt = '';
     DX.price = '';
     load();
@@ -950,6 +955,7 @@ export const api: any = {
       DX.inv = false;
       DX.flipped = false;
       orient();
+      savePair();
       load();
       window.scrollTo(0, 0);
     }
@@ -957,6 +963,7 @@ export const api: any = {
   flip() {
     DX.inv = !DX.inv;
     DX.flipped = true;
+    savePair();
     DX.amt = '';
     DX.price = '';
     load();
