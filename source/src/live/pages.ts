@@ -34,7 +34,7 @@ export function marketsShell() {
   return `<div id="mk">
     <div class="row" style="gap:.6rem;margin-bottom:.8rem;align-items:center"><span class="mut" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.08em">Chart range</span>
       <div class="seg">${['1h', '24h', '7d', 'all'].map(x => `<button id="mk_r_${x}" class="${MK.range === x ? 'on' : ''}" onclick="window.mk.range('${x}')">${x}</button>`).join('')}</div>
-      <button class="sm ghost" onclick="window.mk.refresh()">Refresh now</button><span id="mk_meta" class="mut" style="font-size:.76rem"></span></div>
+      <button class="sm ghost" onclick="window.mk.refresh()">Refresh now</button><span class="grow"></span><button class="sm pri acc" onclick="window.tk.openCreate()">+ Create token</button><span id="mk_meta" class="mut" style="font-size:.76rem"></span></div>
     <div class="pgrid" id="mk_tiles">${wait('Reading pools…')}</div>
     <div class="k" style="margin:1.2rem 0 .5rem">Growth</div>
     <div class="pgrid" id="mk_growth">${wait('')}</div>

@@ -1832,6 +1832,7 @@ export function renderApp() {
         ${renderNavItem('send', 'Send')}
         ${renderNavItem('receive', 'Receive')}
         ${renderNavItem('markets', 'Markets & Tokens')}
+        <button class="nav" onclick="window.tk.openCreate()">${ic('markets')}Create token</button>
         ${renderNavItem('nfts', 'My NFTs')}
         ${renderNavItem('activity', 'History')}
         ${renderNavItem('holders', 'Token Holders')}
