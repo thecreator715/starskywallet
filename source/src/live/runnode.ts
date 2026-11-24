@@ -1,8 +1,9 @@
+import { ctx } from './ctx.ts';
 // "Run a node": ask the network's control panel (through the tunnel) to approve a supporting node, then give the person the command.
 const $ = (id: string) => document.getElementById(id) as any;
 const esc = (s: any) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 const H = { 'ngrok-skip-browser-warning': '1' };
-let NET: any = null, REQ: any = null, timer: any = 0, which: 'main' | 'test' = 'main';
+let FEE: any = null, NET: any = null, REQ: any = null, timer: any = 0, which: 'main' | 'test' = 'main';
 const KEY = 'starsky.runnode';
 function base(t: 'main' | 'test'): string {
   const c = (window as any).STARSKY_CONFIG || {};
@@ -26,7 +27,8 @@ export function shell() {
   <input id="rn_name" class="grow" placeholder="Name your node (e.g. Sam's laptop)"></div>
   <div class="row" style="gap:.5rem;flex-wrap:wrap;margin-top:.5rem"><input id="rn_host" class="grow" placeholder="Your public address (optional, for peers to reach you)"><input id="rn_reward" class="grow" placeholder="Address for rewards (optional, L… / T…)"></div>
   <label style="display:flex;gap:.5rem;align-items:center;margin-top:.7rem;font-size:.85rem"><input type="checkbox" id="rn_close" checked style="width:auto"> Close any previously running LUMA nodes on that computer first</label>
-  <div style="margin-top:.7rem"><button class="pri acc" onclick="window.rn.request(this)">Request to join</button> <button onclick="window.rn.check()">Check approval</button></div>
+  <div id="rn_fee" class="card" style="margin-top:.7rem"><div class="mut" style="font-size:.85rem">Loading the node fee…</div></div>
+  <div style="margin-top:.7rem"><button class="pri acc" onclick="window.rn.request(this)">Pay and request to join</button> <button onclick="window.rn.check()">Check approval</button></div>
   <div id="rn_msg" class="mut" style="font-size:.85rem;margin-top:.5rem"></div></div>
   <div class="card" id="rn_out" style="margin-top:1rem;display:none"></div></div>`;
 }
@@ -41,20 +43,54 @@ export function unmount() { clearInterval(timer); }
 async function pick(keep = false) {
   which = ($('rn_net') || { value: 'main' }).value;
   NET = null;
+  FEE = null; try { FEE = await api('/api/public/node-fee'); } catch {}
+  drawFee();
   try { NET = await api('/api/public/network'); msg(NET.allowJoin === false ? 'This network is not accepting new nodes right now.' : 'Connected to the ' + (NET.label || 'LUMA') + ' control panel.'); }
   catch (e: any) { msg('Could not reach the control panel: ' + e.message + '. The operator\'s tunnel may need updating.', true); }
   if (REQ && REQ.net === which) check(true);
+}
+const PK = 'starsky.runnode.pay';
+const money = (n: number) => '$' + Number(n).toLocaleString('en-US');
+function drawFee() {
+  const e = $('rn_fee'); if (!e) return;
+  if (!FEE) { e.innerHTML = '<div class="mut" style="font-size:.85rem">The node fee could not be loaded: the control panel may need updating.</div>'; return; }
+  const usdOk = FEE.usdEnabled;
+  e.innerHTML = `<div class="k">Node fee: ${money(FEE.usd)}</div>
+    <p class="mut" style="font-size:.85rem;margin:.3rem 0">Paid once to the LUMA genesis wallet, in LUMA or in USD. Your wallet signs the payment here, then the request goes in with the payment as proof.</p>
+    <div class="row" style="gap:.8rem;flex-wrap:wrap"><label style="display:flex;gap:.4rem;align-items:center"><input type="radio" name="rn_cur" value="LUMA" checked style="width:auto"> Pay <b>${Number(FEE.luma).toLocaleString('en-US', { maximumFractionDigits: 6 })} LUMA</b> <span class="mut">(at ${money(FEE.lumaUsd)} per LUMA)</span></label>
+    <label style="display:flex;gap:.4rem;align-items:center;${usdOk ? '' : 'opacity:.5'}"><input type="radio" name="rn_cur" value="USD" ${usdOk ? '' : 'disabled'} style="width:auto"> Pay <b>${Number(FEE.usd).toLocaleString('en-US')} USD</b></label></div>
+    <div class="mut" style="font-size:.78rem;margin-top:.3rem">To: <span class="mono">${esc(FEE.genesis)}</span></div>`;
 }
 async function request(b: HTMLButtonElement) {
   const name = $('rn_name').value.trim(); if (!name) return msg('Give your node a name first.', true);
   b.disabled = true;
   try {
-    const r = await api('/api/public/request', { label: name, role: 'api', host: $('rn_host').value.trim(), pubkey: '', rewardAddress: $('rn_reward').value.trim() });
+    let payTx = '';
+    if (FEE && FEE.usd > 0) {
+      // a payment already made for this network (for example when the request failed afterwards) is reused, never paid twice
+      let pk: any = null; try { pk = JSON.parse(localStorage.getItem(PK) || 'null'); } catch {}
+      if (pk && pk.net === which && pk.hash) payTx = pk.hash;
+      else {
+        if (ctx.netKey() !== which) throw new Error('Switch the wallet to LUMA ' + (which === 'main' ? 'Mainnet' : 'Testnet') + ' (top bar) to pay the fee on that network.');
+        if (!ctx.account()) throw new Error('Select a LUMA wallet to pay the node fee.');
+        const cur = (document.querySelector('input[name=rn_cur]:checked') as HTMLInputElement | null)?.value || 'LUMA';
+        const amount: any = cur === 'USD' ? { currency: 'USD', issuer: ctx.toClassic(FEE.usdIssuer), value: String(FEE.usd) } : String(Math.ceil(FEE.luma * 1e6));
+        const tx = { TransactionType: 'Payment', Account: ctx.account(), Destination: ctx.toClassic(FEE.genesis), Amount: amount };
+        msg('Sending the ' + money(FEE.usd) + ' payment…');
+        const p = await (ctx.xrpl() && ctx.lumaSubmit ? ctx.lumaSubmit(tx) : ctx.submit(tx));
+        if (!p.ok || !p.hash) throw new Error('Payment failed: ' + (p.msg || 'rejected') + (cur === 'USD' ? ' (the wallet needs a USD trust line and enough USD)' : ''));
+        payTx = p.hash; localStorage.setItem(PK, JSON.stringify({ net: which, hash: payTx }));
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    }
+    msg('Sending your request…');
+    const r = await api('/api/public/request', { label: name, role: 'api', host: $('rn_host').value.trim(), pubkey: '', rewardAddress: $('rn_reward').value.trim(), payTx });
+    try { localStorage.removeItem(PK); } catch {}
     REQ = { id: r.id, net: which, name, role: 'api', status: r.status };
     localStorage.setItem(KEY, JSON.stringify(REQ));
     msg(r.status === 'approved' ? 'Approved.' : 'Request sent. Waiting for the operator to approve it in the control panel.');
     render();
-  } catch (e: any) { msg(e.message, true); } finally { b.disabled = false; }
+  } catch (e: any) { if (/did not go|did not succeed|not enough|already used/.test(String(e.message))) { try { localStorage.removeItem(PK); } catch {} } msg(e.message, true); } finally { b.disabled = false; }
 }
 async function check(quiet = false) {
   if (!REQ) return quiet || msg('Nothing requested yet.', true);
