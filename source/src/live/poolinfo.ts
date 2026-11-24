@@ -42,9 +42,7 @@ interface Row {
   lp: number;
 }
 async function compute() {
-  const sn = await M.snapshot();
-  const ws = await M.windowSnaps().catch(() => [] as M.WinSnap[]);
-  const refs = await M.poolRefs().catch(() => [] as M.PoolRef[]);
+  const [sn, ws, refs] = await Promise.all([M.snapshot(), M.windowSnaps().catch(() => [] as M.WinSnap[]), M.poolRefs().catch(() => [] as M.PoolRef[])]);
   const un = sn.usdPerNative;
   const rows: Row[] = [];
   for (let idx = 0; idx < PL.pools.length; idx++) {

@@ -44,7 +44,7 @@ export async function discoverTokens(): Promise<Asset[]> {
   });
 }
 export async function poolRefs(): Promise<PoolRef[]> {
-  return cached('poolrefs', 30000, async () => {
+  return cached('poolrefs', 120000, async () => {
     const out: PoolRef[] = [];
     let marker: any;
     for (let page = 0; page < 20; page++) {
@@ -88,6 +88,15 @@ export async function poolState(ref: PoolRef, seq?: number): Promise<PoolState |
 /** first validated ledger in which a pool exists (binary search, cached forever) */
 export async function firstSeen(ref: PoolRef): Promise<number> {
   return cached('first' + ref.account, Infinity, async () => {
+    const lk = 'starsky.first.' + ctx.netKey() + (ctx.xrpl() ? 'x' : '') + '.' + ref.account;   // when a pool first appeared never changes: remember it across page loads
+    try { const v = Number(localStorage.getItem(lk)); if (v > 0) return v; } catch {}
+    const r = await firstSeenSearch(ref);
+    try { localStorage.setItem(lk, String(r)); } catch {}
+    return r;
+  });
+}
+async function firstSeenSearch(ref: PoolRef): Promise<number> {
+  {
     const i = await info();
     let lo = i.minSeq,
       hi = i.seq;
@@ -98,7 +107,7 @@ export async function firstSeen(ref: PoolRef): Promise<number> {
       else lo = mid;
     }
     return hi;
-  });
+  }
 }
 export interface Snap {
   seq: number;
@@ -191,12 +200,11 @@ export interface WinSnap {
 /** snapshots at 5m / 1h / 24h / 7d / oldest ledger ago */
 export async function windowSnaps(): Promise<WinSnap[]> {
   return cached('winsnaps', 20000, async () => {
-    const out: WinSnap[] = [];
-    for (const w of WINDOWS) {
+    // all windows at the same time (they used to be read one after another)
+    return Promise.all(WINDOWS.map(async w => {
       const at = await ledgerAgo(w.sec);
-      out.push({ w, seq: at.seq, ageSec: at.ageSec, clamped: at.clamped, snap: await snapshot(at.seq) });
-    }
-    return out;
+      return { w, seq: at.seq, ageSec: at.ageSec, clamped: at.clamped, snap: await snapshot(at.seq) } as WinSnap;
+    }));
   });
 }
 const chg = (now: number | null, then: number | null) => (now == null || then == null || !(then > 0) ? null : (now / then - 1) * 100);
@@ -236,8 +244,7 @@ export async function supplyOf(a: Asset): Promise<number | null> {
 }
 /** every asset on the network that has a pool, plus any extra assets (the wallet's lines, watch list) */
 export async function tokenTable(extra: Asset[] = []): Promise<{ rows: TokenRow[]; now: Snap; ws: WinSnap[] }> {
-  const ws = await windowSnaps();
-  const now = await snapshot();
+  const [ws, now] = await Promise.all([windowSnaps(), snapshot()]);
   const keys = new Set<string>(['native']);
   for (const p of now.pools) {
     keys.add(akey(p.a));

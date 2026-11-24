@@ -22,6 +22,7 @@ async function gather(account: string): Promise<Ctx> {
   const refs = await M.poolRefs();
   const p = refs.find(r => r.account === account);
   if (!p) throw new Error('That pool no longer exists.');
+  const snapP = M.snapshot();   // start now, runs alongside the pool and account reads
   const s = await M.poolState(p);
   if (!s) throw new Error('Could not read the pool.');
   const acc = ctx.account();
@@ -29,9 +30,8 @@ async function gather(account: string): Promise<Ctx> {
     b1 = 0,
     b2 = 0;
   if (acc) {
-    const [ai, al]: any[] = await Promise.all([tryReq('account_info', { account: acc, ledger_index: 'validated' }), tryReq('account_lines', { account: acc, ledger_index: 'validated', limit: 400 })]);
+    const [ai, al, inf]: any[] = await Promise.all([tryReq('account_info', { account: acc, ledger_index: 'validated' }), tryReq('account_lines', { account: acc, ledger_index: 'validated', limit: 400 }), info()]);
     const lines = (al && al.lines) || [];
-    const inf = await info();
     const nativeFree = ai && ai.account_data ? Math.max(0, Number(ai.account_data.Balance) / 1e6 - inf.reserveBase - inf.reserveInc * (ai.account_data.OwnerCount || 0)) : 0;
     const bal = (a: Asset) => (isNative(a) ? nativeFree : Number((lines.find((l: any) => l.currency === a.c && l.account === a.i) || {}).balance || 0));
     b1 = bal(p.a);
@@ -39,7 +39,7 @@ async function gather(account: string): Promise<Ctx> {
     const lpl = lines.find((l: any) => l.currency === p.lpCur && l.account === p.account);
     mine = lpl ? Number(lpl.balance) : 0;
   }
-  const snap = await M.snapshot();
+  const snap = await snapP;
   return { p, s, mine, bal1: b1, bal2: b2, px1: M.usdPx(snap, akey(p.a)), px2: M.usdPx(snap, akey(p.b)) };
 }
 const money = (v: number | null) => (v == null ? '' : ' <small class="mut">≈ ' + usd(v) + '</small>');

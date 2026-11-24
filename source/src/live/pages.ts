@@ -95,27 +95,24 @@ export async function marketsLoad() {
   const g = ++gen;
   try {
     if (!ctx.online()) return setHtml('mk_tiles', wait('Not connected to a node. Check the node address in Settings.'));
-    await loadLines();
+    const [, regList, bl, found, refs] = await Promise.all([
+      loadLines(),
+      TK.registry().catch(() => [] as TK.TokenMeta[]),
+      import('./bridge.ts').then(m => m.laneAssets()).catch(() => [] as Asset[]),
+      M.discoverTokens().catch(() => [] as Asset[]),
+      M.poolRefs(),
+    ]);
     const lineAssets: Asset[] = (MK.bal ? MK.bal.lines : []).map((l: any) => ({ c: l.currency, i: l.account }));
-    const regList = await TK.registry().catch(() => [] as TK.TokenMeta[]);
-    const bl: Asset[] = await import('./bridge.ts').then(m => m.laneAssets()).catch(() => [] as Asset[]);
-    const found: Asset[] = await M.discoverTokens().catch(() => [] as Asset[]);
     const t = await M.tokenTable([...lineAssets, ...regList.map(x => x.a), ...bl, ...found]);
     const pooled = new Set<string>();
     for (const p of t.now.pools) { pooled.add(akey(p.a)); pooled.add(akey(p.b)); }
     MK.other = new Set<string>([...regList.map(x => akey(x.a)), ...bl.map(x => akey(x)), ...found.map(x => akey(x)).filter(k => !pooled.has(k))]);
     if (!alive(g, 'mk')) return;
     MK.tokens = t;
-    const refs = await M.poolRefs();
     const nat = ctx.native();
     const native = t.rows.find(r => r.key === 'native');
     const acts = new Map<string, Act>();
-    await poolMap(refs, 4, async (p: M.PoolRef) => {
-      const s = t.now.pools.find(x => x.account === p.account);
-      const pa = s ? t.now.px.get(akey(p.a)) : null;
-      acts.set(p.account, await poolActivity(p, t.now, s && pa != null ? s.ra * pa * 2 : null));
-    });
-    if (!alive(g, 'mk')) return;
+    const paint = () => {
     const tvlNow = tvlOf(t.now);
     const wByK = (k: string) => t.ws.find(w => w.w.k === k);
     const tvlCh = (k: string) => { const w = wByK(k); return w ? chgPct(tvlNow, tvlOf(w.snap)) : null; };
@@ -129,16 +126,25 @@ export async function marketsLoad() {
         tile(`${esc(nat)} price`, native && native.usdPx != null ? usd(native.usdPx) : '–', `1h ${pctHtml(native ? native.chg['1h'] : null)} · 24h ${pctHtml(native ? native.chg['24h'] : null)} · 7d ${pctHtml(native ? native.chg['7d'] : null)}`),
         tile(`${esc(nat)} market cap`, native && native.mcapUsd != null ? usd(native.mcapUsd) : '–', `supply ${native && native.supply != null ? fmt(native.supply, 0) : '–'} × pool price`),
         tile('Total value in pools', money(tvlNow, t.now), `1h ${pctHtml(tvlCh('1h'))} · 24h ${pctHtml(tvlCh('24h'))} · 7d ${pctHtml(tvlCh('7d'))} · ${refs.length} pools`),
-        tile('24h volume', money(vol24, t.now), `${swaps24} swaps (read from each pool’s transactions)`),
-        tile('24h fees to liquidity providers', money(fees24, t.now), 'estimated from volume × pool fee'),
+        tile('24h volume', acts.size ? money(vol24, t.now) : '…', acts.size ? `${swaps24} swaps (read from each pool’s transactions)` : 'reading pool transactions…'),
+        tile('24h fees to liquidity providers', acts.size ? money(fees24, t.now) : '…', 'estimated from volume × pool fee'),
       ].join('')
     );
-    setHtml('mk_meta', `history from ledger #${(await info()).minSeq}${t.ws.some(w => w.clamped) ? ' · this node keeps less history than the longest windows' : ''}`);
     renderTokens(t, refs, acts);
     renderPools(t, refs, acts);
+    };
+    paint();   // show prices, tokens and pools right away; swap counts fill in below
     renderPortfolio(g, t);
     renderGrowth(g);
     renderHolders(g, t);
+    info().then(i => setHtml('mk_meta', `history from ledger #${i.minSeq}${t.ws.some(w => w.clamped) ? ' · this node keeps less history than the longest windows' : ''}`)).catch(() => {});
+    await poolMap(refs, 6, async (p: M.PoolRef) => {
+      const s = t.now.pools.find(x => x.account === p.account);
+      const pa = s ? t.now.px.get(akey(p.a)) : null;
+      acts.set(p.account, await poolActivity(p, t.now, s && pa != null ? s.ra * pa * 2 : null));
+    });
+    if (!alive(g, 'mk')) return;
+    paint();
     setTimeout(() => ($('mk') ? (keep.mk = ($('mk') as HTMLElement).innerHTML) : 0), 3000);
   } catch (e: any) {
     if (alive(g, 'mk')) setHtml('mk_tiles', wait('Could not read the node: ' + esc(e?.message || e)));
