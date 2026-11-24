@@ -612,6 +612,9 @@ export function copyText(t: string) {
 let connectGen = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshing = false;
+let lastHeavy = 0;
+let lastHk = '';
+let lastPx = 0;
 let retryN = 0;
 function backoff(): number { retryN++; return Math.min(15000, 600 * Math.pow(1.6, retryN - 1)); }
 function nudge() {
@@ -634,7 +637,7 @@ export function getCandidates(): string[] {
 }
 
 async function tryNode(url: string, gen: number): Promise<{ client: xrpl.Client; info: any }> {
-  const client = new xrpl.Client(url, { connectionTimeout: 15000 });
+  const client = new xrpl.Client(url, { connectionTimeout: 8000 });
   client.on('disconnected', () => {
     if (connectGen !== gen || st.client !== client) return;
     st.status = 'offline';
@@ -682,7 +685,7 @@ function handleLedgerClosed(l: any) {
 
   renderTop();
   refreshAccount(true);
-  if (st.tab === 'dex') Dex.tick();
+  if (st.tab === 'dex' && st.walletMode !== 'xrpl') Dex.tick();
 }
 
 function handleTransaction(ev: any) {
@@ -749,16 +752,30 @@ export async function connectNodes() {
   const cands = getCandidates();
   let won: { client: xrpl.Client; info: any; url: string } | null = null;
 
-  for (const url of cands) {
-    if (connectGen !== myGen) return;
-    try {
-      const res = await tryNode(url, myGen);
-      won = { ...res, url };
-      break;
-    } catch (e: any) {
-      st.tried.push({ url, err: String(e?.message || e) });
-    }
+  // race the nodes: the first (configured) starts at once, each backup joins 1.2 s later, the first socket that answers wins
+  {
+    let done = false;
+    const losers: xrpl.Client[] = [];
+    won = await new Promise<any>(resolve => {
+      let left = cands.length;
+      if (!left) resolve(null);
+      cands.forEach((url, i) => {
+        setTimeout(async () => {
+          if (done || connectGen !== myGen) { if (--left <= 0 && !done) resolve(null); return; }
+          try {
+            const res = await tryNode(url, myGen);
+            if (done || connectGen !== myGen) { try { res.client.removeAllListeners(); await res.client.disconnect(); } catch {} return; }
+            done = true; resolve({ ...res, url });
+          } catch (e: any) {
+            st.tried.push({ url, err: String(e?.message || e) });
+            if (--left <= 0 && !done) resolve(null);
+          }
+        }, i * 1200);
+      });
+    });
+    void losers;
   }
+  if (connectGen !== myGen) return;
 
   if (connectGen !== myGen) return;
 
@@ -772,9 +789,7 @@ export async function connectNodes() {
     st.err = '';
     st.ledger = won.info.validated_ledger?.seq || 0;
 
-    try {
-      await st.client.request({ command: 'subscribe', streams: ['ledger', 'transactions'] });
-    } catch {}
+    st.client.request({ command: 'subscribe', streams: ['ledger', 'transactions'] }).catch(() => {});   // not awaited: the page does not need to wait for it
 
     const a = activeAccount();
     if (a) {
@@ -783,8 +798,8 @@ export async function connectNodes() {
 
     renderTop();
     renderBanner();
+    void discoverPools();   // runs alongside the account load
     await refreshAccount();
-    discoverPools();
     return;
   }
 
@@ -833,63 +848,19 @@ export async function refreshAccount(quiet = false) {
     }
 
     if (!bal.unfunded) {
-      try {
-        const rLines = await cl.request({
-          command: 'account_lines',
-          account: a.address,
-          ledger_index: 'validated',
-        });
-        lines = (rLines.result as any).lines || [];
-      } catch {}
-
-      try {
-        const rObj = await cl.request({
-          command: 'account_objects',
-          account: a.address,
-          type: 'mptoken',
-          ledger_index: 'validated',
-        });
-        st.mpts = ((rObj.result as any).account_objects || []).map((o: any) => ({
-          id: o.MPTokenIssuanceID,
-          amount: String(o.MPTAmount || '0'),
-        }));
-      } catch {
-        st.mpts = [];
-      }
-
-      try {
-        const rNfts = await cl.request({
-          command: 'account_nfts',
-          account: a.address,
-          ledger_index: 'validated',
-          limit: 100,
-        });
-        st.nfts = (rNfts.result as any).account_nfts || [];
-      } catch {
-        st.nfts = [];
-      }
-
-      try {
-        const rTx = await cl.request({
-          command: 'account_tx',
-          account: a.address,
-          limit: 60,
-        });
-        st.hist = (rTx.result as any).transactions || [];
-      } catch {
-        st.hist = [];
-      }
-
-      try {
-        const rOffers = await cl.request({
-          command: 'account_offers',
-          account: a.address,
-          limit: 100,
-        });
-        st.openOrders = (rOffers.result as any).offers || [];
-      } catch {
-        st.openOrders = [];
-      }
+      const prev: any = st.bal;
+      const hk = a.address + st.walletMode + getNet().id; const heavy = !quiet || hk !== lastHk || Date.now() - lastHeavy > 30000 || !prev || prev.drops !== bal.drops || prev.owner !== bal.owner;
+      const ok = <T,>(p: Promise<any>, f: (r: any) => T, d: T): Promise<T> => p.then(f, () => d);
+      // everything the account needs, asked at the same time (it used to be six requests one after another, on every ledger)
+      const [ln, mp, nf, tx, of] = await Promise.all([
+        ok(cl.request({ command: 'account_lines', account: a.address, ledger_index: 'validated' }), (r: any) => (r.result.lines || []) as any[], lines),
+        heavy ? ok(cl.request({ command: 'account_objects', account: a.address, type: 'mptoken', ledger_index: 'validated' }), (r: any) => ((r.result.account_objects || []) as any[]).map(o => ({ id: o.MPTokenIssuanceID, amount: String(o.MPTAmount || '0') })), [] as any[]) : Promise.resolve(null),
+        heavy ? ok(cl.request({ command: 'account_nfts', account: a.address, ledger_index: 'validated', limit: 100 }), (r: any) => (r.result.account_nfts || []) as any[], [] as any[]) : Promise.resolve(null),
+        heavy ? ok(cl.request({ command: 'account_tx', account: a.address, limit: 60 }), (r: any) => (r.result.transactions || []) as any[], [] as any[]) : Promise.resolve(null),
+        heavy ? ok(cl.request({ command: 'account_offers', account: a.address, limit: 100 }), (r: any) => (r.result.offers || []) as any[], [] as any[]) : Promise.resolve(null),
+      ]);
+      lines = ln;
+      if (heavy) { lastHeavy = Date.now(); lastHk = hk; st.mpts = mp as any; st.nfts = nf as any; st.hist = tx as any; st.openOrders = of as any; }
     } else {
       st.lines = [];
       st.mpts = [];
@@ -902,7 +873,7 @@ export async function refreshAccount(quiet = false) {
     st.lines = lines;
     autoDetectPairs();
     buildChart();
-    await priceAll();
+    if (!quiet || Date.now() - lastPx > 20000) { lastPx = Date.now(); await priceAll(); }
     const sig = JSON.stringify([String(bal.drops), bal.owner, lines, st.hist.length, (st.hist[0] as any)?.tx?.hash || (st.hist[0] as any)?.hash || '', st.px, st.nfts.length, st.mpts.length]);
     const changed = sig !== lastSig;
     lastSig = sig;

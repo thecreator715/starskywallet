@@ -233,7 +233,8 @@ export function shell() {
         <div class="dxohlc mono" id="dx_ohlc">&nbsp;</div>
         <div id="dx_chart" class="dxcw"><div class="mut" style="padding:3rem 0;text-align:center">Loading the top 50 XRPL tokens by volume…</div></div>
       </div>
-      <div class="card dxbelow" style="margin-top:.8rem">
+      <div class="dxsplit"></div>
+      <div class="card dxbelow">
         <div class="dxtabs" id="dx_tabs"></div>
         <div id="dx_table" style="overflow:auto"></div>
       </div>

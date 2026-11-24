@@ -32,7 +32,7 @@ export async function xclient(): Promise<xrpl.Client> {
   if (xDead.u === u && Date.now() - xDead.t < 20000) throw new Error('The XRPL node ' + u + ' is not reachable');   // fail fast instead of waiting for the timeout on every lookup
   if (xPend && xPend.u === u) return xPend.p;   // one connection attempt per node, shared by all lookups
   const old = xc; xc = null; if (old) { try { old.disconnect().catch(() => {}); } catch {} }   // never wait for the old socket
-  const cl = new xrpl.Client(u, { connectionTimeout: 6000 });
+  const mkc = (url: string) => { const cl = new xrpl.Client(url, { connectionTimeout: 6000 });
   // Public XRPL nodes cap requests ("units quota exhausted, retry in ~8000ms"): space requests out, cache identical reads for a few seconds and retry when told to wait.
   { const raw = cl.request.bind(cl) as any, cache = new Map<string, { t: number; v: any }>(); let chain: Promise<any> = Promise.resolve();
     const readCmd = /^(account_info|account_lines|account_nfts|account_tx|server_info|nft_sell_offers|nft_buy_offers|ledger)$/;
@@ -42,7 +42,14 @@ export async function xclient(): Promise<xrpl.Client> {
       const run = async () => { for (let i = 0; ; i++) { try { const v = await raw(req, ...rest); if (key) cache.set(key, { t: Date.now(), v }); return v; } catch (e: any) { const m = String((e && (e.message || e.data?.error_message)) || e), w = /rate limit|quota|slowDown|too many/i.test(m) ? Math.min(15000, (+((m.match(/retry in ~?(\d+)\s*ms/i) || [])[1]) || 3000) + 400) : 0; if (!w || i >= 4) throw e; await new Promise(r => setTimeout(r, w)); } } };
       const job = chain.then(() => new Promise(r => setTimeout(r, 90))).then(run); chain = job.catch(() => {}); return job;
     }; }
-  const p = (async () => { try { await cl.connect(); xc = cl; xcUrl = u; return cl; } catch (e) { xDead = { u, t: Date.now() }; try { cl.disconnect().catch(() => {}); } catch {} throw e; } finally { if (xPend && xPend.u === u) xPend = null; } })();
+  return cl; };
+  // race the main public node against backups: the first socket that opens wins, the others are closed
+  const urls = u === DEF_WS_MAIN ? [u, 'wss://s1.ripple.com', 'wss://s2.ripple.com'] : [u];
+  const p = (async () => { const cls = urls.map(mkc); try {
+      let done = false;
+      const win = await new Promise<xrpl.Client>((res, rej) => { let n = cls.length; cls.forEach(c => c.connect().then(() => { if (done) { try { c.disconnect().catch(() => {}); } catch {} } else { done = true; res(c); } }, () => { if (--n === 0 && !done) rej(new Error('The XRPL node ' + u + ' is not reachable')); })); });
+      cls.forEach(c => { if (c !== win) { try { c.disconnect().catch(() => {}); } catch {} } });
+      xc = win; xcUrl = u; return win; } catch (e) { xDead = { u, t: Date.now() }; cls.forEach(c => { try { c.disconnect().catch(() => {}); } catch {} }); throw e; } finally { if (xPend && xPend.u === u) xPend = null; } })();
   xPend = { u, p };
   return p;
 }
