@@ -238,7 +238,7 @@ export async function openCreate() {
       <div class="dxkv"><span class="mut">Funds for the new issuer wallet (reserve and fees)</span><b>about ${fmt(reserve)} ${esc(ctx.native())}</b></div>
       <div class="dxkv"><span class="mut">Paid from</span><span class="mono">${esc(short(ctx.showL(ctx.account() as string), 8, 6))}</span></div></div>
     <div id="tk_err" class="crit" style="min-height:1.2rem;font-size:.82rem;margin-top:.4rem"></div>
-    <div class="row"><button class="grow" onclick="window.closeModal()">Cancel</button><button class="pri acc grow" id="tk_go" onclick="window.tk.create(this)">Create token</button></div>`, 'Create a token');
+    <div class="row"><button class="grow" onclick="window.tk.leave()">Cancel</button><button class="pri acc grow" id="tk_go" onclick="window.tk.create(this)">Create token</button></div>`, 'Create a token');
 }
 const keepForm = () => {
   F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked, x: val('tk_x'), tg: val('tk_tg'), dc: val('tk_dc'), cat: val('tk_cat'), tf: val('tk_tf'), nf: !!$('tk_nf')?.checked, pay: val('tk_pay') || F.pay, gen: val('tk_gen') || F.gen };
@@ -402,7 +402,7 @@ function drawManage() {
   const box = document.getElementById('tkm'); if (!box) return;
   if (!MGL.length) { box.innerHTML = '<div class="mut" style="padding:1rem">No tokens made in this wallet vault yet on this network. Create one first, or switch network (Mainnet/Testnet) at the top.</div>'; return; }
   const m = MGL[MGSEL];
-  box.innerHTML = `<select id="tkm_sel" style="width:100%" onchange="window.tk.msel(this.value)">${MGL.map((x, i) => `<option value="${i}" ${i === MGSEL ? 'selected' : ''}>${esc(x.label)} (${esc(x.name)})</option>`).join('')}</select>
+  box.innerHTML = `<div id="tkm_all" style="margin-bottom:.8rem"><div class="mut" style="padding:.6rem">Reading all your tokens…</div></div><select id="tkm_sel" style="width:100%" onchange="window.tk.msel(this.value)">${MGL.map((x, i) => `<option value="${i}" ${i === MGSEL ? 'selected' : ''}>${esc(x.label)} (${esc(x.name)})</option>`).join('')}</select>
   <div class="lpcard" style="margin-top:.6rem"><div class="dxkv"><span class="mut">Total supply</span><b>${fmt(m.supply)} ${esc(m.name)}</b></div><div class="dxkv"><span class="mut">In your wallet</span><b>${fmt(m.mine)} ${esc(m.name)}</b></div><div class="dxkv"><span class="mut">Supply cap</span><b>${m.locked ? 'Capped forever: nobody can mint more' : 'Open: you can still mint more'}</b></div></div>
   <div class="lpcard" style="margin-top:.6rem"><div class="k">Mint more</div><div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Creates new tokens and sends them to your wallet. ${m.locked ? 'Not possible: the supply is capped.' : ''}</div>
     <div class="row" style="gap:.5rem"><input id="tkm_mint" class="grow" inputmode="decimal" placeholder="Amount to mint" ${m.locked ? 'disabled' : ''}><button class="pri acc" ${m.locked ? 'disabled' : ''} onclick="window.tk.mint(this)">Mint</button></div></div>
@@ -413,6 +413,7 @@ function drawManage() {
   <div id="tkm_err" class="crit" style="min-height:1.2rem;font-size:.82rem;margin-top:.4rem"></div>
   <div id="tkm_an" style="margin-top:.8rem"><div class="mut" style="padding:.8rem">Loading analytics from the ledger…</div></div>`;
   void loadAnalytics(m);
+  void loadAll();
 }
 export async function openManage() {
   if (!ctx.account()) return ctx.toast('Select a wallet first', true);
@@ -420,9 +421,37 @@ export async function openManage() {
   await loadManaged(); drawManage();
 }
 const mErr = (s: string) => { const e = document.getElementById('tkm_err'); if (e) e.textContent = s; };
+let ALG = 0;
+// overview of every token this vault created: price, market cap, holders, your share and PnL-ish value, one card each
+async function loadAll() {
+  const g = ++ALG, box = () => (g === ALG ? document.getElementById('tkm_all') : null);
+  try {
+    const assets: Asset[] = MGL.map(m => ({ c: m.cur, i: m.issuer }));
+    const tt = await M.tokenTable(assets);
+    const refs = await M.poolRefs();
+    const cards = MGL.map((m, i) => {
+      const k = akey({ c: m.cur, i: m.issuer }), row: any = tt.rows.find(r => r.key === k);
+      const px = row ? row.usdPx : null, val = px != null ? m.mine * px : null, ch = row ? row.chg['24h'] : null;
+      return `<div class="lpcard tkall ${i === MGSEL ? 'on' : ''}" style="cursor:pointer" onclick="window.tk.msel('${i}')"><div class="row" style="justify-content:space-between"><b>${esc(m.name)}</b><span style="color:${ch != null && ch < 0 ? '#f87171' : '#34d399'}">${pc(ch)}</span></div>
+        ${kv('Price', px != null ? usd(px) : '–')}${kv('Market cap', row && row.mcapUsd != null ? usd(row.mcapUsd) : '–')}${kv('Supply', fmt(m.supply))}${kv('You hold', fmt(m.mine) + (m.supply > 0 ? ' (' + ((m.mine / m.supply) * 100).toFixed(2) + '%)' : ''))}${kv('Value', val != null ? usd(val) : '–')}
+        <div class="dxkv"><span class="mut">Holders</span><b id="tkh_${i}">…</b></div>${kv('Pools', String(row ? row.pools : 0))}
+        <div class="row" style="gap:.4rem;margin-top:.4rem"><button class="sm grow" onclick="event.stopPropagation();window.pa.trade('${esc(k)}')">Trade</button><button class="sm grow" onclick="event.stopPropagation();window.tk.msel('${i}')">Analytics</button></div></div>`;
+    });
+    const b = box(); if (!b) return;
+    b.innerHTML = `<div class="k">All your tokens (${MGL.length})</div><div class="tkgrid">${cards.join('')}</div>`;
+    const pa = new Set(refs.map(r => r.account));
+    for (let i = 0; i < MGL.length; i += 3) {
+      await Promise.all(MGL.slice(i, i + 3).map(async (m, j) => {
+        const hd = await M.holders({ c: m.cur, i: m.issuer }, m.supply, pa).catch(() => null);
+        const e = document.getElementById('tkh_' + (i + j)); if (e && g === ALG) e.textContent = hd ? fmt(hd.count, 0) + (hd.truncated ? '+' : '') : '–';
+      }));
+    }
+  } catch { const b = box(); if (b) b.innerHTML = ''; }
+}
 async function mDone(msg: string) { ctx.toast('✓ ' + msg); clearCache(); await loadManaged(); drawManage(); }
 Object.assign(tkApi, {
   openManage,
+  leave: () => { if (document.getElementById('tkpg')) (window as any).goTab('markets'); else (window as any).closeModal(); },
   msel: (v: string) => { MGSEL = Number(v) || 0; drawManage(); },
   async mint(b: HTMLButtonElement) {
     const m = MGL[MGSEL], n = parseFloat(val('tkm_mint')); mErr('');

@@ -22,6 +22,8 @@ import * as Nft from './live/nft.ts';
 import * as Hist from './live/history.ts';
 import * as Hold from './live/holders.ts';
 import { tkApi } from './live/tokens.ts';
+import * as ActLog from './live/actlog.ts';
+import './live/procmodal.ts';
 import { xaApi } from './live/xassets.ts';
 import { clearCache } from './live/chain.ts';
 import { startTopStats, refreshTopStats } from './live/topstats.ts';
@@ -302,7 +304,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -1120,6 +1122,11 @@ const ICON: Record<string, string> = {
   holders: '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M16 5.2a3.2 3.2 0 010 5.6M18 14.4c2 .7 3.5 2.7 3.5 5.6"/>',
   runnode: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01M12 7.5h5M12 16.5h5"/>',
   burn: '<path d="M12 22c4.4 0 7-2.9 7-6.6 0-3-1.8-4.9-3.2-6.4-.4 1.4-1.2 2.2-2.3 2.6.4-3.7-1-6.6-3.5-9.6-.2 3.2-1.8 5.3-3.1 7C5.6 10.6 5 12.4 5 15.4 5 19.1 7.6 22 12 22z"/>',
+  social: '<path d="M21 12a8 8 0 01-11.6 7.1L3 21l1.9-6.2A8 8 0 1121 12z"/><path d="M8.5 11h7M8.5 14h4"/>',
+  rewards: '<path d="M12 15a6 6 0 100-12 6 6 0 000 12z"/><path d="M8.5 14l-1.5 7 5-3 5 3-1.5-7"/>',
+  claim: '<rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8c-2-4-6-4-6-1.5S10 8 12 8zm0 0c2-4 6-4 6-1.5S14 8 12 8z"/>',
+  mktoken: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
+  mgtoken: '<path d="M4 7h10M4 12h16M4 17h10"/><circle cx="17" cy="7" r="2"/><circle cx="8" cy="17" r="0.1"/><path d="M17 17h3"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/> y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
 };
 
@@ -1134,6 +1141,8 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['send', 'Send'],
   ['receive', 'Receive'],
   ['markets', 'Markets & Tokens'],
+  ['mktoken', 'Create Token'],
+  ['mgtoken', 'Mint, Burn & Cap'],
   ['nftmarket', 'NFT Marketplace'],
   ['nfts', 'My NFTs'],
   ['activity', 'History'],
@@ -1161,6 +1170,8 @@ export function modal(h: string) {
 }
 
 export function page(h: string, title = '') {
+  const host = document.getElementById('tkpg');
+  if (host) { host.innerHTML = `<div class="card">${h}</div>`; return; }
   closeModal();
   const m = document.createElement('div');
   m.className = 'modal pg';
@@ -1648,6 +1659,7 @@ export function renderApp() {
             </div>
           </div>
         </div>
+        ${ActLog.shell('send')}
       `;
       break;
 
@@ -1678,6 +1690,7 @@ export function renderApp() {
             </p>
           </div>
         </div>
+        ${ActLog.shell('receive')}
       `;
       break;
 
@@ -1695,6 +1708,11 @@ export function renderApp() {
 
     case 'runnode':
       body = RunNode.shell();
+      break;
+
+    case 'mktoken':
+    case 'mgtoken':
+      body = '<div id="tkpg" class="tkpg"><div class="card"><div class="mut" style="padding:1rem">Loading…</div></div></div>';
       break;
 
     case 'more':
@@ -1803,8 +1821,8 @@ export function renderApp() {
         ${renderNavItem('send', 'Send')}
         ${renderNavItem('receive', 'Receive')}
         ${renderNavItem('markets', 'Markets & Tokens')}
-        <button class="nav" onclick="window.tk.openCreate()">${ic('markets')}Create token</button>
-        <button class="nav" onclick="window.tk.openManage()">${ic('markets')}Mint, burn & cap</button>
+        ${renderNavItem('mktoken', 'Create token')}
+        ${renderNavItem('mgtoken', 'Mint, burn & cap')}
         ${renderNavItem('nfts', 'My NFTs')}
         ${renderNavItem('activity', 'History')}
         ${renderNavItem('holders', 'Token Holders')}
@@ -1907,6 +1925,9 @@ export function renderApp() {
   renderNetStrip();
   if (st.tab === 'runnode') RunNode.mount();
   else RunNode.unmount();
+  if (st.tab === 'send' || st.tab === 'receive') void ActLog.load(st.tab);
+  if (st.tab === 'mktoken') void tkApi.openCreate();
+  if (st.tab === 'mgtoken') void tkApi.openManage();
   if (st.tab === 'markets') Pages.marketsMount();
   else Pages.marketsUnmount();
   if (st.tab === 'bridge') Pages.bridgeMount();
@@ -2668,6 +2689,7 @@ export function initWindowBindings() {
   };
 
   (window as any).closeModal = closeModal;
+  (window as any).al = ActLog.alApi;
 
   (window as any).openManualImportModal = () => {
     (window as any).goTab('wallets');

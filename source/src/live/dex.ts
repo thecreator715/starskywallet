@@ -5,6 +5,7 @@ import { Asset, NATIVE, akey, amtNum, amtTx, esc, fmt, hexName, isNative, issueO
 import { cached, info, req, tryReq } from './chain.ts';
 import { chartSvg } from './dexchart.ts';
 import * as Mg from './margin.ts';
+import * as PM from './procmodal.ts';
 import { iconOf as TKicon, registry as TKreg } from './tokens.ts';
 
 type Side = 'buy' | 'sell';
@@ -412,6 +413,7 @@ function renderHead() {
      <div class="dxprice"><span class="mono">${p == null ? '–' : fmt(p)}</span> <small>${esc(nm(m.quote))}</small>${qusd != null && p != null ? ` <small class="mut">≈ ${usd(p * qusd)}</small>` : ''}</div>
      ${d24 ? `<div>${pctHtml(d24.v)}${d24.partial ? '<small class="mut" title="Longer than this market has existed: change since it listed"> *</small>' : ''}<small class="mut"> 24h</small></div>` : ''}
      <div style="flex:1"></div>
+     <button class="sm ghost" title="Post this chart and the token data to Social" onclick="window.dx.share()">Share to Social</button>
      <span class="mut dxnote">${DX.cd && DX.cd.note ? esc(DX.cd.note) : ''}</span>`
   );
 }
@@ -835,6 +837,7 @@ function renderTrade(soft = false) {
      <div class="dxflip"><button onclick="window.dx.setSide('${buy ? 'sell' : 'buy'}')" title="Switch direction">⇅</button></div>
      <div class="dxbox"><div class="k">YOU RECEIVE</div><div class="dxin"><span class="dxchip">${tkLetters(nm(get))}</span><b>${esc(nm(get))}</b><span class="dxout mono" id="dx_out">0.00</span></div><div class="mut" id="dx_rate" style="font-size:.78rem;margin-top:.3rem">&nbsp;</div></div>
      <div class="dxgrid3"><div class="dxs"><div class="k">IMPACT</div><div id="dx_imp">–</div></div><div class="dxs"><div class="k">FEE</div><div id="dx_fee">${m.pool ? (m.pool as any).fee + '%' : '–'}</div></div><div class="dxs"><div class="k">SLIPPAGE</div><div><a href="#" onclick="window.dx.slip();return false" title="Click to change">${DX.slip}%</a></div></div></div>
+     <div class="dxest" id="dx_est"></div>
      ${DX.type === 'limit' ? `<label class="mut" style="font-size:.78rem;display:block;margin:.4rem 0"><input type="checkbox" ${DX.post ? 'checked' : ''} onchange="window.dx.setPost(this.checked)"> Post only (never take liquidity)</label>` : ''}
      <button class="pri ${buy ? 'acc' : ''} dxgo ${buy ? '' : 'sellgo'}" id="dx_go" onclick="window.dx.go(this)" ${!ctx.online() ? 'disabled' : ''}>${esc(lbl)}</button>
      <div class="mut" id="dx_msg" style="font-size:.78rem;margin-top:.4rem;color:${DX.msgBad ? 'var(--crit)' : 'var(--ok)'}">${esc(DX.msg)}</div>`
@@ -863,6 +866,7 @@ export function quoteNow() {
       out.textContent = '0.00';
       setHtml('dx_rate', '&nbsp;');
       setHtml('dx_imp', '–');
+      setHtml('dx_est', '');
       DX.quote = null;
       return;
     }
@@ -886,6 +890,14 @@ export function quoteNow() {
     setHtml('dx_rate', `1 ${esc(nm(buy ? m.quote : m.base))} ≈ ${fmt(q.rate)} ${esc(nm(get))} · via ${esc(q.src)} · min ${fmt(q.out * (1 - DX.slip / 100))}`);
     setHtml('dx_imp', `<span class="${q.impact > 0.05 ? 'dn' : ''}">${(q.impact * 100).toFixed(2)}%</span>`);
     setHtml('dx_fee', q.src === 'AMM pool' ? q.feePct + '%' : 'book');
+    {
+      const vu = (a: Asset, n: number): number | null => { const qu = usdOfQuote(), lp = livePrice(); return qu == null ? null : akey(a) === akey(m.quote) ? n * qu : lp != null ? n * lp * qu : null; };
+      const pay2 = buy ? m.quote : m.base, min = q.out * (1 - DX.slip / 100), feeAmt = q.src === 'AMM pool' ? (x * q.feePct) / 100 : 0, lp = livePrice();
+      const exec = buy ? x / q.out : q.out / x, vs = lp && lp > 0 ? (exec / lp - 1) * 100 : null, u = (v: number | null) => (v == null ? '' : ' <small class="mut">≈ ' + usd(v) + '</small>');
+      const line = (k: string, v: string) => `<div class="dxkv"><span class="mut">${k}</span><span>${v}</span></div>`;
+      setHtml('dx_est', line('You pay', `${fmt(x)} ${esc(nm(pay2))}${u(vu(pay2, x))}`) + line('You receive (est.)', `${fmt(q.out, 8)} ${esc(nm(get))}${u(vu(get, q.out))}`) + line('Minimum received', `${fmt(min, 8)} ${esc(nm(get))}${u(vu(get, min))}`)
+        + line('Execution price', `${fmt(exec, 8)} ${esc(nm(m.quote))}${vs != null ? ` <small class="${vs > 0 === buy ? 'dn' : 'up'}">${vs >= 0 ? '+' : ''}${vs.toFixed(2)}% vs market</small>` : ''}`) + (feeAmt ? line('Pool fee paid', `${fmt(feeAmt, 6)} ${esc(nm(pay2))}${u(vu(pay2, feeAmt))}`) : '') + line('Route', esc(q.src)));
+    }
   }, 200);
 }
 
@@ -1142,6 +1154,13 @@ export const api: any = {
     ctx.toast(`✓ ${ok} of ${list.length} orders cancelled`, ok < list.length);
     await loadOrders(); renderTable();
   },
+  share() {
+    const m = mkt(); if (!m) return;
+    const p = livePrice(), qu = usdOfQuote(), d24 = DX.pc ? DX.pc.ch['24h'] : null, sym = nm(m.base).replace(/[^A-Za-z0-9]/g, '');
+    const tk: any = DX.tok && DX.tok.rows ? DX.tok.rows.find((r: any) => r.key === akey(m.base)) : null;
+    const lines = [`$${sym} on the LUMA DEX`, p != null ? `Price ${fmt(p)} ${nm(m.quote)}${qu != null ? ` (${usd(p * qu)})` : ''}${d24 ? ` · 24h ${d24.v >= 0 ? '+' : ''}${d24.v.toFixed(2)}%` : ''}` : '', tk && tk.mcapUsd != null ? `Market cap ${usd(tk.mcapUsd)}` : '', `Range ${DX.range} · pair ${nm(m.base)}/${nm(m.quote)}`].filter(Boolean);
+    (window as any).sc?.share?.(lines.join('\n'));
+  },
   async go(btn: HTMLButtonElement) {
     const m = mkt();
     const msg = $('dx_msg');
@@ -1166,37 +1185,77 @@ export const api: any = {
     btn.disabled = true;
     try {
       let tx: any;
+      const qUsd = usdOfQuote(), lp = livePrice();
+      const valUsd = (a: Asset, n: number): number | null => (qUsd == null ? null : akey(a) === akey(m.quote) ? n * qUsd : lp != null ? n * lp * qUsd : null);
+      const ap = (v: number | null) => (v == null ? '' : ' <small class="mut">≈ ' + usd(v) + '</small>');
+      const inf = await info().catch(() => null);
+      const netFee = inf ? fmt(inf.baseFee, 6) + ' ' + ctx.native() : '–';
+      const balPay = balOf(pay), balGet = balOf(get);
+      let rows: PM.PRow[], warns: string[] = [], out = 0, hero: { pay: string; get: string };
       if (DX.type === 'market') {
         const q = await M.quote(m, DX.side, x);
         if (!q) throw new Error('No liquidity for this size.');
         const min = q.out * (1 - DX.slip / 100);
-        if (q.impact > 0.05 && !confirm(`Price impact warning: this ${buy ? 'buy' : 'sell'} moves the price by ${(q.impact * 100).toFixed(1)}%. You will get noticeably less than the quoted market rate. Continue?`)) throw new Error('Cancelled: price impact too high.');
-        else if (q.impact > 0.02 && q.impact <= 0.05) say(`Heads up: price impact ${(q.impact * 100).toFixed(1)}%.`, false);
+        out = q.out;
         tx = { TransactionType: 'OfferCreate', Account: acc, TakerGets: amtTx(pay, x), TakerPays: amtTx(get, min), Flags: 0x00080000 | 0x00020000 };
+        const exec = buy ? x / q.out : q.out / x, vs = lp && lp > 0 ? (exec / lp - 1) * 100 : null;
+        const feeAmt = q.src === 'AMM pool' ? (x * q.feePct) / 100 : 0;
+        if (q.impact > 0.05) warns.push(`High price impact: this ${buy ? 'buy' : 'sell'} moves the price by ${(q.impact * 100).toFixed(1)}%, so you get noticeably less than the quoted rate.`);
+        else if (q.impact > 0.02) warns.push(`Price impact is ${(q.impact * 100).toFixed(1)}%.`);
+        if (balPay - x < 0.0001 && isNative(pay)) warns.push('This leaves almost nothing for fees and the account reserve.');
+        hero = { pay: `${fmt(x)} ${nm(pay)}`, get: `≈ ${fmt(q.out, 8)} ${nm(get)}` };
+        rows = [
+          { k: 'Order type', v: 'Market swap' }, { k: 'Route', v: esc(q.src), hint: 'Where the trade is filled: the AMM pool or the order book.' },
+          { k: 'Rate', v: `1 ${esc(nm(pay))} ≈ ${fmt(q.rate)} ${esc(nm(get))}` },
+          { k: 'Execution price', v: `${fmt(exec, 8)} ${esc(nm(m.quote))} per ${esc(nm(m.base))}${vs != null ? ` <small class="${vs > 0 === buy ? 'dn' : 'up'}">(${vs >= 0 ? '+' : ''}${vs.toFixed(2)}% vs market)</small>` : ''}` },
+          { k: 'Price impact', v: `${(q.impact * 100).toFixed(2)}%`, cls: q.impact > 0.02 ? 'dn' : 'up', hint: 'How much your own trade moves the pool price.' },
+          { k: 'Trading fee', v: q.src === 'AMM pool' ? `${q.feePct}% · ${fmt(feeAmt, 6)} ${esc(nm(pay))}${ap(valUsd(pay, feeAmt))}` : 'Order book: no pool fee', hint: 'Paid to the liquidity providers of the pool.' },
+          { k: `Slippage tolerance`, v: `${DX.slip}%`, hint: 'If the price moves more than this before it fills, the order is cancelled.' },
+          { k: 'Minimum received', v: `${fmt(min, 8)} ${esc(nm(get))}${ap(valUsd(get, min))}` },
+          { k: 'Network fee', v: netFee },
+          { k: `${esc(nm(pay))} balance after`, v: fmt(balPay - x) }, { k: `${esc(nm(get))} balance after`, v: '≈ ' + fmt(balGet + q.out) },
+        ];
       } else {
         const p = parseFloat(DX.price);
         if (!(p > 0)) throw new Error('Enter a limit price.');
         const rec = buy ? x / p : x * p;
-        const mk = livePrice();
+        out = rec;
+        const mk = lp;
+        let dev = 0;
         if (mk && mk > 0) {
-          const dev = (p - mk) / mk;
-          if (buy && dev > 0.1 && !DX.post && !confirm(`This BUY limit is ${(dev * 100).toFixed(0)}% ABOVE the market price (${fmt(mk, 8)}), so it fills immediately at a worse price than the market. Continue?`)) throw new Error('Cancelled: limit price above market.');
-          if (!buy && dev < -0.1 && !DX.post && !confirm(`This SELL limit is ${(-dev * 100).toFixed(0)}% BELOW the market price (${fmt(mk, 8)}), so it fills immediately at a worse price than the market. Continue?`)) throw new Error('Cancelled: limit price below market.');
-          if (Math.abs(dev) > 0.5 && !confirm(`The limit price is ${(dev * 100).toFixed(0)}% away from the market price. Is that a typo?`)) throw new Error('Cancelled: check the limit price.');
+          dev = (p - mk) / mk;
+          if (buy && dev > 0.1 && !DX.post) warns.push(`This BUY limit is ${(dev * 100).toFixed(0)}% above the market price, so it fills at once at a worse price.`);
+          if (!buy && dev < -0.1 && !DX.post) warns.push(`This SELL limit is ${(-dev * 100).toFixed(0)}% below the market price, so it fills at once at a worse price.`);
+          if (Math.abs(dev) > 0.5) warns.push(`The limit price is ${(dev * 100).toFixed(0)}% away from the market price. Check it is not a typo.`);
         }
         tx = { TransactionType: 'OfferCreate', Account: acc, TakerGets: amtTx(pay, x), TakerPays: amtTx(get, rec), Flags: DX.post ? 0x00010000 : 0 };
+        hero = { pay: `${fmt(x)} ${nm(pay)}`, get: `${fmt(rec, 8)} ${nm(get)} at your price` };
+        rows = [
+          { k: 'Order type', v: DX.post ? 'Limit, post only' : 'Limit' }, { k: 'Limit price', v: `${fmt(p, 8)} ${esc(nm(m.quote))} per ${esc(nm(m.base))}` },
+          { k: 'Market price now', v: mk != null ? `${fmt(mk, 8)} <small class="${dev >= 0 ? 'up' : 'dn'}">(${(dev * 100).toFixed(2)}% away)</small>` : '–' },
+          { k: 'You receive if filled', v: `${fmt(rec, 8)} ${esc(nm(get))}${ap(valUsd(get, rec))}` }, { k: 'Order value', v: ap(valUsd(pay, x)).replace(/<[^>]+>/g, '') || '–' },
+          { k: 'Fills', v: DX.post ? 'Only rests on the book, never takes liquidity' : 'Fills now where it crosses the book, the rest rests', hint: 'Good until cancelled. You can cancel it from Open orders.' },
+          { k: 'Account reserve', v: inf ? `${fmt(inf.reserveInc)} ${ctx.native()} held while the order is open` : '–' }, { k: 'Network fee', v: netFee },
+          { k: `${esc(nm(pay))} balance after`, v: fmt(balPay - x) },
+        ];
       }
+      const ok = await PM.review({ title: `${buy ? 'Buy' : 'Sell'} ${nm(m.base)}`, tone: buy ? 'buy' : 'sell', pay: { label: hero.pay, sub: ap(valUsd(pay, x)).replace(/<[^>]+>/g, '').trim() }, get: { label: hero.get, sub: '' }, rows, warns, confirm: warns.length ? 'Confirm anyway' : `Confirm ${buy ? 'buy' : 'sell'}`, note: 'Signed with your wallet and sent straight to the network. Nothing is held by Starsky.' });
+      if (!ok) throw new Error('Cancelled.');
+      const pg = PM.progress(DX.type === 'market' ? `Swapping ${nm(pay)} for ${nm(get)}` : 'Placing your limit order', ['Checking price and liquidity', 'Signing and sending to the network', 'Waiting for the ledger to confirm', 'Updating your balances'], buy ? 'buy' : 'sell');
+      pg.set(0, 'ok'); pg.set(1, 'run');
       const r = await ctx.submit(tx);
       if (r.ok) {
+        pg.set(1, 'ok'); pg.set(2, 'ok', short(r.hash || '', 10, 8)); pg.set(3, 'run');
         logOrder({ type: 'OfferCreate', hash: r.hash, ms: Date.now(), gets: tx.TakerGets, pays: tx.TakerPays, res: 'tesSUCCESS' });
         say(`Done. Transaction ${short(r.hash || '', 8, 6)} validated.`, false);
         ctx.toast('✓ ' + (DX.type === 'market' ? 'Swap complete' : 'Order placed'));
         DX.amt = '';
         DX.last = 0;
         await Promise.all([loadBal(), loadOrders()]);
+        pg.done(`<div class="pm-r"><span>${DX.type === 'market' ? 'Swapped' : 'Order placed'}</span><b>${fmt(x)} ${esc(nm(pay))} → ${DX.type === 'market' ? '≈ ' : ''}${fmt(out, 8)} ${esc(nm(get))}</b></div><div class="pm-r"><span>Transaction</span><b class="mono" style="font-size:.74rem">${esc(short(r.hash || '', 12, 10))}</b></div>`);
         renderTrade();
         tick();
-      } else say('Rejected by the network: ' + r.msg);
+      } else { pg.fail('Rejected by the network: ' + r.msg); say('Rejected by the network: ' + r.msg); }
     } catch (e: any) {
       say(String(e?.message || e));
     }

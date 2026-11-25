@@ -4,6 +4,7 @@
 // Tips are real payments straight to the person tipped, in LUMA or any token; a small public log entry in the hub lets everyone see them, and every reader verifies each tip on the chain.
 // No company server holds anything. Anyone can rebuild the same network from the chain, and nobody can post as you without your key.
 import { ctx } from './ctx.ts';
+import * as PM from './procmodal.ts';
 import { amtTx, esc, fmt, hexName } from './util.ts';
 import { ipfsAdd, mintFromImage } from './nft.ts';
 import * as CAM from './camera.ts';
@@ -276,7 +277,7 @@ const me = () => ctx.account() || '';
 const bookmarks = (): string[] => LS.get(bmKey(), []);
 const muted = (): string[] => LS.get(muteKey(), []);
 // ---------- settings (kept in this browser, per account) ----------
-const SETD = { views: true, compact: false, fs: 100, blurAll: false, words: '', hideTipc: false, confirm: false, cw: false, tipme: false, nLike: true, nFollow: true, nTip: true, nRep: true };
+const SETD = { views: true, compact: false, fs: 100, blurAll: false, words: '', hideTipc: false, confirm: false, cw: false, tipme: false, tipbtn: false, nLike: true, nFollow: true, nTip: true, nRep: true };
 const setKey = () => 'sc.set.' + (me() || '-');
 const SET = (): typeof SETD => ({ ...SETD, ...(LS.get(setKey(), {}) || {}) });
 const setPut = (k: string, v: any) => { LS.set(setKey(), { ...SET(), [k]: v }); };
@@ -318,7 +319,7 @@ function settingsView(): string {
   ${sec('Feed and display', `${row('views', 'Show view counts', 'See how many accounts viewed each post. Your own views of other people\'s posts are counted.')}${row('compact', 'Compact posts', 'Tighter spacing so more fits on screen.')}<label class="sc-row" style="justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--sl)"><span><b>Text size</b></span><select class="sc-in" data-st="fs" style="width:auto;margin:0">${[90, 100, 110, 125].map(x => `<option value="${x}" ${s.fs === x ? 'selected' : ''}>${x}%</option>`).join('')}</select></label>`)}
   ${sec('Privacy and safety', `${row('blurAll', 'Always blur pictures', 'Every picture stays blurred until you tap it.')}${row('hideTipc', 'Hide tip comments', 'Do not show tips as comments under posts.')}<label class="sc-fl" style="margin-top:8px"><b>Muted words</b><span class="sc-m"> posts with these words are hidden from you (separate with commas)</span><textarea class="sc-in" data-st="words" rows="2" placeholder="word, another word">${esc(s.words)}</textarea></label><div class="sc-m" style="margin-top:6px">Muted accounts are managed in Creator, Muted accounts.</div>`)}
   ${sec('Notifications', `${row('nLike', 'Likes', 'Someone likes your post.')}${row('nRep', 'Replies, quotes and reposts', 'People who respond to or share your posts.')}${row('nFollow', 'New followers', 'Someone follows you.')}${row('nTip', 'Tips', 'Someone tips you or your posts.')}`)}
-  ${sec('Posting defaults', `${row('confirm', 'Ask before posting', 'Show a confirmation before anything is sent to the chain.')}${row('cw', 'Start posts with a content warning', 'Adds [CW] to the start of each post.')}${row('tipme', 'Add a tip line to my posts', 'Adds your wallet address so people can tip you.')}`)}
+  ${sec('Posting defaults', `${row('confirm', 'Ask before posting', 'Show a confirmation before anything is sent to the chain.')}${row('cw', 'Start posts with a content warning', 'Adds [CW] to the start of each post.')}${row('tipbtn', 'Add tip buttons to my posts', 'People can tip you 1, 5 or 25 LUMA in one tap, with a confirmation and progress pop-up.')}${row('tipme', 'Add a tip line to my posts', 'Adds your wallet address so people can tip you.')}`)}
   ${sec('Your data', `<div class="sc-row" style="gap:8px;flex-wrap:wrap"><button class="sc-btn sm ghost" data-act="exportmine">Download my data</button><button class="sc-btn sm ghost" data-act="clrcache">Clear cached posts</button><button class="sc-btn sm ghost" data-act="clrset">Reset these settings</button></div><div class="sc-m" style="margin-top:8px">Your wallet address: ${esc(ctx.showL(a))}<br>Everything you posted stays on the chain; clearing the cache only makes this browser read it again.</div>`)}`;
 }
 const isMuted = (a: string) => muted().includes(a);
@@ -556,7 +557,9 @@ function postCard(p: Post, opts: { quoted?: boolean; rtBy?: string; pinned?: boo
     const votes = IX.votes.get(p.id) || new Map<string, number>(), tot = votes.size, mine = me() ? votes.get(me()) : undefined;
     poll = `<div class="sc-poll">${p.p.map((o, i) => { const n = Array.from(votes.values()).filter(v => v === i).length, pc = tot ? Math.round(n / tot * 100) : 0, show = mine != null; return `<div class="sc-opt" data-act="vote" data-v="${p.id}" data-o="${i}">${show ? `<i style="width:${pc}%"></i>` : ''}<span>${esc(o)}${mine === i ? ' ✓' : ''}</span>${show ? `<span>${pc}%</span>` : ''}</div>`; }).join('')}<div class="sc-m">${tot} vote${tot === 1 ? '' : 's'}${mine == null ? ' · tap an option (0.0001 LUMA)' : ''}</div></div>`;
   }
-  if (opts.quoted) return `<div><div class="sc-who"><b>${esc(nameOf(p.a))}</b>${badge(p.a)}<span class="sc-m">${esc(tagOf(p.a))} · ${ago(p.t)}</span></div><div class="sc-txt">${rich(p.x)}</div>${media}</div>`;
+  const tm = /\n?\[tip:([0-9.,]+)\]\s*$/.exec(p.x || ''), tipAmts = tm ? tm[1].split(',').map(Number).filter(n => n > 0 && n <= 100000).slice(0, 4) : [], px = tm ? { ...p, x: p.x.replace(tm[0], '') } : p;
+  const tipBtns = tipAmts.length && p.a !== me() ? `<div class="sc-row" style="gap:6px;margin:8px 0;flex-wrap:wrap"><span class="sc-m">Tip ${esc(nameOf(p.a))}:</span>${tipAmts.map(n => `<button class="sc-btn sm gold" data-act="tipq" data-v="${p.id}" data-amt="${n}">${ic('coin', 14)}${fmt(n, 4)} LUMA</button>`).join('')}</div>` : '';
+  if (opts.quoted) return `<div><div class="sc-who"><b>${esc(nameOf(p.a))}</b>${badge(p.a)}<span class="sc-m">${esc(tagOf(p.a))} · ${ago(p.t)}</span></div><div class="sc-txt">${rich(px.x)}</div>${media}</div>`;
   const rxm = IX.rx.get(p.id) || new Map<string, string>(), rxc = new Map<string, number>(); for (const e of rxm.values()) rxc.set(e, (rxc.get(e) || 0) + 1);
   const mineRx = rxm.get(me());
   const tips = IX.tipsRef.get(p.id) || [];
@@ -565,7 +568,7 @@ function postCard(p: Post, opts: { quoted?: boolean; rtBy?: string; pinned?: boo
   const acts = `<div class="sc-acts"><button class="rc" data-act="reply" data-v="${p.id}" title="Reply">${ic('msg')}${k(repN(p.id))}</button><button class="rt ${iRt(p.id) ? 'on' : ''}" data-act="rt" data-v="${p.id}" title="Repost (${COST.rt} LUMA)">${ic('repeat')}${k(rtN(p.id))}</button><button class="lk ${iLike(p.id) ? 'on' : ''}" data-act="like" data-v="${p.id}" title="Like (${COST.like} LUMA)">${iLike(p.id) ? icFill('heart') : ic('heart')}${k(likeN(p.id))}</button><button data-act="react" data-v="${p.id}" title="React">${ic('smile')}${k(rxN(p.id))}</button>${SET().views ? `<span class="sc-vw" data-vw="${p.id}" title="Accounts that viewed this post" style="display:inline-flex;gap:5px;align-items:center;padding:7px 8px;font-size:.84rem;font-weight:600">${ic('eye', 15)}<span class="n">${k(VW[p.id] || 0) || '0'}</span></span>` : ''}<button class="tp" data-act="tip" data-v="${p.id}" title="Tip this post in any token">${ic('coin')}Tip</button><button data-act="menu" data-v="${p.id}" title="More">${ic('more')}</button></div>`;
   const ctxl = opts.rtBy ? `<div class="sc-ctx">${ic('repeat', 14)}${esc(nameOf(opts.rtBy))} reposted</div>` : opts.pinned ? `<div class="sc-ctx">${ic('pin', 14)}Pinned</div>` : boostedNow(p.id) ? `<div class="sc-ctx" style="color:#22d3ee">${ic('zap', 14)}Boosted</div>` : '';
   const rp = p.r && IX.posts.get(p.r) && !opts.full ? `<div class="sc-m" style="margin-bottom:2px">Replying to <a class="sc-l" data-act="user" data-v="${IX.posts.get(p.r)!.a}">${esc(tagOf(IX.posts.get(p.r)!.a))}</a></div>` : '';
-  return `<article class="sc-post" data-act="open" data-v="${p.id}"><div data-act="user" data-v="${p.a}" style="cursor:pointer">${avatar(p.a, opts.full ? 48 : 44)}</div><div class="sc-body">${ctxl}<div class="sc-who"><b data-act="user" data-v="${p.a}">${esc(nameOf(p.a))}</b>${badge(p.a)}<span class="sc-m">${esc(tagOf(p.a))} · <span title="${esc(full(p.t))}">${ago(p.t)}</span>${p.ed ? ' · <span title="Edited ' + esc(full(p.ed)) + '">edited</span>' : ''}</span></div>${rp}<div class="sc-txt" ${opts.full ? 'style="font-size:1.12rem"' : ''}>${rich(p.x)}</div>${cardSyms(p.x, false, 2).map(t => priceCard(t, { expand: true })).join('')}${ytId(p.x) ? ytCard(ytId(p.x)) : ''}${listingEmbed(p.x)}${media}${poll}${q}${chips}${acts}</div></article>`;
+  return `<article class="sc-post" data-act="open" data-v="${p.id}"><div data-act="user" data-v="${p.a}" style="cursor:pointer">${avatar(p.a, opts.full ? 48 : 44)}</div><div class="sc-body">${ctxl}<div class="sc-who"><b data-act="user" data-v="${p.a}">${esc(nameOf(p.a))}</b>${badge(p.a)}<span class="sc-m">${esc(tagOf(p.a))} · <span title="${esc(full(p.t))}">${ago(p.t)}</span>${p.ed ? ' · <span title="Edited ' + esc(full(p.ed)) + '">edited</span>' : ''}</span></div>${rp}<div class="sc-txt" ${opts.full ? 'style="font-size:1.12rem"' : ''}>${rich(px.x)}</div>${tipBtns}${cardSyms(px.x, false, 2).map(t => priceCard(t, { expand: true })).join('')}${ytId(p.x) ? ytCard(ytId(p.x)) : ''}${listingEmbed(p.x)}${media}${poll}${q}${chips}${acts}</div></article>`;
 }
 function skeleton(n = 4) { return Array.from({ length: n }, () => `<div class="sc-skel"><i style="width:44px;height:44px;border-radius:50%"></i><div style="flex:1;display:flex;flex-direction:column;gap:9px"><i style="height:12px;width:38%"></i><i style="height:12px;width:92%"></i><i style="height:12px;width:70%"></i></div></div>`).join(''); }
 function feedList(items: Array<{ p: Post; rtBy?: string; pinned?: boolean; t: number }>, more: boolean, empty = 'Nothing here yet. Be the first to post.'): string {
@@ -1313,6 +1316,26 @@ function renderTip() {
   <div class="sc-m" style="margin:6px 0">Adds a public tip note on the post for ${COST.tipn} LUMA (plus the network fee).</div>`}
   ${t.err ? `<div class="sc-warn" style="margin:6px 0">${esc(t.err)}</div>` : ''}<div class="sc-row" style="margin-top:10px;justify-content:flex-end"><button class="sc-btn ghost" onclick="sc.close()">Cancel</button><button class="sc-btn gold" ${t.load || t.busy || !o || !o.ok ? 'disabled' : ''} onclick="sc.tipSend()">${t.busy ? 'Sending…' : ic('coin', 16) + 'Send tip'}</button></div>`, 420));
 }
+async function quickTip(ref: string, amt: number) {
+  const p = IX.posts.get(ref); if (!p || !need()) return; const to = p.a;
+  if (to === me()) { ctx.toast('You cannot tip yourself', true); return; }
+  const lumaUsd = PX && (PX as any).LUMA && (PX as any).LUMA.usd != null ? Number((PX as any).LUMA.usd) : null;
+  const ok = await PM.review({ title: 'Send a tip', tone: 'tip', hero: `<div style="display:flex;justify-content:space-between;gap:1rem;align-items:center"><div><small style="opacity:.6">Tip to</small><br><b style="font-size:1.1rem">${esc(nameOf(to))}</b><div class="sc-m">${esc(tagOf(to))}</div></div><div style="text-align:right"><b style="font-size:1.4rem">${fmt(amt, 4)} LUMA</b>${lumaUsd ? `<div class="sc-m">≈ $${(amt * lumaUsd).toFixed(2)}</div>` : ''}</div></div>`,
+    rows: [{ k: 'For', v: 'This post' }, { k: 'Goes to', v: '100% to ' + esc(nameOf(to)) + ', straight to their wallet' }, { k: 'Public tip note', v: COST.tipn + ' LUMA to the hub, so everyone can see the tip' }, { k: 'Network fee', v: 'a tiny fee on each of the two payments' }], confirm: `Tip ${fmt(amt, 4)} LUMA`, note: 'Signed with your wallet. Tips cannot be undone.' });
+  if (!ok) return;
+  const pg = PM.progress('Sending your tip', ['Preparing the payment', `Sending ${fmt(amt, 4)} LUMA to ${nameOf(to)}`, 'Confirming on the ledger', 'Adding the public tip note'], 'tip');
+  pg.set(0, 'ok'); pg.set(1, 'run');
+  let amount: any; try { amount = amtTx({ c: 'native', i: '' }, amt); } catch (e: any) { pg.fail(String(e?.message || e)); return; }
+  const r = await pay(to, amount, { t: 'tip', ref }, 'Sending tip…');
+  if (!r.ok || !r.hash) { pg.fail(r.msg || 'The tip was not sent.'); return; }
+  pg.set(1, 'ok'); pg.set(2, 'ok', r.hash.slice(0, 10) + '…'); pg.set(3, 'run');
+  const th = r.hash.toUpperCase(); TV[th] = { by: me(), to, c: 'LUMA', i: '', v: amt };
+  const d: any = { t: 'tipn', th, to, c: 'LUMA', i: '', n: amt, ref };
+  const lr = await pay(hub(), drops(COST.tipn), d, 'Listing the tip…');
+  if (lr.ok && lr.hash) { local(d, lr.hash, COST.tipn); saveCache(); setTimeout(() => { void pull().then(paintSoft); }, 5000); pg.done(`<div class="pm-r"><span>Tipped</span><b>${fmt(amt, 4)} LUMA → ${esc(nameOf(to))}</b></div><div class="pm-r"><span>Transaction</span><b class="mono" style="font-size:.74rem">${esc(r.hash.slice(0, 12))}…</b></div>`); }
+  else pg.done(`The tip was delivered. It could not be added to the public list: ${esc(lr.msg || 'try again later')}`);
+  paint();
+}
 async function tipSend() {
   const t = TS; if (!t || t.busy) return; const o = t.opts[t.sel]; if (!o || !o.ok) return; sc.tipUpd();
   const n = Number(t.amt); if (!(n > 0) || !isFinite(n)) { t.err = 'Enter an amount above zero.'; renderTip(); return; }
@@ -1404,6 +1427,7 @@ async function onClick(el: HTMLElement, ev: Event) {
     case 'rt': if (need() && !S.busy) { if (iRt(v)) ctx.toast('You already reposted this'); else await act({ t: 'rt', ref: v }, 'Reposting…', 'Reposted'); } break;
     case 'follow': if (need() && !S.busy) { if (v === me()) break; await act(iFollow(v) ? { t: 'unf', a: v } : folEv(v), 'Updating…', iFollow(v) ? 'Unfollowed' : 'Following ' + nameOf(v)); } break;
     case 'tip': tipModal(v, el.dataset.to || ''); break;
+    case 'tipq': void quickTip(v, Number(el.dataset.amt) || 1); break;
     case 'react': if (need()) reactModal(v); break;
     case 'rx': if (need() && !S.busy) { const cur = (IX.rx.get(v) || new Map()).get(me()); await act({ t: 'rx', ref: v, e: cur === el.dataset.e ? '' : el.dataset.e }, 'Reacting…'); } break;
     case 'menu': postMenu(v); break;
@@ -1438,7 +1462,7 @@ async function doPost(reply: string, quote: string) {
   const m = media ? [safeUrl(media)].filter(Boolean) : []; if (media && !m.length) { S.err = 'The image link must start with https:// or ipfs://'; paint(); return; }
   const poll = S.pollOn ? S.poll.map(o => o.trim()).filter(Boolean) : []; if (S.pollOn && poll.length < 2) { S.err = 'A poll needs at least two options.'; paint(); return; }
   if (!x && !m.length) { S.err = 'Write something first.'; paint(); return; }
-  { const st = SET(); if (st.cw && !/^\[CW\]/.test(x)) x = '[CW] ' + x; if (st.tipme && !reply) x = (x + '\nTips welcome: ' + ctx.showL(me())).trim(); if (st.confirm && !confirm('Send this post to the chain?')) return; }
+  { const st = SET(); if (st.cw && !/^\[CW\]/.test(x)) x = '[CW] ' + x; if (st.tipbtn && !reply && !/\[tip:/.test(x)) x = (x + '\n[tip:1,5,25]').trim(); if (st.tipme && !reply) x = (x + '\nTips welcome: ' + ctx.showL(me())).trim(); if (st.confirm && !confirm('Send this post to the chain?')) return; }
   const bad = violates(x + ' ' + poll.join(' ')); if (bad) { S.err = `This post was not sent. It contains ${WHY[bad]}, which is not allowed on LUMA Social.`; paint(); return; }
   if (m.length && !okImg(m[0])) { S.err = 'Pictures from that link are not allowed on this network. Use an NFT or an image from an approved source.'; paint(); return; }
   const parts = splitThread(x);
@@ -1521,7 +1545,12 @@ export const sc: any = {
   goTag(t: string) { ctx.closeModal(); go({ k: 'tag', tag: t }); },
   shareNft(id: string) { const el = document.createElement('i'); el.dataset.act = 'nftshare'; el.dataset.v = id; void onClick(el, new Event('click')); },
   cam(k: string) { sc_cam(k); },
-  trade(sym: string) { ctx.closeModal(); const w: any = window; try { w.dx?.wantSym?.(sym); w.goTab('dex'); setTimeout(() => { const id = w.dx?.findSym?.(sym); if (id) w.dx.pick(id); }, 700); } catch { ctx.toast('Open the DEX tab to trade ' + sym, true); } },
+  trade(sym: string) {
+    ctx.closeModal(); const w: any = window, want = String(sym).replace(/^\$/, '');
+    try { w.dx?.wantSym?.(want); w.goTab('dex'); } catch { ctx.toast('Open the DEX tab to trade ' + want, true); return; }
+    let n = 0; const t = setInterval(() => { n++; const id = w.dx?.findSym?.(want); if (id) { clearInterval(t); try { w.dx.pick(id); } catch {} } else if (n > 30) { clearInterval(t); ctx.toast('That pair is not on the DEX yet: ' + want, true); } }, 300);
+  },
+  share(text: string) { S.draft = text; S.media = ''; S.nft = null as any; LS.set(draftKey(), S.draft); (window as any).goTab('social'); setTimeout(() => { go({ k: 'home' }); setTimeout(() => (document.getElementById('sc-txt') as HTMLElement | null)?.focus(), 60); }, 400); ctx.toast('Review the post, then press Post to share this chart.'); },
   async upload(inp: HTMLInputElement, kind: string) {
     const files = inp.files; if (!files || !files.length || UP || !need()) { inp.value = ''; return; } UP = true;
     try {

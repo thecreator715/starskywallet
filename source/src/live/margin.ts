@@ -10,6 +10,7 @@
 //    and settles stop losses, take profits, liquidations and close requests. Without a running operator nothing settles automatically.
 // RISK: prices come from AMM pools; thin pools can be pushed around. Leverage is limited by pool depth for that reason.
 import { ctx } from './ctx.ts';
+import * as PM from './procmodal.ts';
 import * as M from './market.ts';
 import { Asset, akey, esc, fmt, fromKey, hexName, isNative, pctHtml, short, usd, ago, rippleToMs } from './util.ts';
 import { cached, pool as poolMap, tryReq, header } from './chain.ts';
@@ -779,10 +780,34 @@ export const mgApi: any = {
   },
   async go(btn: HTMLButtonElement) {
     btn.disabled = true;
-    const r = await open({ key: TK.key, long: TK.long, lev: TK.lev, coll: parseFloat(TK.coll) || 0, sl: parseFloat(TK.sl) || 0, tp: parseFloat(TK.tp) || 0 });
+    const t: Ticket = { key: TK.key, long: TK.long, lev: TK.lev, coll: parseFloat(TK.coll) || 0, sl: parseFloat(TK.sl) || 0, tp: parseFloat(TK.tp) || 0 };
+    const err = check(t);
+    if (err) { TK.bad = true; TK.msg = err; btn.disabled = false; mgApi.rerender(true); return; }
+    const mark = markOf(t.key) as number, notional = t.coll * t.lev, liq = liqPrice(mark, t.lev, t.long), isL = sd(t.key, t.long);
+    const feeOpen = notional * FEE_OPEN, feeClose = notional * FEE_CLOSE, fundDay = notional * FUND_H * 24, usdN = MG.px && MG.px.usdPerNative != null ? (MG.px.usdPerNative as number) : null;
+    const u = (v: number) => (usdN != null ? ` <small class="mut">≈ ${usd(v * usdN)}</small>` : '');
+    const distLiq = Math.abs(liq / mark - 1) * 100, move1 = (m: number) => t.coll > 0 ? ((notional * m) / t.coll) * 100 : 0;
+    const warns: string[] = [];
+    if (t.lev >= 20) warns.push(`${t.lev}x is very high: a ${(100 / t.lev).toFixed(1)}% move against you wipes out your margin.`);
+    if (!t.sl) warns.push('No stop loss set. Position is only protected by the liquidation price.');
+    const pnlAt = (pct: number) => `${t.long ? '+' : '-'}${(move1(pct)).toFixed(0)}% / ${t.long ? '-' : '+'}${move1(pct).toFixed(0)}%`;
+    const ok = await PM.review({ title: `Open ${isL ? 'long' : 'short'} ${nmS(t.key)} ${t.lev}x`, tone: 'lev', hero: `<div style="display:flex;justify-content:space-between;gap:1rem"><div><small style="opacity:.6">Margin</small><br><b style="font-size:1.25rem">${fmt(t.coll)} ${esc(nat())}</b></div><div style="text-align:right"><small style="opacity:.6">Position size</small><br><b style="font-size:1.25rem">${fmt(notional)} ${esc(nat())}</b>${u(notional)}</div></div>`,
+      rows: [
+        { k: 'Direction', v: isL ? 'Long (profit when price rises)' : 'Short (profit when price falls)', cls: isL ? 'up' : 'dn' }, { k: 'Leverage', v: t.lev + 'x' },
+        { k: 'Entry price', v: pxk(t.key, mark) + ' ' + unitTxt(t.key) }, { k: 'Liquidation price', v: `${pxk(t.key, liq)} <small class="dn">(${distLiq.toFixed(1)}% away)</small>`, cls: 'dn', hint: 'If the price reaches this, the position is closed and the margin is lost.' },
+        { k: 'Stop loss', v: t.sl ? pxk(t.key, t.sl) : 'Not set' }, { k: 'Take profit', v: t.tp ? pxk(t.key, t.tp) : 'Not set' },
+        { k: 'Open fee', v: `${(FEE_OPEN * 100).toFixed(2)}% · ${fmt(feeOpen, 6)} ${esc(nat())}${u(feeOpen)}` }, { k: 'Close fee', v: `${(FEE_CLOSE * 100).toFixed(2)}% · ${fmt(feeClose, 6)} ${esc(nat())}` },
+        { k: 'Funding', v: `${(FUND_H * 100).toFixed(2)}%/hour · about ${fmt(fundDay, 6)} ${esc(nat())} per day`, hint: 'Charged on the position size for as long as it is open.' },
+        { k: 'A 1% move is worth', v: `±${move1(1).toFixed(1)}% of your margin`, hint: 'Gain or loss on the margin for each 1% the price moves.' }, { k: 'Network fee', v: 'one payment to the operator' },
+      ], warns, confirm: 'Open position', note: 'The margin is sent to the operator wallet and settled on the ledger. Closing pays out what is left.' });
+    if (!ok) { btn.disabled = false; return; }
+    const pg = PM.progress(`Opening ${isL ? 'long' : 'short'} ${nmS(t.key)} ${t.lev}x`, ['Checking the market and margin', 'Signing and sending the margin', 'Waiting for the ledger to confirm', 'Recording your position'], 'lev');
+    pg.set(0, 'ok'); pg.set(1, 'run');
+    const r = await open(t);
     TK.bad = !r.ok;
     TK.msg = r.msg;
-    if (r.ok) { TK.coll = ''; TK.sl = ''; TK.tp = ''; TK.slD = ''; TK.tpD = ''; ctx.toast('✓ Position opened'); }
+    if (r.ok) { pg.set(1, 'ok'); pg.set(2, 'ok'); pg.set(3, 'run'); TK.coll = ''; TK.sl = ''; TK.tp = ''; TK.slD = ''; TK.tpD = ''; ctx.toast('✓ Position opened'); pg.done(`<div class="pm-r"><span>Opened</span><b>${isL ? 'Long' : 'Short'} ${esc(nmS(t.key))} ${t.lev}x</b></div><div class="pm-r"><span>Size</span><b>${fmt(notional)} ${esc(nat())}</b></div><div class="pm-r"><span>Entry · Liquidation</span><b>${pxk(t.key, mark)} · ${pxk(t.key, liq)}</b></div>`); }
+    else pg.fail(r.msg);
     btn.disabled = false;
     mgApi.rerender(true);
   },

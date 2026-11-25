@@ -20,7 +20,9 @@ async function api(path: string, body?: any) {
 }
 const msg = (t: string, bad = false) => { const e = $('rn_msg'); if (e) { e.textContent = t; e.style.color = bad ? '#ff6b6b' : ''; } };
 export function shell() {
-  return `<div id="rn"><div class="card"><div class="k">Run a node for LUMA</div>
+  return `<div id="rn"><div class="grid" style="margin-bottom:1rem"><div class="card c7" id="rn_price"></div><div class="card c5" id="rn_ben"></div></div>
+  <div class="card" id="rn_est" style="margin-bottom:1rem"><div class="k">Earnings estimate</div><div class="mut" style="padding:.6rem">Reading the network…</div></div>
+  <div class="card" id="rn_req" style="margin-bottom:1rem"></div><div class="card"><div class="k">Request your node</div>
   <p class="mut" style="font-size:.85rem;margin:.4rem 0">Set up a supporting node: it syncs and relays the ledger and serves your own RPC and WebSocket, but does not validate. Request to join here, the network operator approves it in the control panel, and then you get one command to run.</p>
   <div class="row" style="gap:.5rem;flex-wrap:wrap"><select id="rn_net" onchange="window.rn.pick()"><option value="main">Mainnet</option><option value="test">Testnet</option></select>
   <select id="rn_role" disabled><option value="api">Supporting node (partial, light)</option></select>
@@ -36,6 +38,8 @@ export function mount() {
   try { REQ = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { REQ = null; }
   if (REQ) { which = REQ.net; if ($('rn_net')) $('rn_net').value = which; if ($('rn_name')) $('rn_name').value = REQ.name || ''; }
   pick(true);
+  drawInfo();
+  void sample();
   clearInterval(timer);
   timer = setInterval(() => { if (!$('rn')) return clearInterval(timer); if (REQ && REQ.status !== 'approved') check(true); }, 15000);
 }
@@ -44,8 +48,8 @@ async function pick(keep = false) {
   which = ($('rn_net') || { value: 'main' }).value;
   NET = null;
   FEE = null; try { FEE = await api('/api/public/node-fee'); } catch {}
-  drawFee();
-  try { NET = await api('/api/public/network'); msg(NET.allowJoin === false ? 'This network is not accepting new nodes right now.' : 'Connected to the ' + (NET.label || 'LUMA') + ' control panel.'); }
+  drawFee(); drawInfo(); drawEst();
+  try { NET = await api('/api/public/network'); drawEst(); msg(NET.allowJoin === false ? 'This network is not accepting new nodes right now.' : 'Connected to the ' + (NET.label || 'LUMA') + ' control panel.'); }
   catch (e: any) { msg('Could not reach the control panel: ' + e.message + '. The operator\'s tunnel may need updating.', true); }
   if (REQ && REQ.net === which) check(true);
 }
@@ -144,3 +148,51 @@ function render() {
   copy: () => navigator.clipboard.writeText((window as any)._rnsh).then(() => msg('Copied.')),
   download: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([(window as any)._rnsh], { type: 'text/plain' })); a.download = 'start-luma-node.command'; a.click(); },
 };
+
+// ---- pricing, benefits, earnings estimate, requirements ----
+let SAMP: { txDay: number; txLedger: number; close: number } | null = null, TXD = 0;
+async function sample() {
+  try {
+    const top: any = await ctx.req('ledger', { ledger_index: 'validated', transactions: true });
+    const seq = Number(top.ledger.ledger_index), n = 12, got: any[] = [top.ledger];
+    for (let i = 1; i < n; i++) { try { const r: any = await ctx.req('ledger', { ledger_index: seq - i * 5, transactions: true }); got.push(r.ledger); } catch {} }
+    const secs = (a: any) => Number(a.close_time) || 0;
+    const sorted = got.sort((a, b) => Number(b.ledger_index) - Number(a.ledger_index));
+    const span = secs(sorted[0]) - secs(sorted[sorted.length - 1]), ledgers = Number(sorted[0].ledger_index) - Number(sorted[sorted.length - 1].ledger_index);
+    const close = span > 0 && ledgers > 0 ? span / ledgers : 4;
+    const txLedger = sorted.reduce((t, l) => t + (l.transactions || []).length, 0) / sorted.length;
+    SAMP = { close, txLedger, txDay: (86400 / close) * txLedger };
+    if (!TXD) TXD = Math.round(SAMP.txDay);
+  } catch { SAMP = { close: 4, txLedger: 0, txDay: 0 }; }
+  drawEst();
+}
+const fm = (n: number, d = 2) => Number(n).toLocaleString('en-US', { maximumFractionDigits: d });
+function drawInfo() {
+  const p = $('rn_price'), b = $('rn_ben'), q = $('rn_req');
+  if (p) p.innerHTML = `<div class="k">Pricing</div><div class="big2" style="font-size:2rem;font-weight:800;margin:.2rem 0">$10,000 <small class="mut" style="font-size:.9rem">one-time, per node</small></div>
+    <p class="mut" style="font-size:.85rem;margin:.3rem 0">Paid once to the LUMA genesis wallet. You pay it with LUMA or any other token the network accepts from the genesis wallet's own tokens, at its live price. Your wallet signs the payment right here and the request goes in with the payment as proof. After that there is nothing more to pay to keep the node running.</p>
+    <div class="dxkv"><span class="mut">Pay with</span><b>LUMA or USD (genesis tokens)</b></div><div class="dxkv"><span class="mut">Paid to</span><span class="mono" style="font-size:.74rem">${FEE ? esc(FEE.genesis) : 'loading…'}</span></div>`;
+  if (b) b.innerHTML = `<div class="k">What you get</div><ul style="margin:.3rem 0;padding-left:1.1rem;font-size:.86rem;line-height:1.6">
+    <li>A reward for every transaction your node processes, paid in LUMA straight to your wallet</li><li>Your own private, fast RPC and WebSocket for your apps and bots</li><li>Your node helps keep the LUMA network online and decentralised</li><li>A listed supporting node on the network</li><li>Earnings you can watch live in the control panel</li></ul>`;
+  if (q) q.innerHTML = `<div class="k">System requirements</div><div class="pgrid" style="margin-top:.4rem">
+    <div class="tile kvt"><div class="k">Minimum</div><div class="mut" style="font-size:.84rem;line-height:1.6">4 CPU cores<br>16 GB RAM<br>200 GB SSD or NVMe<br>50 Mbps connection, always on</div></div>
+    <div class="tile kvt"><div class="k">Recommended</div><div class="mut" style="font-size:.84rem;line-height:1.6">8 CPU cores<br>32 GB RAM<br>1 TB NVMe<br>200 Mbps or better, static IP</div></div>
+    <div class="tile kvt"><div class="k">Software and network</div><div class="mut" style="font-size:.84rem;line-height:1.6">Mac, Linux or Windows with WSL<br>Docker installed<br>Ports 51235, 6006 and 5006 open<br>Reachable public address</div></div>
+    <div class="tile kvt"><div class="k">Uptime: 24/7</div><div class="mut" style="font-size:.84rem;line-height:1.6">Rewards are paid only for the ledgers your node actually has. Keep it on around the clock for 100% uptime: stable power, a wired connection and the restart-on-boot setting the command already includes.</div></div></div>`;
+}
+function drawEst() {
+  const e = $('rn_est'); if (!e) return;
+  const per = Number((NET && NET.reward && NET.reward.perTx) ?? 1), on = NET && NET.reward ? NET.reward.enabled !== false : true;
+  const px = Number((FEE && FEE.lumaUsd) || (NET && NET.lumaUsd) || 255), fee = Number((FEE && FEE.usd) || 10000);
+  const base = SAMP ? SAMP.txDay : 0, tx = TXD || Math.round(base);
+  const row = (label: string, days: number) => { const l = tx * per * days * (on ? 1 : 0); return `<tr><td>${label}</td><td class="r"><b>${fm(l, 0)} LUMA</b></td><td class="r">${l * px >= 1 ? '$' + fm(l * px, 0) : '$' + fm(l * px, 2)}</td></tr>`; };
+  const day = tx * per * px, pay = day > 0 && on ? fee / day : 0;
+  e.innerHTML = `<div class="row" style="justify-content:space-between;gap:.6rem;flex-wrap:wrap"><div class="k" style="margin:0">Earnings estimate for a node that is online 24/7</div>
+    <label class="mut" style="font-size:.82rem">Transactions per day <input id="rn_tx" inputmode="numeric" value="${tx}" style="width:8rem" onchange="window.rn.tx(this.value)"></label></div>
+    <div class="pgrid" style="margin:.6rem 0"><div class="tile kvt"><div class="k">Network right now</div><div class="big2">${SAMP ? fm(SAMP.txDay, 0) : '…'}</div><div class="mut" style="font-size:.78rem">transactions per day${SAMP ? ` · ${fm(SAMP.txLedger, 1)} per ledger · ${fm(SAMP.close, 1)} s ledgers` : ''}</div></div>
+    <div class="tile kvt"><div class="k">Reward per transaction</div><div class="big2">${on ? fm(per, 6) : '0'} LUMA</div><div class="mut" style="font-size:.78rem">at $${fm(px)} per LUMA${on ? '' : ' · rewards are switched off by the operator right now'}</div></div>
+    <div class="tile kvt"><div class="k">Pays back in</div><div class="big2">${pay ? (pay < 1000 ? fm(pay, 0) + ' days' : fm(pay / 365, 1) + ' years') : '–'}</div><div class="mut" style="font-size:.78rem">of the $${fm(fee, 0)} node price</div></div></div>
+    <table class="dxt"><thead><tr><th>Period</th><th class="r">You earn</th><th class="r">Worth</th></tr></thead><tbody>${row('Daily', 1)}${row('Weekly', 7)}${row('Monthly', 30)}${row('Yearly', 365)}</tbody></table>
+    <p class="mut" style="font-size:.78rem;margin:.6rem 0 0">Estimate from today's transaction volume: every transaction in a ledger your node holds earns the reward above. Real earnings move with network activity, the LUMA price, and your uptime (each hour offline earns nothing for those ledgers). Change the transactions per day to test busier or quieter days.</p>`;
+}
+Object.assign((window as any).rn, { tx(v: string) { TXD = Math.max(0, Math.round(Number(v) || 0)); drawEst(); } });

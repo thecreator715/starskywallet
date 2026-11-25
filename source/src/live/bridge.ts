@@ -229,7 +229,7 @@ const UIK = BK + 'ui.';
 const loadUi = () => { try { const j = JSON.parse(localStorage.getItem(UIK + ctx.netKey()) || '{}'); if (j.dir === 'in' || j.dir === 'out') ST.dir = j.dir; if (j.lane && lanes().some(l => l.id === j.lane)) ST.lane = j.lane; if (j.tab) ST.tab = j.tab; } catch {} };
 const saveUi = () => { try { localStorage.setItem(UIK + ctx.netKey(), JSON.stringify({ dir: ST.dir, lane: ST.lane, tab: ST.tab })); } catch {} };
 export function bridgeShell() {
-  return `<div id="br" class="brpage"><div id="br_head"></div><div id="br_pend"></div>
+  return `<div id="br" class="brpage" style="position:relative"><div class="soon"><div class="soonc"><div class="soonb">Coming soon</div><h2 style="margin:.3rem 0">The bridge is almost here</h2><p class="mut" style="margin:0">Moving LUMA and tokens between LUMA and XRPL opens soon. Everything on this page is locked until then.</p></div></div><div id="br_head"></div><div id="br_pend"></div>
   <div class="card" id="br_xfer" style="margin-top:.6rem"></div>
   <div id="br_tabs" class="seg" style="margin:1rem 0 .6rem;flex-wrap:wrap"></div>
   <div id="brp_activity" class="brpane"><div class="card"><div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Your bridge activity (read from both ledgers)</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div><div id="br_hist" style="overflow:auto"><div class="mut" style="padding:1rem">Reading…</div></div></div></div>

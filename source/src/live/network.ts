@@ -132,7 +132,6 @@ export function networkShell() {
     </div>
     <div class="nwg3" style="margin-top:1rem">
       <div class="tile"><div class="k">Most active accounts</div><div id="nw_top"></div></div>
-      <div class="tile"><div class="k">Results</div><div id="nw_res"></div></div>
       <div class="tile"><div class="k">Latest ledgers</div><div id="nw_ledgers" class="nwscroll"></div></div>
     </div>
     <div class="card" style="margin-top:1rem"><div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:.5rem"><div class="k" style="margin:0">Latest transactions</div><div id="nw_chips" class="dxfilters"></div></div>
@@ -246,10 +245,8 @@ export async function networkLoad(soft: boolean) {
         kv('Ledger close', close.toFixed(1) + ' s', `average over ${led.length} ledgers`),
         kv('Throughput', tps.toFixed(2) + ' tx/s', `${(txN / Math.max(1, body.length)).toFixed(1)} transactions per ledger`),
         kv('Success rate', rows.length ? ((ok / rows.length) * 100).toFixed(1) + '%' : '–', `${fails} failed of ${rows.length}`),
-        kv('Server', esc(i.state || '–'), `${esc(i.version || '')} · up ${dur(i.uptime)}`),
         kv(`${n} supply`, nowH ? fmt(nowH.total, 2) : '–', pr && pr.usdPerNative != null && nowH ? 'market cap ' + usd(nowH.total * pr.usdPerNative) : ''),
         kv('Burned in fees (about 24h)', burned != null ? fmt(burned, 6) + ' ' + n : '–', dh ? `since ledger #${dh.seq}${day.clamped ? ' (the oldest this node keeps)' : ''}` : ''),
-        kv('Network', i.networkId != null ? '#' + i.networkId : '–', `peers ${i.peers} · load ${i.load}${i.quorum ? ' · quorum ' + i.quorum : ''} · history from #${i.minSeq}`),
         kv('Base fee · reserves', `${fmt(i.baseFee, 6)} ${n}`, `reserve ${fmt(i.reserveBase)} + ${fmt(i.reserveInc)} per object`),
         kv('Market price', pr && pr.usdPerNative != null ? usd(pr.usdPerNative) : '–', pr ? `${pr.pools.length} AMM pools` : ''),
       ].join('')
@@ -274,11 +271,8 @@ export async function networkLoad(soft: boolean) {
     setHtml('nw_types', tt.map(([k, v]) => `<div class="nwbar"><span>${esc(k)}</span><i style="width:${((v / tt[0][1]) * 100).toFixed(0)}%"></i><b>${v} <small class="mut">${((v / tot) * 100).toFixed(0)}%</small></b></div>`).join('') || '<div class="mut">No transactions in these ledgers.</div>');
     const top = [...accts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
     setHtml('nw_top', top.map(([a, c]) => `<div class="dxkv"><a href="#" class="who mono" onclick="window.inspectAccount('${esc(a)}');return false">${esc(sh(a))}</a><span>${c} tx <small class="mut">${((c / tot) * 100).toFixed(0)}%</small></span></div>`).join('') || '<div class="mut">No activity.</div>');
-    const rc: Record<string, number> = {};
-    for (const r of rows) rc[r.result] = (rc[r.result] || 0) + 1;
-    setHtml('nw_res', Object.entries(rc).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="dxkv"><span class="chip ${k === 'tesSUCCESS' ? 'ok' : 'bad'}">${esc(k)}</span><span>${v} <small class="mut">${((v / tot) * 100).toFixed(1)}%</small></span></div>`).join('') || '<div class="mut">No results yet.</div>');
     const rev = [...led].reverse();
-    setHtml('nw_ledgers', `<table class="dxt"><thead><tr><th>Ledger</th><th>Closed</th><th class="r">Txs</th><th>Hash</th></tr></thead><tbody>${rev.slice(0, 12).map(l => `<tr><td><a href="#" class="who" onclick="window.inspectLedger(${l.seq});return false">#${l.seq}</a></td><td class="mut">${ago(Date.now() - l.ms)}</td><td class="r">${l.txs.length}</td><td class="mono mut">${esc(short(l.hash, 6, 4))}</td></tr>`).join('')}</tbody></table>`);
+    setHtml('nw_ledgers', `<table class="dxt"><thead><tr><th>Ledger</th><th>Closed</th><th class="r">Txs</th></tr></thead><tbody>${rev.slice(0, 12).map(l => `<tr><td><a href="#" class="who" onclick="window.inspectLedger(${l.seq});return false">#${l.seq}</a></td><td class="mut">${ago(Date.now() - l.ms)}</td><td class="r">${l.txs.length}</td></tr>`).join('')}</tbody></table>`);
     drawTxs();
     const e = $('nw') as HTMLElement;
     if (e) NW.keepHtml = e.innerHTML;
