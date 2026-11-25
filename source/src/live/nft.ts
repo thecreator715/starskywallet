@@ -800,6 +800,7 @@ function paintDetail() {
     ${m.desc ? `<p class="mut" style="margin:.8rem 0">${esc(m.desc)}</p>` : ''}
     ${m.attrs.length ? `<div class="nwh" style="font-size:1rem">Traits</div><div class="row" style="gap:.4rem;flex-wrap:wrap">${m.attrs.map(a => `<div class="trait"><small>${esc(a.k)}</small><b>${esc(a.v)}</b></div>`).join('')}</div>` : ''}
     <div class="nwh" style="font-size:1rem">Details</div><div class="kvl"><div><span>Royalty</span><b>${(i.fee / 1000).toFixed(1)}%</b></div><div><span>Transferable</span><b>${i.flags & TF_TRANSFER ? 'yes' : 'no'}</b></div><div><span>Burnable</span><b>${i.flags & TF_BURN ? 'yes' : 'no'}</b></div><div><span>Serial · taxon</span><b>${i.serial} · ${i.taxon}</b></div><div style="grid-column:1/-1"><span>Token ID</span><b class="mono" style="font-size:.72rem;word-break:break-all">${esc(i.id)}</b></div>${i.uri ? `<div style="grid-column:1/-1"><span>Metadata URI</span><b class="mono" style="font-size:.72rem;word-break:break-all">${esc(i.uri)}</b></div>` : ''}</div></div></div>
+  ${nftAnalytics(i, m, colItems, hist, lst || undefined)}
   <div class="nwh">Listings and offers</div><div class="card">${rows ? `<table class="dxt"><tbody>${rows}</tbody></table>` : '<div class="mut">No listings or offers.</div>'}</div>
   <div class="nwh">Activity <small class="mut">mints, listings, offers, sales, transfers and burns of this NFT</small></div><div class="card nwscroll" style="max-height:24rem">${hist.length ? `<table class="dxt"><thead><tr><th>Event</th><th class="r">Price</th><th>From</th><th>To</th><th class="r">Time</th><th>Tx</th></tr></thead><tbody>${hist.map(a => `<tr><td><span class="chip ${a.sale ? '' : 'b'}">${esc(evLbl(a))}</span></td><td class="r">${esc(a.amt || '–')}</td><td class="mono">${a.from ? i2(a.from) : '–'}</td><td class="mono">${a.to ? i2(a.to) : '–'}</td><td class="r mut">${a.ms ? ago(Date.now() - a.ms) : '–'}</td><td><a class="mut" href="#" onclick="window.inspectTx&&window.inspectTx('${esc(a.hash)}');return false">${esc(short(a.hash, 6, 4))}</a></td></tr>`).join('')}</tbody></table>` : `<div class="mut">${NF.nh.has(i.id) ? 'No recorded activity yet.' : 'Reading this NFT’s history from the ledger…'}</div>`}</div>
   ${more.length ? `<div class="nwh">More from this collection</div><div class="nf5">${more.map(card).join('')}</div>` : ''}`;
@@ -965,7 +966,7 @@ async function fileOk(f: File): Promise<string> {
 }
 function studioHtml() {
   const n = ST.items.length;
-  const rows = ST.items.map((it: any, i: number) => `<div class="nsr ${it.minted ? 'done' : ''}"><img src="${it.url}" alt=""><div class="nsf"><div class="row" style="gap:.4rem"><span class="mut mono" style="min-width:2.4rem">#${(+ST.start || 1) + i}</span><input id="ni_${i}" value="${esc(it.name)}" placeholder="Name" oninput="window.ns.ed(${i},'name',this.value)"></div><input id="nd_${i}" value="${esc(it.desc)}" placeholder="Description (optional)" oninput="window.ns.ed(${i},'desc',this.value)"><input value="${esc(it.attrs)}" placeholder="Traits: background=blue, hat=red" oninput="window.ns.ed(${i},'attrs',this.value)"></div><div class="nsx">${it.minted ? '<b class="up">✓</b>' : `<button class="sm ghost" title="Remove" onclick="window.ns.rm(${i})">✕</button>`}</div></div>`).join('');
+  const rows = ST.items.map((it: any, i: number) => `<div class="nsr ${it.minted ? 'done' : ''}"><img src="${it.url}" alt=""><div class="nsf"><div class="row" style="gap:.4rem"><span class="mut mono" style="min-width:2.4rem">#${(+ST.start || 1) + i}</span><input id="ni_${i}" value="${esc(it.name)}" placeholder="Name" oninput="window.ns.ed(${i},'name',this.value)"></div><input id="nd_${i}" value="${esc(it.desc)}" placeholder="Description (optional)" oninput="window.ns.ed(${i},'desc',this.value)"><input value="${esc(it.attrs)}" placeholder="Traits: background=blue, hat=red" oninput="window.ns.ed(${i},'attrs',this.value)"><input type="number" min="0" max="50" step="0.1" value="${esc(it.roy ?? '')}" placeholder="Royalty % for this NFT (empty = ${esc(String(ST.roy))}% collection default)" oninput="window.ns.ed(${i},'roy',this.value)"></div><div class="nsx">${it.minted ? '<b class="up">✓</b>' : `<button class="sm ghost" title="Remove" onclick="window.ns.rm(${i})">✕</button>`}</div></div>`).join('');
   const price = parseFloat(ST.price);
   return `<div class="card" style="margin-bottom:1rem"><div class="row" style="justify-content:space-between;gap:.6rem;flex-wrap:wrap"><div><div class="k" style="margin:0">Mint studio</div><div class="mut" style="font-size:.82rem;margin-top:.3rem">One image for a single NFT, or a whole collection: name, number, describe and price every piece, add a cover, then mint. Files are stored on your NFT storage node; each NFT holds the ipfs:// address of its metadata.</div></div><button class="ghost" onclick="window.ns.back()">← Back</button></div></div>
   <div class="nsgrid"><div>
@@ -986,7 +987,7 @@ function studioHtml() {
    <div class="card" style="margin-top:1rem"><div class="k">3 · Cover image (minted as the collection’s NFT)</div>
     <div class="row" style="gap:.8rem;align-items:center">${ST.coverUrl ? `<img src="${ST.coverUrl}" class="nscov">` : '<div class="nscov ph">no cover</div>'}<div><input id="ns_cv" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" onchange="window.ns.cover(this.files)">${ST.coverUrl ? '<button class="sm ghost" onclick="window.ns.cover(null)">Remove</button>' : ''}<div class="mut" style="font-size:.76rem;margin-top:.3rem">It is a real NFT in the same collection: you can move, send or list it like any other. The collection page uses it as its picture.</div></div></div></div>
    <div class="card" style="margin-top:1rem"><div class="k">4 · Rules &amp; price</div>
-    <div class="btgrid"><label class="btf"><span>Royalty %</span><input id="ns_r" type="number" min="0" max="50" step="0.1" value="${ST.roy}" oninput="ST_set('roy',this.value)"></label><label class="btf"><span>Collection ID (taxon, empty = auto)</span><input value="${esc(ST.taxon)}" oninput="ST_set('taxon',this.value)"></label>
+    <div class="btgrid"><label class="btf"><span>Royalty % for the whole collection (or the single NFT)</span><input id="ns_r" type="number" min="0" max="50" step="0.1" value="${ST.roy}" oninput="ST_set('roy',this.value)"><small class="mut">Paid to you automatically on every resale: a 100 ${esc(nat())} sale pays you ${(Math.max(0, Math.min(50, parseFloat(String(ST.roy)) || 0))).toFixed(2)} ${esc(nat())}${price > 0 ? `; at your mint price of ${esc(fmt(price))} that is ${esc(fmt(price * (Math.max(0, Math.min(50, parseFloat(String(ST.roy)) || 0)) / 100), 6))} per resale` : ''}. Set a different % on any single NFT in its row below. Fixed forever once minted.</small></label><label class="btf"><span>Collection ID (taxon, empty = auto)</span><input value="${esc(ST.taxon)}" oninput="ST_set('taxon',this.value)"></label>
      <label class="row" style="gap:.5rem"><input type="checkbox" ${ST.tr ? 'checked' : ''} style="width:auto" onchange="ST_set('tr',this.checked)"> <span>Transferable</span></label><label class="row" style="gap:.5rem"><input type="checkbox" ${ST.bu ? 'checked' : ''} style="width:auto" onchange="ST_set('bu',this.checked)"> <span>Burnable by me</span></label>
      <label class="btf"><span>Mint price per NFT (empty = not for sale)</span><div class="row" style="gap:.4rem"><input id="ns_pr" class="grow" value="${esc(ST.price)}" inputmode="decimal" placeholder="e.g. 25" oninput="ST_set('price',this.value)">${tokSelect('ns_pt', ST.ptok).replace('<select ', '<select onchange="ST_set(\'ptok\',this.value)" ')}</div></label>
      <label class="row" style="gap:.5rem;align-items:flex-start"><input type="checkbox" ${ST.sale ? 'checked' : ''} style="width:auto;margin-top:.2rem" onchange="ST_set('sale',this.checked)"> <span>Open the public mint: list every item at the mint price, so anyone can press <b>Mint</b> on the collection page and receive the next one</span></label></div></div>
@@ -1037,7 +1038,7 @@ const nsApi: any = {
     studioPaint();
   },
   back() { ST.items.forEach((i: any) => URL.revokeObjectURL(i.url)); ST.items = []; ST.cover = null; ST.coverUrl = ''; ST.log = ''; ST.prog = 0; (window as any).goTab(ST.from || 'nfts'); },
-  ed(i: number, k: string, v: string) { const it = ST.items[i]; if (!it) return; if (k === 'name') { it.name = v; it.ed = true; } else if (k === 'desc') { it.desc = v; it.dd = true; } else it.attrs = v; },
+  ed(i: number, k: string, v: string) { const it = ST.items[i]; if (!it) return; if (k === 'name') { it.name = v; it.ed = true; } else if (k === 'desc') { it.desc = v; it.dd = true; } else if (k === 'roy') it.roy = v; else it.attrs = v; },
   rm(i: number) { URL.revokeObjectURL(ST.items[i].url); ST.items.splice(i, 1); applyNames(false); studioPaint(); },
   apply(force: boolean) { if (force) ST.items.forEach((i: any) => { i.ed = false; i.dd = false; }); applyNames(true); },
   sort() { ST.items.sort((a: any, b: any) => natCmp(a.f.name, b.f.name)); applyNames(false); studioPaint(); },
@@ -1119,9 +1120,11 @@ const nsApi: any = {
         const meta = { name: `${coll || 'NFT'} · Cover`, description: ST.cdesc || '', image: 'ipfs://' + cid, attributes: [], collection: { name: coll, description: ST.cdesc || '', cover: true, total: n, mint: sale ? { price, token: tokObj, public: true } : { public: false } } };
         ST.coverUri = 'ipfs://' + (await add(new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json'));
       }
-      const mintOne = async (uri: string) => {
+      const mintOne = async (uri: string, itRoy?: any) => {
+        const rr = itRoy !== undefined && itRoy !== '' && itRoy != null ? Math.round(parseFloat(String(itRoy)) * 1000) : roy;
+        if (!(rr >= 0 && rr <= 50000)) throw new Error('Royalty must be between 0 and 50%.');
         if (xr()) await payMintFee(me(), taxon, uri);
-        const r = await ctx.submit({ TransactionType: 'NFTokenMint', Account: me(), NFTokenTaxon: taxon, Flags: flags, TransferFee: flags & TF_TRANSFER ? roy : 0, URI: strToHex(uri) });
+        const r = await ctx.submit({ TransactionType: 'NFTokenMint', Account: me(), NFTokenTaxon: taxon, Flags: flags, TransferFee: flags & TF_TRANSFER ? rr : 0, URI: strToHex(uri) });
         if (!r.ok) throw new Error('Mint was rejected: ' + r.msg);
         return '';
       };
@@ -1133,7 +1136,7 @@ const nsApi: any = {
         if (it.minted) { done++; continue; }
         if (ST.stop) throw new Error(`Stopped after ${done} of ${total}. Press Mint to continue where it left off.`);
         msg(`Minting ${i + 1}/${n}: ${it.name}`, step());
-        it.id = await mintOne(it.uri);
+        it.id = await mintOne(it.uri, it.roy);
         it.minted = true;
         done++;
       }
@@ -1191,6 +1194,60 @@ function collData(k: string) {
   const sales: Act[] = (NF.act as Act[]).filter(a => a.sale && items.some(i => i.id === a.nft));
   return { list, items, cover, info, creator, avail, owners, sales, name: (info && info.coll) || collName(list) };
 }
+
+/* ---- analytics: collection pages and single NFTs ---- */
+const aBars = (v: number[], lab: string[], h = 90) => { const mx = Math.max(...v, 1e-9), w = 100 / Math.max(1, v.length); return `<svg viewBox="0 0 100 ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px">${v.map((x, k) => `<rect x="${(k * w + w * 0.12).toFixed(2)}" y="${(h - 4 - (x / mx) * (h - 8)).toFixed(1)}" width="${(w * 0.76).toFixed(2)}" height="${((x / mx) * (h - 8) + (x > 0 ? 2 : 0)).toFixed(1)}" rx="1" fill="var(--acc,#00ff8c)" opacity=".85"><title>${esc(lab[k] || '')}: ${esc(fmt(x, 4))}</title></rect>`).join('')}</svg><div class="row mut" style="justify-content:space-between;font-size:.68rem"><span>${esc(lab[0] || '')}</span><span>${esc(lab[lab.length - 1] || '')}</span></div>`; };
+const aLine = (v: number[], h = 90) => { if (v.length < 2) return '<div class="mut" style="padding:1rem;font-size:.8rem">Needs at least two sales to draw a price line.</div>'; const lo = Math.min(...v), hi = Math.max(...v), sp = hi - lo || 1, pts = v.map((y, k) => `${((k / (v.length - 1)) * 100).toFixed(2)},${(h - 6 - ((y - lo) / sp) * (h - 12)).toFixed(1)}`).join(' '); return `<svg viewBox="0 0 100 ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px"><polyline points="${pts}" fill="none" stroke="var(--acc,#00ff8c)" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg><div class="row mut" style="justify-content:space-between;font-size:.68rem"><span>low ${esc(fmt(lo, 4))}</span><span>high ${esc(fmt(hi, 4))}</span></div>`; };
+const medianOf = (a: number[]) => { if (!a.length) return null; const s2 = a.slice().sort((x, y) => x - y), m = Math.floor(s2.length / 2); return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2; };
+const atile = (k: string, v: string, sub = '') => `<div class="tile kvt"><div class="k">${k}</div><div class="big2" style="font-size:1.15rem">${v}</div><div class="mut" style="font-size:.74rem">${sub}</div></div>`;
+const both = (n: number | null) => (n == null ? '–' : `${esc(fmt(n, 4))} ${esc(nat())}${usdTxt(n) ? ` <small class="mut">${esc(usdTxt(n))}</small>` : ''}`);
+function traitStats(items: Item[]) {
+  const freq = new Map<string, Map<string, number>>(); let counted = 0;
+  for (const it of items) { const m: Meta | null = NF.meta.get(it.id); if (!m || !m.attrs || !m.attrs.length) continue; counted++; for (const a of m.attrs) { const km = freq.get(a.k) || new Map<string, number>(); km.set(a.v, (km.get(a.v) || 0) + 1); freq.set(a.k, km); } }
+  return { freq, counted };
+}
+function rarityOf(items: Item[]) {
+  const { freq, counted } = traitStats(items), score = new Map<string, number>();
+  if (!counted) return { rank: new Map<string, number>(), score, counted, freq };
+  for (const it of items) { const m: Meta | null = NF.meta.get(it.id); if (!m || !m.attrs || !m.attrs.length) continue; score.set(it.id, m.attrs.reduce((t, a) => t + counted / ((freq.get(a.k) as Map<string, number>).get(a.v) || 1), 0)); }
+  const order = [...score.entries()].sort((a, b) => b[1] - a[1]), rank = new Map<string, number>(); order.forEach(([id], n) => rank.set(id, n + 1));
+  return { rank, score, counted, freq };
+}
+function collAnalytics(d: ReturnType<typeof collData>): string {
+  const items = d.items, n = items.length, now = Date.now();
+  const sales = d.sales.filter(x => x.amtN != null), vals = sales.map(x => x.amtN as number), vol = vals.reduce((t, x) => t + x, 0);
+  const v24 = sales.filter(x => now - x.ms < 864e5).reduce((t, x) => t + (x.amtN as number), 0), v7 = sales.filter(x => now - x.ms < 7 * 864e5).reduce((t, x) => t + (x.amtN as number), 0);
+  const listed = (NF.offers as Offer[]).filter(o => o.sell && live(o) && items.some(i => i.id === o.nft)), lp = listed.map(o => priceN(o.amt)).filter((x): x is number => x != null), floor = lp.length ? Math.min(...lp) : null;
+  const roy = items.length ? items.reduce((t, i) => t + i.fee, 0) / items.length / 1000 : 0, royEarned = vol * (roy / 100);
+  const cnt = new Map<string, number>(); for (const i of items) cnt.set(i.owner, (cnt.get(i.owner) || 0) + 1);
+  const holders = [...cnt.entries()].sort((a, b) => b[1] - a[1]), top10 = holders.slice(0, 10).reduce((t, x) => t + x[1], 0);
+  const days = Array.from({ length: 14 }, (_, k) => { const t0 = new Date(); t0.setHours(0, 0, 0, 0); const a = t0.getTime() - (13 - k) * 864e5; return { a, vol: sales.filter(x => x.ms >= a && x.ms < a + 864e5).reduce((t, x) => t + (x.amtN as number), 0), lab: new Date(a).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }; });
+  const ordered = sales.slice().sort((a, b) => a.ms - b.ms), { freq, counted } = traitStats(items);
+  const traits = [...freq.entries()].slice(0, 6).map(([k, mm]) => `<div class="tile"><div class="k">${esc(k)}</div>${[...mm.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([v, c]) => `<div class="nwbar"><span>${esc(v)}</span><i style="width:${((c / counted) * 100).toFixed(0)}%"></i><b>${c} <small class="mut">${((c / counted) * 100).toFixed(0)}%</small></b></div>`).join('')}</div>`).join('');
+  const nm2 = (id: string) => { const it = items.find(x => x.id === id); return it ? nameOf(it) : sh(id); };
+  return `<div class="nwh">Collection analytics</div>
+  <div class="pgrid nwk">${atile('Total volume', both(vol), `${sales.length} sale${sales.length === 1 ? '' : 's'}`)}${atile('Volume 24h / 7d', `${esc(fmt(v24, 4))} / ${esc(fmt(v7, 4))} ${esc(nat())}`, 'from recorded sales')}${atile('Average sale', both(vals.length ? vol / vals.length : null), 'median ' + (medianOf(vals) != null ? fmt(medianOf(vals) as number, 4) : '–'))}${atile('Highest sale', both(vals.length ? Math.max(...vals) : null), '')}
+  ${atile('Floor price', both(floor), `${listed.length} listed · ${n ? ((listed.length / n) * 100).toFixed(1) : 0}% of items`)}${atile('Market cap at floor', both(floor != null ? floor * n : null), `${fmt(n, 0)} items`)}${atile('Royalty', roy.toFixed(1) + '%', `creator earned about ${fmt(royEarned, 4)} ${esc(nat())} so far`)}${atile('Holders', fmt(cnt.size, 0), `top 10 hold ${n ? ((top10 / n) * 100).toFixed(0) : 0}% · largest ${holders[0] ? ((holders[0][1] / n) * 100).toFixed(1) : 0}%`)}</div>
+  <div class="nwg3" style="margin-top:.8rem"><div class="tile"><div class="k">Daily sales volume (14 days)</div>${aBars(days.map(x => x.vol), days.map(x => x.lab))}</div><div class="tile"><div class="k">Sale prices over time</div>${aLine(ordered.map(x => x.amtN as number))}</div>
+  <div class="tile"><div class="k">Top holders</div>${holders.slice(0, 8).map(([a, c]) => `<div class="dxkv"><span class="mono">${esc(sh(a))}${a === d.creator ? ' <small class="mut">creator</small>' : ''}</span><span>${c} <small class="mut">${((c / Math.max(1, n)) * 100).toFixed(1)}%</small></span></div>`).join('') || '<div class="mut">No holders yet.</div>'}</div></div>
+  ${traits ? `<div class="nwh" style="font-size:1rem">Trait rarity <small class="mut">${counted} of ${n} items have traits</small></div><div class="nwg3">${traits}</div>` : ''}
+  <div class="nwh" style="font-size:1rem">Recent sales</div><div class="card nwscroll" style="max-height:18rem">${sales.length ? `<table class="dxt"><thead><tr><th>NFT</th><th class="r">Price</th><th>From</th><th>To</th><th>When</th></tr></thead><tbody>${sales.slice().sort((a, b) => b.ms - a.ms).slice(0, 15).map(x => `<tr><td><a href="#" class="who" onclick="window.nm.open('${esc(x.nft)}');return false">${esc(nm2(x.nft))}</a></td><td class="r"><b>${esc(fmt(x.amtN as number, 4))}</b> ${esc(nat())}</td><td class="mono mut">${esc(sh(x.from))}</td><td class="mono mut">${esc(sh(x.to))}</td><td class="mut">${esc(ago(x.ms))}</td></tr>`).join('')}</tbody></table>` : '<div class="mut" style="padding:.8rem">No sales yet.</div>'}</div>`;
+}
+function nftAnalytics(i: Item, m: Meta, colItems: Item[], hist: Act[], lst: Offer | undefined): string {
+  const items = colItems.filter(vis), r = rarityOf(items), rk = r.rank.get(i.id), tot = r.rank.size;
+  const sales = hist.filter(a => a.sale && a.amtN != null).sort((a, b) => a.ms - b.ms), vals = sales.map(a => a.amtN as number);
+  const listed = (NF.offers as Offer[]).filter(o => o.sell && live(o) && items.some(x => x.id === o.nft)).map(o => priceN(o.amt)).filter((x): x is number => x != null), floor = listed.length ? Math.min(...listed) : null;
+  const price = lst ? priceN(lst.amt) : null, last = sales.length ? sales[sales.length - 1] : null, roy = i.fee / 1000, owners: string[] = [];
+  for (const a of hist.slice().sort((x, y) => x.ms - y.ms)) { if (a.type === 'NFTokenMint' && a.from && !owners.includes(a.from)) owners.push(a.from); if ((a.sale || a.type === 'NFTokenAcceptOffer') && a.to && owners[owners.length - 1] !== a.to) owners.push(a.to); }
+  if (!owners.includes(i.owner)) owners.push(i.owner);
+  const cs = (NF.act as Act[]).filter(a => a.sale && a.amtN != null && items.some(x => x.id === a.nft)), avgC = cs.length ? cs.reduce((t, a) => t + (a.amtN as number), 0) / cs.length : null;
+  const tr = (m.attrs || []).map(a => { const c = (r.freq.get(a.k) || new Map()).get(a.v) || 1; return `<tr><td>${esc(a.k)}</td><td><b>${esc(a.v)}</b></td><td class="r">${c} of ${r.counted}</td><td class="r"><span class="${c / r.counted < 0.1 ? 'up' : ''}">${((c / Math.max(1, r.counted)) * 100).toFixed(1)}%</span></td></tr>`; }).join('');
+  const ex = price ?? last?.amtN ?? 100;
+  return `<div class="nwh">Analytics</div><div class="pgrid nwk">${atile('Rarity rank', rk ? '#' + rk + ' <small class="mut">of ' + tot + '</small>' : '–', rk ? 'top ' + ((rk / tot) * 100).toFixed(1) + '% by trait rarity' : 'needs traits in the metadata')}${atile('Last sale', both(last ? (last.amtN as number) : null), last ? ago(last.ms) : 'never sold')}${atile('Listed price vs floor', price != null && floor ? (((price / floor - 1) * 100) >= 0 ? '+' : '') + ((price / floor - 1) * 100).toFixed(1) + '%' : '–', 'collection floor ' + (floor != null ? fmt(floor, 4) + ' ' + nat() : '–'))}${atile('Vs collection average', price != null && avgC ? (((price / avgC - 1) * 100) >= 0 ? '+' : '') + ((price / avgC - 1) * 100).toFixed(1) + '%' : '–', 'average sale ' + (avgC != null ? fmt(avgC, 4) + ' ' + nat() : '–'))}
+  ${atile('Royalty', roy.toFixed(1) + '%', `a ${fmt(ex, 4)} ${esc(nat())} sale pays the creator ${fmt(ex * roy / 100, 6)} ${esc(nat())}`)}${atile('Times sold', String(sales.length), sales.length > 1 ? 'price change ' + (((vals[vals.length - 1] / vals[0] - 1) * 100) >= 0 ? '+' : '') + ((vals[vals.length - 1] / vals[0] - 1) * 100).toFixed(1) + '% first to last' : '')}${atile('Owners so far', String(owners.length), 'distinct wallets that held it')}${atile('Edition', '#' + i.serial, `${fmt(colItems.length, 0)} in the collection`)}</div>
+  <div class="nwg3" style="margin-top:.8rem"><div class="tile"><div class="k">Sale price history</div>${aLine(vals)}</div><div class="tile"><div class="k">Trait rarity</div>${tr ? `<table class="dxt"><thead><tr><th>Trait</th><th>Value</th><th class="r">Count</th><th class="r">Share</th></tr></thead><tbody>${tr}</tbody></table>` : '<div class="mut">No traits in this NFT’s metadata.</div>'}</div>
+  <div class="tile"><div class="k">Ownership history</div>${owners.map((o, k) => `<div class="dxkv"><span class="mono">${esc(sh(o))}${o === i.owner ? ' <small class="up">current</small>' : ''}${o === i.issuer && k === 0 ? ' <small class="mut">creator</small>' : ''}</span></div>`).join('')}</div></div>`;
+}
 function collHtml() {
   const d = collData(CP.key);
   if (!d.list.length) return `<div class="card"><button class="ghost" onclick="window.cp.back()">← Back</button><div class="mut" style="padding:1.5rem">Reading this collection from the ledger…</div></div>`;
@@ -1212,6 +1269,7 @@ function collHtml() {
     <div class="mut" style="font-size:.76rem;margin-top:.5rem">Minting buys the next available NFT straight from the creator at the mint price. The creator’s royalty is built into the NFT; nothing else is charged.</div>
     ${mine ? `<div class="card" style="margin-top:.8rem"><div class="k">Creator tools</div><div class="row" style="gap:.5rem;flex-wrap:wrap">${priceInput('cp_np')}<button class="sm" onclick="window.cp.reprice(this)">Set price for the ${d.items.filter(i => i.owner === d.creator).length} unsold</button><button class="sm ghost" onclick="window.cp.unlist(this)">Close the mint (cancel listings)</button></div></div>` : ''}</div></div>
   <div class="pgrid nwk" style="margin-top:1rem">${stat('Items', fmt(minted, 0), d.cover ? '+ cover' : '')}${stat('Owners', fmt(d.owners.size, 0), minted ? ((d.owners.size / minted) * 100).toFixed(0) + '% unique' : '')}${stat('Floor', floor != null && floor < 1e17 ? fmt(floor) + ' ' + nat() : '–', floor != null && floor < 1e17 ? usdTxt(floor) : '')}${stat('Sales', fmt(d.sales.length, 0), '')}${stat('Volume', vol ? fmt(vol) + ' ' + nat() : '–', vol ? usdTxt(vol) : '')}${stat('Royalty', d.list[0] ? (d.list[0].fee / 1000).toFixed(1) + '%' : '–', '')}</div>
+  ${collAnalytics(d)}
   <div class="nwh">Items (${minted})</div><div class="nf4 many" style="max-height:60vh;overflow:auto">${d.items.map(card).join('') || '<div class="mut">No items.</div>'}</div>`;
 }
 function collPage(k: string) {

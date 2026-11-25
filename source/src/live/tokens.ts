@@ -3,7 +3,8 @@ import { ipfsAdd } from './nft.ts';
 import * as xrpl from 'xrpl';
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
-import { Asset, NATIVE, akey, esc, fmt, hexName, nameToCur, short, usd, isNative } from './util.ts';
+import { Asset, NATIVE, akey, amtTx, esc, fmt, hexName, nameToCur, short, usd, isNative } from './util.ts';
+import * as PC from './poolcreate.ts';
 import { cached, clearCache, info, tryReq } from './chain.ts';
 
 export const FEE_LUMA = 10; // legacy fee (v1 tokens)
@@ -156,10 +157,11 @@ interface Form {
   cat: string;
   tf: string;
   nf: boolean;
+  pool: boolean; pp: string; pt: string; pa: string; pf: string;
   pay: string;
   gen: string;
 }
-const F0 = (): Form => ({ name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false, x: '', tg: '', dc: '', cat: '', tf: '', nf: false, pay: 'native', gen: '' });
+const F0 = (): Form => ({ name: '', sym: '', supply: '1000000', desc: '', site: '', lock: false, x: '', tg: '', dc: '', cat: '', tf: '', nf: false, pay: 'native', gen: '', pool: false, pp: 'native', pt: '', pa: '', pf: '0.3' });
 let F: Form = F0();
 /** what the $100 creation fee can be paid in: LUMA, or a LUMA ecosystem token minted from the Genesis wallet (never a token made in Starsky) */
 interface FeeOpt { key: string; sym: string; cur?: string; iss?: string; px: number; need: number; have: number; ok: boolean; why: string }
@@ -231,6 +233,15 @@ export async function openCreate() {
         <input id="tk_tf" placeholder="Transfer fee % on every send (0 to 5, optional)" inputmode="decimal" value="${esc(F.tf)}">
       </div>
       <label class="mut" style="display:block;margin:.5rem 0 0;font-size:.82rem"><input id="tk_nf" type="checkbox" ${F.nf ? 'checked' : ''}> Give up the right to freeze any holder (cannot be undone). Builds trust with buyers.</label></div>
+    <div class="lpcard" style="margin-top:.6rem"><div class="k">Liquidity pool (optional)</div>
+      <label class="mut" style="display:block;margin:.3rem 0;font-size:.82rem"><input id="tk_pool" type="checkbox" ${F.pool ? 'checked' : ''} onchange="window.tk.pool()"> Create an AMM pool for this token while it is minted, so it can be traded straight away</label>
+      <div id="tk_poolbox" style="display:${F.pool ? 'block' : 'none'}">
+        <div class="fgrid" style="margin-top:.4rem"><select id="tk_pp" onchange="window.tk.pest()">${OPTS.filter(o => o.have > 0 || o.key === 'native').map(o => `<option value="${esc(o.key)}" ${o.key === F.pp ? 'selected' : ''}>Pair with ${esc(o.sym)} (you hold ${fmt(o.have)})</option>`).join('')}</select>
+          <input id="tk_pf" placeholder="Trading fee % (0 to 1)" inputmode="decimal" value="${esc(F.pf)}" oninput="window.tk.pest()">
+          <input id="tk_pt" placeholder="Tokens to put in the pool" inputmode="decimal" value="${esc(F.pt)}" oninput="window.tk.pest()">
+          <input id="tk_pa" placeholder="Amount of the pair asset to put in" inputmode="decimal" value="${esc(F.pa)}" oninput="window.tk.pest()"></div>
+        <div class="row" style="gap:.4rem;margin:.4rem 0;flex-wrap:wrap"><small class="mut">Tokens in the pool:</small>${[10, 25, 50, 100].map(p => `<button class="sm ghost" onclick="window.tk.pct(${p})">${p}% of supply</button>`).join('')}</div>
+        <div id="tk_pest"></div></div></div>
     <div class="lpcard" style="margin-top:.6rem"><div class="k">Creation fee: $${FEE_USD} worth, paid to the Genesis wallet</div>
       <div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Pay in ${esc(ctx.native())} or any LUMA ecosystem token that was minted from the Genesis wallet and has a price. Tokens made in Starsky cannot be used to pay for a new token.</div>
       <select id="tk_pay" style="width:100%" onchange="window.tk.pay(this.value)">${OPTS.map(o => `<option value="${esc(o.key)}" ${o.key === F.pay ? 'selected' : ''} ${o.ok ? '' : 'disabled'}>${esc(o.sym)}: ${fmt(o.need)} ${o.ok ? '' : '(' + esc(o.why) + ')'}</option>`).join('') || '<option value="native">' + esc(ctx.native()) + '</option>'}</select>
@@ -241,7 +252,7 @@ export async function openCreate() {
     <div class="row"><button class="grow" onclick="window.tk.leave()">Cancel</button><button class="pri acc grow" id="tk_go" onclick="window.tk.create(this)">Create token</button></div>`, 'Create a token');
 }
 const keepForm = () => {
-  F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked, x: val('tk_x'), tg: val('tk_tg'), dc: val('tk_dc'), cat: val('tk_cat'), tf: val('tk_tf'), nf: !!$('tk_nf')?.checked, pay: val('tk_pay') || F.pay, gen: val('tk_gen') || F.gen };
+  F = { name: val('tk_name'), sym: val('tk_sym'), supply: val('tk_sup'), desc: val('tk_desc'), site: val('tk_web'), lock: !!$('tk_lock')?.checked, x: val('tk_x'), tg: val('tk_tg'), dc: val('tk_dc'), cat: val('tk_cat'), tf: val('tk_tf'), nf: !!$('tk_nf')?.checked, pay: val('tk_pay') || F.pay, gen: val('tk_gen') || F.gen, pool: !!$('tk_pool')?.checked, pp: val('tk_pp') || F.pp, pt: val('tk_pt'), pa: val('tk_pa'), pf: val('tk_pf') || F.pf };
 };
 async function bigBlob(file: File): Promise<Blob> {
   const bmp = await createImageBitmap(file), k = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
@@ -296,6 +307,16 @@ export async function create(btn: HTMLButtonElement) {
     const tfp = F.tf === '' ? 0 : parseFloat(F.tf);
     if (!(tfp >= 0 && tfp <= 5)) throw new Error('The transfer fee must be between 0 and 5 percent.');
     if (F.nf && !confirm('Giving up the freeze right is permanent. Continue?')) return;
+    let poolT = 0, poolP = 0, poolFee = 0.3, poolAsset2: Asset = NATIVE, poolSym = '';
+    if (F.pool) {
+      poolT = parseFloat(F.pt); poolP = parseFloat(F.pa); poolFee = F.pf === '' ? 0.3 : parseFloat(F.pf);
+      if (!(poolT > 0) || !(poolP > 0)) throw new Error('Enter how many tokens and how much of the pair asset go into the pool, or untick the pool option.');
+      if (poolT > supply) throw new Error('The pool cannot hold more tokens than the total supply.');
+      if (!(poolFee >= 0 && poolFee <= 1)) throw new Error('The pool trading fee must be between 0% and 1%.');
+      const po2 = OPTS.find(o => o.key === F.pp); poolAsset2 = poolAsset(F.pp); poolSym = po2 ? po2.sym : ctx.native();
+      if (po2 && poolP > po2.have) throw new Error(`You need ${fmt(poolP)} ${poolSym} for the pool but hold ${fmt(po2.have)}.`);
+      if (F.lock && poolT < supply && false) throw new Error('');
+    }
     const i = await info();
     const fund = i.reserveBase + 2 * i.reserveInc + 1;
     // re-price the fee right now so it is worth $100 when it lands
@@ -307,7 +328,7 @@ export async function create(btn: HTMLButtonElement) {
     btn.disabled = true;
     const steps: [string, string][] = [];
     const draw = () => ctx.modal(`<h2>Creating ${esc(F.name)}</h2><div class="steps">${steps.map(([s, st]) => `<div class="step ${st}"><i>${st === 'ok' ? '✓' : st === 'run' ? '…' : st === 'bad' ? '✕' : '•'}</i>${esc(s)}</div>`).join('')}</div>${steps.some(x => x[1] === 'bad') ? '<button class="grow" onclick="window.closeModal()">Close</button>' : ''}`);
-    const names = ['Create the issuer wallet and keep its key in your vault', `Pay the $${FEE_USD} creation fee (${fmt(po.need)} ${po.sym}) to the genesis wallet`, 'Fund the issuer wallet', 'Set up the issuer (rippling for pools and trading) and record the token details', ...(ICON && ICON.bytes.length ? ['Store the icon on the ledger'] : []), 'Open your trust line to the new token', `Issue ${fmt(supply)} ${F.sym} to your wallet`, ...(F.lock ? ['Lock the supply forever'] : [])];
+    const names = ['Create the issuer wallet and keep its key in your vault', `Pay the $${FEE_USD} creation fee (${fmt(po.need)} ${po.sym}) to the genesis wallet`, 'Fund the issuer wallet', 'Set up the issuer (rippling for pools and trading) and record the token details', ...(ICON && ICON.bytes.length ? ['Store the icon on the ledger'] : []), 'Open your trust line to the new token', `Issue ${fmt(supply)} ${F.sym} to your wallet`, ...(F.pool ? [`Create the AMM pool: ${fmt(poolT)} ${F.sym} + ${fmt(poolP)} ${poolSym} (fee ${poolFee}%)`] : []), ...(F.nf ? ['Give up the freeze right'] : []), ...(F.lock ? ['Lock the supply forever'] : [])];
     names.forEach(n => steps.push([n, 'todo']));
     let k = 0;
     const run = async (fn: () => Promise<{ ok: boolean; msg?: string }>) => {
@@ -340,6 +361,7 @@ export async function create(btn: HTMLButtonElement) {
     }
     await run(() => ctx.submit({ TransactionType: 'TrustSet', Account: acc, LimitAmount: { currency: cur, issuer: issuer.classicAddress, value: String(supply) } }));
     await run(() => ctx.submitAs(issuer.seed as string, { TransactionType: 'Payment', Account: issuer.classicAddress, Destination: acc, Amount: { currency: cur, issuer: issuer.classicAddress, value: String(supply) } }));
+    if (F.pool) await run(() => ctx.submit({ TransactionType: 'AMMCreate', Account: acc, Amount: amtTx({ c: cur, i: issuer.classicAddress }, poolT), Amount2: amtTx(poolAsset2, poolP), TradingFee: Math.round(poolFee * 1000) }));
     if (F.nf) await run(() => ctx.submitAs(issuer.seed as string, { TransactionType: 'AccountSet', Account: issuer.classicAddress, SetFlag: 6 }));
     if (F.lock) {
       await run(async () => {
@@ -350,10 +372,11 @@ export async function create(btn: HTMLButtonElement) {
     }
     if (!genesisAddr()) setGenesis(g);
     clearCache();
-    const key = akey({ c: cur, i: issuer.classicAddress });
+    const key = akey({ c: cur, i: issuer.classicAddress }), poolMade = F.pool;
     ICON = null;
+    try { (window as any).discoverPools?.(); } catch {}
     F = F0();
-    ctx.modal(`<h2>${esc(steps.length ? 'Token created' : '')}</h2><p>Your token is live and appears under <b>Others</b>. The supply is in your wallet.</p><div class="row" style="gap:.5rem;flex-wrap:wrap"><button class="pri acc grow" onclick="window.closeModal();window.tk.openPool('${esc(key)}')">Create a liquidity pool</button><button class="grow" onclick="window.closeModal();window.pa.trade('${esc(key)}')">Open in the DEX</button><button class="grow" onclick="window.closeModal();window.pa.reload()">Done</button></div>`);
+    ctx.modal(`<h2>${esc(steps.length ? 'Token created' : '')}</h2><p>Your token is live and appears under <b>Others</b>. The supply is in your wallet.${poolMade ? ' Its liquidity pool is live too: it shows under Liquidity Pools, Others and the DEX.' : ''}</p><div class="row" style="gap:.5rem;flex-wrap:wrap"><button class="pri acc grow" onclick="window.closeModal();window.tk.openPool('${esc(key)}')">Create a liquidity pool</button><button class="grow" onclick="window.closeModal();window.pa.trade('${esc(key)}')">Open in the DEX</button><button class="grow" onclick="window.closeModal();window.pa.reload()">Done</button></div>`);
     ctx.rerender();
   } catch (e: any) {
     say(String(e?.message || e));
@@ -374,7 +397,18 @@ export function openPool(key: string) {
     set('cp_i2', ctx.showL(a[1]));
   }, 300);
 }
-export const tkApi: any = { openCreate, create, icon: pickIcon, openPool, gen: (v: string) => { F.gen = v; }, net: (id: string) => { keepForm(); F.gen = ''; (window as any).switchNet?.(id); setTimeout(() => { void openCreate(); }, 1500); } };
+function poolAsset(key: string): Asset { if (key === 'native') return NATIVE; const o = OPTS.find(x => x.key === key); return o ? { c: o.cur as string, i: o.iss as string } : NATIVE; }
+async function pest() {
+  const box = document.getElementById('tk_pest'); if (!box || !$('tk_pool')?.checked) return;
+  await PC.loadPrices();
+  const key = val('tk_pp') || 'native', o = OPTS.find(x => x.key === key), pa = poolAsset(key), sup = parseFloat(val('tk_sup')) || 0;
+  const T = parseFloat(val('tk_pt')) || 0, P = parseFloat(val('tk_pa')) || 0, fee = val('tk_pf') === '' ? 0.3 : parseFloat(val('tk_pf'));
+  const i = await info().catch(() => null), fund = i ? i.reserveBase + 2 * i.reserveInc + 1 : 3;
+  const sameAsFee = (val('tk_pay') || F.pay) === key, feeNeed = sameAsFee && o ? (OPTS.find(x => x.key === key) as FeeOpt).need : 0;
+  const balP = o ? Math.max(0, o.have - feeNeed - (key === 'native' ? fund + (i ? i.reserveInc * 2 : 0) : 0)) : 0;
+  box.innerHTML = PC.estimate({ tName: val('tk_sym') || 'TOKEN', pName: o ? o.sym : ctx.native(), T, P, fee, pUsd: PC.usdOf(pa), supply: sup, balP });
+}
+export const tkApi: any = { pool: () => { const on = !!$('tk_pool')?.checked, b = document.getElementById('tk_poolbox'); if (b) b.style.display = on ? 'block' : 'none'; void pest(); }, pest: () => { void pest(); }, pct: (p: number) => { const sup = parseFloat(val('tk_sup')) || 0, e = $('tk_pt'); if (e) e.value = String(Number(((sup * p) / 100).toPrecision(10))); void pest(); }, openCreate, create, icon: pickIcon, openPool, gen: (v: string) => { F.gen = v; }, net: (id: string) => { keepForm(); F.gen = ''; (window as any).switchNet?.(id); setTimeout(() => { void openCreate(); }, 1500); } };
 
 // ---------- manage supply: mint more, burn, cap (lock) ----------
 interface Mg { wallet: string; issuer: string; seed: string; label: string; cur: string; name: string; supply: number; mine: number; locked: boolean }

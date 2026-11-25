@@ -1,7 +1,7 @@
 // Liquidity pools page: every pool with prices both ways, % changes, dollar and LUMA values, your position, and a detail page per pool.
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
-import { Asset, akey, esc, fmt, pctHtml, short, usd, ago } from './util.ts';
+import { Asset, hexName, isNative, akey, esc, fmt, pctHtml, short, usd, ago } from './util.ts';
 import { chartSvg } from './dexchart.ts';
 
 const $ = (id: string) => (typeof document === 'undefined' ? null : document.getElementById(id));
@@ -14,7 +14,7 @@ const favs = (): Set<string> => {
     return new Set();
   }
 };
-const PL: any = { q: '', tok: '', favOnly: false, sel: '', inv: false, range: '1h', pools: [], mine: (_p: any) => ({ bal: 0, share: 0 }), rows: [], busy: false, last: '', cd: null, ck: '', cat: 0, trades: null, tat: 0 };
+const PL: any = { q: '', tok: '', tab: 'all', favOnly: false, sel: '', inv: false, range: '1h', pools: [], mine: (_p: any) => ({ bal: 0, share: 0 }), rows: [], busy: false, last: '', cd: null, ck: '', cat: 0, trades: null, tat: 0 };
 const WK = ['1h', '24h', '7d'];
 const chg = (a: number | null, b: number | null) => (a == null || b == null || !(b > 0) ? null : (a / b - 1) * 100);
 const dsg = (v: number | null, f: (n: number) => string) => (v == null ? '–' : (v >= 0 ? '+' : '−') + f(Math.abs(v)));
@@ -83,7 +83,16 @@ function listHtml(allRows: Row[], un: number | null) {
   const F = favs();
   const q = PL.q.trim().toLowerCase();
   const toks = [...new Set(allRows.flatMap(r => [nm(r.p.a1), nm(r.p.a2)]))].sort();
+  const usdN = String(ctx.usdName() || 'USD').toUpperCase();
+  const core = (a: Asset) => isNative(a) || hexName(a.c).toUpperCase() === usdN;
+  const mineIss = new Set(ctx.wallets().filter((w: any) => /^Issuer:/.test(w.label)).map((w: any) => ctx.toClassic(w.address)));
+  const isOther = (r: Row) => !(core(r.p.a1) && core(r.p.a2));
+  const isYours = (r: Row) => mineIss.has(r.p.a1.i) || mineIss.has(r.p.a2.i);
+  const cnt = { all: allRows.length, mine: allRows.filter(r => r.share > 0).length, others: allRows.filter(isOther).length, yours: allRows.filter(isYours).length };
+  const tabBtn = (k: string, l: string, n: number) => `<button class="${PL.tab === k ? 'on' : ''}" onclick="window.pl.tab('${k}')">${l} <small class="mut">${n}</small></button>`;
+  const tabsHtml = `<div class="seg" style="margin-bottom:.6rem;flex-wrap:wrap">${tabBtn('all', 'All pools', cnt.all)}${tabBtn('mine', 'My liquidity', cnt.mine)}${tabBtn('others', 'Others', cnt.others)}${tabBtn('yours', 'My tokens', cnt.yours)}</div>`;
   const rows = allRows
+    .filter(r => PL.tab === 'all' || (PL.tab === 'mine' && r.share > 0) || (PL.tab === 'others' && isOther(r)) || (PL.tab === 'yours' && isYours(r)))
     .filter(r => (!PL.tok || nm(r.p.a1) === PL.tok || nm(r.p.a2) === PL.tok) && (!PL.favOnly || F.has('p:' + r.p.m.account)) && (!q || (nm(r.p.a1) + ' ' + nm(r.p.a2) + ' ' + r.p.m.account + ' ' + ctx.show(r.p.m.account)).toLowerCase().includes(q)))
     .map((r, i) => ({ r, i }))
     .sort((a, b) => Number(F.has('p:' + b.r.p.m.account)) - Number(F.has('p:' + a.r.p.m.account)) || a.i - b.i)
@@ -99,7 +108,7 @@ function listHtml(allRows: Row[], un: number | null) {
       const side = (amt: number, a: Asset, u: number | null, pc: number | null) => `${fmt(amt, 4)} <small class="mut">${esc(nm(a))}</small><div class="mut" style="font-size:.7rem">${u != null ? usd(amt * u) : ''} ${pctHtml(pc)}</div>`;
       const pos = r.share > 0 && r.valN != null ? { v: r.valN * r.share, d: c.valN0 != null ? (r.valN - c.valN0) * r.share : null } : null;
       return `<tr style="cursor:pointer" onclick="window.pl.open('${esc(r.p.m.account)}')" title="Click for all pool details">
-        <td><span style="cursor:pointer;color:${F.has('p:' + r.p.m.account) ? '#ffd24a' : '#667'};margin-right:.4rem" onclick="event.stopPropagation();window.pl.fav('${esc(r.p.m.account)}')">${F.has('p:' + r.p.m.account) ? '★' : '☆'}</span><b>${esc(nm(r.p.a1))} / ${esc(nm(r.p.a2))}</b>${M.isOldUsd(r.p.a1) || M.isOldUsd(r.p.a2) ? ' <span style="color:#ff5a5a;font-size:.7rem;border:1px solid #ff5a5a;border-radius:6px;padding:0 .3rem">OLD USD</span>' : ''}<div class="mut mono" style="font-size:.68rem">${esc(short(ctx.show(r.p.m.account), 8, 5))}</div></td>
+        <td><span style="cursor:pointer;color:${F.has('p:' + r.p.m.account) ? '#ffd24a' : '#667'};margin-right:.4rem" onclick="event.stopPropagation();window.pl.fav('${esc(r.p.m.account)}')">${F.has('p:' + r.p.m.account) ? '★' : '☆'}</span><b>${esc(nm(r.p.a1))} / ${esc(nm(r.p.a2))}</b>${isYours(r) ? ' <span class="chip ok" style="font-size:.62rem">your token</span>' : ''}${M.isOldUsd(r.p.a1) || M.isOldUsd(r.p.a2) ? ' <span style="color:#ff5a5a;font-size:.7rem;border:1px solid #ff5a5a;border-radius:6px;padding:0 .3rem">OLD USD</span>' : ''}<div class="mut mono" style="font-size:.68rem">${esc(short(ctx.show(r.p.m.account), 8, 5))}</div></td>
         <td class="r">${side(r.p.r1, r.p.a1, r.ua, c.a)}</td><td class="r">${side(r.p.r2, r.p.a2, r.ub, c.b)}</td>
         <td class="r mono">${fmt(r.fwd, 6)}<div class="mut" style="font-size:.7rem">${esc(nm(r.p.a2))} per ${esc(nm(r.p.a1))}</div>${pctHtml(c.fwd)}</td>
         <td class="r mono">${fmt(r.rev, 6)}<div class="mut" style="font-size:.7rem">${esc(nm(r.p.a1))} per ${esc(nm(r.p.a2))}</div>${pctHtml(c.rev)}</td>
@@ -109,7 +118,7 @@ function listHtml(allRows: Row[], un: number | null) {
         <td class="r" onclick="event.stopPropagation()"><div class="row" style="justify-content:flex-end;gap:.3rem"><button class="sm pri" onclick="window.openDepositModal(${r.idx})">Deposit</button><button class="sm" onclick="window.openWithdrawModal(${r.idx})">Withdraw</button><button class="sm pri acc" onclick="window.pl.trade(${r.idx})">Trade</button></div></td></tr>`;
     })
     .join('');
-  return `${ctl}<div class="row" style="gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem">
+  return `${tabsHtml}${ctl}<div class="row" style="gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem">
     ${tile('Total value in pools', un != null ? usd(tot * un) : fmt(tot, 2) + ' ' + esc(nat), fmt(tot, 2) + ' ' + esc(nat) + (tvl24 > 0 ? ' · 24h ' + pctTxt(chg(tot, tvl24)) : ''))}
     ${tile('Pools', rows.length === allRows.length ? String(rows.length) : rows.length + ' of ' + allRows.length, PL.tok ? 'with ' + esc(PL.tok) : 'on the ' + esc(nat) + ' network')}
     ${tile('Your pool value', un != null ? usd(mineN * un) : fmt(mineN, 2) + ' ' + esc(nat), fmt(mineN, 2) + ' ' + esc(nat))}</div>
@@ -218,6 +227,7 @@ const repaintKeep = () => {
   }
 };
 export const plApi = {
+  tab(k: string) { PL.tab = k; PL.focusQ = false; repaintKeep(); },
   search(v: string) {
     PL.q = v;
     PL.focusQ = true;

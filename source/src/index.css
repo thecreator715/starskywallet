@@ -1409,7 +1409,7 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 .xd input[type=text],.xd input:not([type]),.xd input[inputmode]{width:100%;box-sizing:border-box}
 .xd td,.xd th{overflow-wrap:anywhere}
 
-.tkgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.7rem;margin-top:.5rem}.tkall.on{border-color:var(--acc,#00ff8c)}.tkpg{max-width:46rem}.tkpg .card{padding:1.2rem}
+.tkgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.7rem;margin-top:.5rem}.tkall.on{border-color:var(--acc,#00ff8c)}.tkpg{max-width:none;width:100%}.tkpg .card{padding:1.4rem;max-width:none}
 
 .soon{position:absolute;inset:0;z-index:30;display:flex;align-items:flex-start;justify-content:center;padding-top:6rem;background:rgba(6,4,18,.72);backdrop-filter:blur(5px);border-radius:1rem;min-height:70vh}
 .soonc{max-width:26rem;text-align:center;padding:1.6rem 1.8rem;border-radius:1.2rem;background:rgba(24,16,52,.92);border:1px solid rgba(140,100,255,.45);box-shadow:0 20px 60px rgba(90,60,255,.35)}
@@ -1424,3 +1424,8 @@ html[data-theme="light"] .tabs .nav.on{color:var(--tx)}
 .pm-done{margin-top:.8rem;padding:.8rem;border-radius:.9rem;background:color-mix(in srgb,var(--pm) 12%,transparent);border:1px solid color-mix(in srgb,var(--pm) 35%,transparent);font-size:.88rem}
 
 .dxest{margin:.6rem 0;padding:.5rem .7rem;border-radius:.8rem;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);font-size:.8rem}.dxest:empty{display:none}
+.pcgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(18rem,1fr));gap:.7rem;margin:.6rem 0}
+
+.nmbars{display:flex;gap:3px;align-items:flex-end;height:44px;margin-top:.6rem}.nmbars i{flex:1;border-radius:3px;min-height:6px}
+.tkpg .fgrid{grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}
+main:has(#tkpg){max-width:none}

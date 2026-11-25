@@ -1,4 +1,6 @@
 import { ctx } from './ctx.ts';
+import * as NM from './nodemon.ts';
+import { genesisAddr } from './tokens.ts';
 // "Run a node": ask the network's control panel (through the tunnel) to approve a supporting node, then give the person the command.
 const $ = (id: string) => document.getElementById(id) as any;
 const esc = (s: any) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
@@ -20,7 +22,7 @@ async function api(path: string, body?: any) {
 }
 const msg = (t: string, bad = false) => { const e = $('rn_msg'); if (e) { e.textContent = t; e.style.color = bad ? '#ff6b6b' : ''; } };
 export function shell() {
-  return `<div id="rn"><div class="grid" style="margin-bottom:1rem"><div class="card c7" id="rn_price"></div><div class="card c5" id="rn_ben"></div></div>
+  return `<div id="rn">${NM.shell()}<div class="grid" style="margin-bottom:1rem"><div class="card c7" id="rn_price"></div><div class="card c5" id="rn_ben"></div></div>
   <div class="card" id="rn_est" style="margin-bottom:1rem"><div class="k">Earnings estimate</div><div class="mut" style="padding:.6rem">Reading the network…</div></div>
   <div class="card" id="rn_req" style="margin-bottom:1rem"></div><div class="card"><div class="k">Request your node</div>
   <p class="mut" style="font-size:.85rem;margin:.4rem 0">Set up a supporting node: it syncs and relays the ledger and serves your own RPC and WebSocket, but does not validate. Request to join here, the network operator approves it in the control panel, and then you get one command to run.</p>
@@ -40,16 +42,17 @@ export function mount() {
   pick(true);
   drawInfo();
   void sample();
+  NM.mount();
   clearInterval(timer);
   timer = setInterval(() => { if (!$('rn')) return clearInterval(timer); if (REQ && REQ.status !== 'approved') check(true); }, 15000);
 }
-export function unmount() { clearInterval(timer); }
+export function unmount() { clearInterval(timer); NM.unmount(); }
 async function pick(keep = false) {
   which = ($('rn_net') || { value: 'main' }).value;
   NET = null;
   FEE = null; try { FEE = await api('/api/public/node-fee'); } catch {}
   drawFee(); drawInfo(); drawEst();
-  try { NET = await api('/api/public/network'); drawEst(); msg(NET.allowJoin === false ? 'This network is not accepting new nodes right now.' : 'Connected to the ' + (NET.label || 'LUMA') + ' control panel.'); }
+  try { NET = await api('/api/public/network'); NM.setDefault(NET.wsPort || 6006); drawEst(); msg(NET.allowJoin === false ? 'This network is not accepting new nodes right now.' : 'Connected to the ' + (NET.label || 'LUMA') + ' control panel.'); }
   catch (e: any) { msg('Could not reach the control panel: ' + e.message + '. The operator\'s tunnel may need updating.', true); }
   if (REQ && REQ.net === which) check(true);
 }
@@ -101,6 +104,7 @@ async function check(quiet = false) {
   try {
     const s = await api('/api/public/node-status?id=' + encodeURIComponent(REQ.id));
     REQ.status = s.status; localStorage.setItem(KEY, JSON.stringify(REQ));
+    try { let bal: number | null = null; if (s.address) { const a: any = await ctx.req('account_info', { account: ctx.toClassic(s.address), ledger_index: 'validated' }).catch(() => null); bal = a && a.account_data ? Number(a.account_data.Balance) / 1e6 : 0; } NM.setEarnings({ earned: parseFloat(String(s.earned || '0').replace(/,/g, '')) || 0, txs: s.txs || 0, address: s.address || '', balance: s.balance != null ? s.balance : bal, status: s.status, label: REQ.name }); } catch {}
     if (!NET) NET = await api('/api/public/network');
     quiet || msg(s.status === 'approved' ? 'Approved.' : 'Status: ' + s.status);
     render();
@@ -171,7 +175,7 @@ function drawInfo() {
   const p = $('rn_price'), b = $('rn_ben'), q = $('rn_req');
   if (p) p.innerHTML = `<div class="k">Pricing</div><div class="big2" style="font-size:2rem;font-weight:800;margin:.2rem 0">$10,000 <small class="mut" style="font-size:.9rem">one-time, per node</small></div>
     <p class="mut" style="font-size:.85rem;margin:.3rem 0">Paid once to the LUMA genesis wallet. You pay it with LUMA or any other token the network accepts from the genesis wallet's own tokens, at its live price. Your wallet signs the payment right here and the request goes in with the payment as proof. After that there is nothing more to pay to keep the node running.</p>
-    <div class="dxkv"><span class="mut">Pay with</span><b>LUMA or USD (genesis tokens)</b></div><div class="dxkv"><span class="mut">Paid to</span><span class="mono" style="font-size:.74rem">${FEE ? esc(FEE.genesis) : 'loading…'}</span></div>`;
+    <div class="dxkv"><span class="mut">Pay with</span><b>LUMA or USD (genesis tokens)</b></div><div class="dxkv"><span class="mut">Paid to</span><span class="mono" style="font-size:.74rem">${esc(FEE ? FEE.genesis : (() => { try { const g = genesisAddr(); return g ? ctx.showL(g) : 'the LUMA genesis wallet'; } catch { return 'the LUMA genesis wallet'; } })())}</span></div>`;
   if (b) b.innerHTML = `<div class="k">What you get</div><ul style="margin:.3rem 0;padding-left:1.1rem;font-size:.86rem;line-height:1.6">
     <li>A reward for every transaction your node processes, paid in LUMA straight to your wallet</li><li>Your own private, fast RPC and WebSocket for your apps and bots</li><li>Your node helps keep the LUMA network online and decentralised</li><li>A listed supporting node on the network</li><li>Earnings you can watch live in the control panel</li></ul>`;
   if (q) q.innerHTML = `<div class="k">System requirements</div><div class="pgrid" style="margin-top:.4rem">

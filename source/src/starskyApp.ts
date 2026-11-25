@@ -23,6 +23,7 @@ import * as Hist from './live/history.ts';
 import * as Hold from './live/holders.ts';
 import { tkApi } from './live/tokens.ts';
 import * as ActLog from './live/actlog.ts';
+import * as PC from './live/poolcreate.ts';
 import './live/procmodal.ts';
 import { xaApi } from './live/xassets.ts';
 import { clearCache } from './live/chain.ts';
@@ -2704,23 +2705,36 @@ export function initWindowBindings() {
         <input id="cp_i1" class="grow" placeholder="Asset 1 Issuer (leave empty for native)">
       </div>
       <div class="row">
-        <input id="cp_a1" class="grow" placeholder="Asset 1 Deposit Amount" inputmode="decimal">
+        <input id="cp_a1" class="grow" placeholder="Asset 1 Deposit Amount" inputmode="decimal" oninput="window.cpEst()">
       </div>
       <div class="row" style="margin-top:1rem">
         <input id="cp_c2" class="grow" placeholder="Asset 2 Currency (e.g. USD, GOLD)">
         <input id="cp_i2" class="grow" placeholder="Asset 2 Issuer address">
       </div>
       <div class="row">
-        <input id="cp_a2" class="grow" placeholder="Asset 2 Deposit Amount" inputmode="decimal">
+        <input id="cp_a2" class="grow" placeholder="Asset 2 Deposit Amount" inputmode="decimal" oninput="window.cpEst()">
       </div>
       <div class="row">
-        <input id="cp_fee" placeholder="Trading Fee % (e.g. 0.3)" value="0.3" style="width:10rem">
+        <input id="cp_fee" placeholder="Trading Fee % (e.g. 0.3)" value="0.3" style="width:10rem" oninput="window.cpEst()">
       </div>
+      <div id="cp_est"></div>
       <div class="row" style="margin-top:1.2rem">
         <button class="grow" onclick="window.closeModal()">Cancel</button>
         <button class="pri acc grow" onclick="window.doCreatePool()">Create Pool</button>
       </div>
     `);
+    void PC.loadPrices();
+  };
+  (window as any).cpEst = async () => {
+    const g = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value.trim() || '';
+    const mk = (c: string, i: string): any => (c.toUpperCase() === 'LUMA' || c.toUpperCase() === 'XRP' || !i ? NATIVE : { c: nameToCur(c), i: toClassic(i) });
+    try {
+      await PC.loadPrices();
+      const a1 = mk(g('cp_c1'), g('cp_i1')), a2 = mk(g('cp_c2'), g('cp_i2')), A = pf(g('cp_a1')), B = pf(g('cp_a2')), fee = g('cp_fee') === '' ? 0.3 : pf(g('cp_fee'));
+      const el = document.getElementById('cp_est'); if (!el) return;
+      // price the pair against asset 1 (T = asset 2 amount, P = asset 1 amount)
+      el.innerHTML = PC.estimate({ tName: g('cp_c2') || 'ASSET 2', pName: g('cp_c1') || 'ASSET 1', T: B, P: A, fee, pUsd: PC.usdOf(a1) });
+    } catch (e: any) { const el = document.getElementById('cp_est'); if (el) el.innerHTML = '<div class="mut">' + String(e?.message || e) + '</div>'; }
   };
 
   (window as any).doCreatePool = async () => {
