@@ -519,10 +519,15 @@ tr:last-child td {
 
 .lock {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
+  align-content: center;
+  justify-content: center;
   padding: 1rem;
+  box-sizing: border-box;
 }
+.lock > .card { margin: 0 auto; }
 
 .lock .card {
   width: min(28rem, 100%);
