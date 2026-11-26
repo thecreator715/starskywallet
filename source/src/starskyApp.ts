@@ -1939,6 +1939,7 @@ export function renderApp() {
   else Social.unmount();
   if (st.tab === 'home') Pages.assetsMount();
   if (st.tab === 'send') Xs.afterRender();
+  void Claim.welcome();
   Extras.afterRender(st.tab, { unfunded: !!(b && b.unfunded), online: st.status === 'online', lockMin: CFG.lockMin });
 }
 

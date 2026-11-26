@@ -136,3 +136,37 @@ async function run() {
 
 export function mount() { if (!$('cl')) return; paint(); load(); }
 (window as any).cl = { load, claim: () => { void run(); } };
+
+/* ---- welcome gift: every wallet gets its 1 LUMA from genesis, with no button to press ---- */
+const WK = (a: string) => `starsky.welcome.${net()}.${a}`;
+let welcoming = false, welcomeAt = 0;
+async function giftOne(seed: string, classic: string, label: string): Promise<boolean> {
+  const ch = await post('challenge', { address: classic });
+  if (!ch.ok) { if (ch.claimed) return true; throw new Error(ch.error || 'not started'); }
+  const counter = await solve(ch.nonce, classic, ch.bits, () => {});
+  const kw = xrpl.Wallet.fromSeed(seed);
+  if (kw.classicAddress !== classic) throw new Error('key mismatch');
+  const r = await post('submit', { id: ch.id, counter: String(counter), publicKey: kw.publicKey, signature: sign(hexOf(ch.message), kw.privateKey), turnstile: '' });
+  if (!r.ok && !r.claimed) throw new Error(r.error || 'not accepted');
+  if (r.ok) ctx.toast(`${label} (${ctx.showL(classic)}) was activated with ${fmt(r.amount ?? 1, 0)} LUMA from genesis`, false);
+  return true;
+}
+/** called after every render: gives any LUMA wallet in the vault that has not had its welcome gift the free LUMA (once, quietly, retried every 5 minutes if the panel is busy) */
+export async function welcome() {
+  if (welcoming || ctx.xrpl() || !ctx.online() || Date.now() - welcomeAt < 20000) return;
+  welcomeAt = Date.now(); welcoming = true;
+  try {
+    for (const w of ctx.wallets()) {
+      if (w.type === 'xrpl' || !w.seed) continue;
+      let classic = ''; try { classic = ctx.toClassic(w.address); } catch { continue; }
+      let st: any = null; try { st = JSON.parse(localStorage.getItem(WK(classic)) || 'null'); } catch {}
+      if (st && (st.done || Date.now() - st.t < 300000)) continue;
+      try { localStorage.setItem(WK(classic), JSON.stringify({ t: Date.now(), done: false })); } catch {}
+      try {
+        const s = await get('status').catch(() => null);
+        if (!s || !s.open) continue;                       // the claim is closed or the panel is unreachable: try again later
+        if (await giftOne(w.seed, classic, w.label)) { try { localStorage.setItem(WK(classic), JSON.stringify({ t: Date.now(), done: true })); } catch {} }
+      } catch { /* retry in 5 minutes */ }
+    }
+  } finally { welcoming = false; }
+}
