@@ -70,7 +70,7 @@ const SHOW_LUMAX = false;   // LUMA ⇄ LUMAX comes later: only XRP, RLUSD, MINT
 const lanes = (): Lane[] => {
   const o = OP.snap, codes = (o && o.codes) || { XRP: 'XRPZ', LUMA: 'LUMAX', USD: 'USD' }, rl = (o && o.rlusd && o.rlusd.code) || 'RLUSD';
   return [
-    { id: 'xrp', asset: 'XRP', pri: 2, title: `XRP ⇄ ${codes.XRP}`, luma: codes.XRP, xrpl: 'XRP' },
+    { id: 'xrp', asset: 'XRP', pri: 1, title: `XRP ⇄ ${codes.XRP}`, luma: codes.XRP, xrpl: 'XRP' },
     ...(SHOW_LUMAX ? [{ id: 'luma' as const, asset: 'LUMA' as const, pri: 2, title: `${ctx.native()} ⇄ ${codes.LUMA}`, luma: ctx.native(), xrpl: codes.LUMA }] : []),
     { id: 'usd', asset: 'USD', pri: 1, title: `${rl} ⇄ ${codes.USD}`, luma: codes.USD, xrpl: rl },
     ...(['MINT', 'MAGIC'] as const).map(k => { const t = (o && o.tokenLanes && o.tokenLanes[k]) || {}; return { id: k.toLowerCase() as 'mint' | 'magic', asset: k, pri: 1, title: `${t.xrplName || k} ⇄ ${t.luma || k}`, luma: t.luma || k, xrpl: t.xrplName || k, xiss: miIss(t.xrplIssuer) }; }),
@@ -82,7 +82,7 @@ const usdOf = (asset: string, n: number) => { const p = pxOf(asset); return p ==
 const fUsd = (v: number | null) => v == null ? '<span class="mut">no price yet</span>' : '$' + (v >= 1 ? v.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 }) : v.toLocaleString(undefined, { maximumFractionDigits: 4 }));
 const withUsd = (asset: string, n: number) => { const v = usdOf(asset, n); return v == null ? '' : ` <span class="mut">≈ ${fUsd(v)}</span>`; };
 const byPri = (a: any, b: any) => (a.pri || (a.lane && a.lane.pri) || 9) - (b.pri || (b.lane && b.lane.pri) || 9);
-const rules = (asset: string) => { const a = OP.snap && OP.snap.assets && OP.snap.assets[asset]; return a || { on: true, feeBps: 10, minFee: asset === 'LUMA' ? 1 : 0.1, min: asset === 'LUMA' ? 20 : 2, max: asset === 'LUMA' ? 500000 : 5000, daily: 0, approvalOver: 0, guess: true }; };
+const rules = (asset: string) => { const a = OP.snap && OP.snap.assets && OP.snap.assets[asset]; return a || { on: true, feeBps: 100, minFee: 0, min: asset === 'LUMA' ? 20 : 2, max: asset === 'LUMA' ? 500000 : 5000, daily: 0, approvalOver: 0, guess: true }; };
 const price = (asset: string, amt: number) => { const a = rules(asset); const fee = Math.max(+(amt * a.feeBps / 1e4).toFixed(6), a.minFee || 0); return { fee, net: Math.max(0, Math.floor((amt - fee) * 1e6 + 1e-7) / 1e6) }; };
 const xrplWallets = () => ctx.wallets().filter(w => w.type === 'xrpl');
 const mineLuma = () => new Set(ctx.wallets().filter(w => w.type !== 'xrpl').map(w => w.address));
@@ -133,6 +133,7 @@ async function loadBalances() {
     X[w.address] = { ok: !!(ai && ai.account_data), xrp: ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0, owners: ai && ai.account_data ? ai.account_data.OwnerCount || 0 : 0, lines: (al && al.lines) || [] };
   }
   ST.bal.X = X;
+  try { const c = bcfg(), V: any = { L: null, X: null }; if (c.lumaVault) { const v = ctx.toClassic(c.lumaVault), ai = await tryReq('account_info', { account: v, ledger_index: 'validated' }), al = await tryReq('account_lines', { account: v, ledger_index: 'validated', limit: 300 }); V.L = { addr: v, ok: !!ai, native: ai ? Number(ai.account_data.Balance) / 1e6 : 0, lines: (al && al.lines) || [] }; } if (c.xrplVault) { const ai = await xtry('account_info', { account: c.xrplVault, ledger_index: 'validated' }), al = await xtry('account_lines', { account: c.xrplVault, ledger_index: 'validated', limit: 300 }); V.X = { addr: c.xrplVault, ok: !!(ai && ai.account_data), xrp: ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0, owners: ai && ai.account_data ? ai.account_data.OwnerCount || 0 : 0, lines: (al && al.lines) || [] }; } ST.bal.V = V; } catch {}
 }
 const lumaBal = (cur: string) => { const L = ST.bal.L; if (!L) return 0; if (cur === ctx.native()) return L.native; const l = (L.lines || []).find((x: any) => hexName(x.currency) === cur); return l ? Number(l.balance) : 0; };
 const xrplBal = (addr: string, cur: string) => { const x = ST.bal.X[addr]; if (!x) return 0; if (cur === 'XRP') return x.xrp; const l = (x.lines || []).find((z: any) => sameCur(z.currency, cur)); return l ? Number(l.balance) : 0; };
@@ -229,10 +230,11 @@ const UIK = BK + 'ui.';
 const loadUi = () => { try { const j = JSON.parse(localStorage.getItem(UIK + ctx.netKey()) || '{}'); if (j.dir === 'in' || j.dir === 'out') ST.dir = j.dir; if (j.lane && lanes().some(l => l.id === j.lane)) ST.lane = j.lane; if (j.tab) ST.tab = j.tab; } catch {} };
 const saveUi = () => { try { localStorage.setItem(UIK + ctx.netKey(), JSON.stringify({ dir: ST.dir, lane: ST.lane, tab: ST.tab })); } catch {} };
 export function bridgeShell() {
-  return `<div id="br" class="brpage" style="position:relative"><div class="soon"><div class="soonc"><div class="soonb">Coming soon</div><h2 style="margin:.3rem 0">The bridge is almost here</h2><p class="mut" style="margin:0">Moving LUMA and tokens between LUMA and XRPL opens soon. Everything on this page is locked until then.</p></div></div><div id="br_head"></div><div id="br_pend"></div>
+  return `<div id="br" class="brpage" style="position:relative"><div id="br_head"></div><div id="br_pend"></div>
   <div class="card" id="br_xfer" style="margin-top:.6rem"></div>
   <div id="br_tabs" class="seg" style="margin:1rem 0 .6rem;flex-wrap:wrap"></div>
   <div id="brp_activity" class="brpane"><div class="card"><div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Your bridge activity (read from both ledgers)</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div><div id="br_hist" style="overflow:auto"><div class="mut" style="padding:1rem">Reading…</div></div></div></div>
+  <div id="brp_wallets" class="brpane" style="display:none"><div id="br_bw" class="card"><div class="mut" style="padding:.8rem">Reading both bridge wallets…</div></div></div>
   <div id="brp_nft" class="brpane" style="display:none"><div id="br_nft" class="card"></div></div>
   <div id="brp_reserves" class="brpane" style="display:none"><div class="grid"><div class="card c7" id="br_chk"><div class="k">Bridge checklist</div><div class="mut" style="padding:.6rem">Checking both ledgers…</div></div><div class="card c5" id="br_rep"><div class="k">Reserves, checked independently</div><div class="mut" style="padding:.6rem">Reading vault balances…</div></div></div></div>
   <div id="brp_how" class="brpane" style="display:none"><div class="card" id="br_claim"></div></div>
@@ -245,7 +247,7 @@ function paintPending() {
 }
 function paintTabs() {
   const c = bcfg(), bad = (ST.chk || []).filter((x: Chk) => x.level === 'bad').length, setupBad = !c.lumaVault || !c.xrplVault;
-  const T: [string, string, string][] = [['activity', 'Activity', ''], ['nft', 'NFTs', ''], ['reserves', 'Reserves & checks', bad ? ' <b class="dn">●</b>' : ''], ['how', 'How it works', ''], ['operator', 'Operator', ''], ['settings', 'Settings', setupBad ? ' <b class="dn">●</b>' : '']];
+  const T: [string, string, string][] = [['activity', 'Activity', ''], ['wallets', 'Bridge wallets', ''], ['nft', 'NFTs', ''], ['reserves', 'Reserves & checks', bad ? ' <b class="dn">●</b>' : ''], ['how', 'Guide', ''], ['operator', 'Operator', ''], ['settings', 'Settings', setupBad ? ' <b class="dn">●</b>' : '']];
   if (!T.some(t => t[0] === ST.tab)) ST.tab = 'activity';
   setHtml('br_tabs', T.map(([k, l, b]) => `<button class="${ST.tab === k ? 'on' : ''}" onclick="window.br.tab('${k}')">${l}${b}</button>`).join(''));
   for (const [k] of T) { const e = $('brp_' + k); if (e) e.style.display = ST.tab === k ? '' : 'none'; }
@@ -311,6 +313,24 @@ function paintRep() {
       <div class="mut" style="font-size:.74rem;margin-top:.2rem">${esc(x.note || '')}</div></div>`;
   }).join('')}`);
 }
+function paintBW() {
+  const V = ST.bal.V || {}, o = OP.snap, nat = ctx.native(), kept = (o && o.feesKept) || {}, L = lanes().slice().sort(byPri);
+  const cp = (a: string) => `<button class="sm ghost" onclick="window.copyText('${esc(a)}')">Copy</button>`;
+  const tbl = (rows: [string, number, string][]) => rows.length ? `<table class="hxt" style="width:100%;font-size:.84rem"><tbody>${rows.map(([n, b, u]) => `<tr><td><b>${esc(n)}</b></td><td class="r mono">${fmt(b, 4)}</td><td class="r mut">${u}</td></tr>`).join('')}</tbody></table>` : '<div class="mut" style="font-size:.82rem">Nothing held yet.</div>';
+  const lrows: [string, number, string][] = [];
+  if (V.L && V.L.ok) { lrows.push([nat, V.L.native, withUsd('LUMA', V.L.native)]); for (const l of V.L.lines) if (Number(l.balance) > 0) lrows.push([hexName(l.currency), Number(l.balance), '']); }
+  const xrows: [string, number, string][] = [];
+  if (V.X && V.X.ok) { xrows.push(['XRP', V.X.xrp, withUsd('XRP', V.X.xrp)]); for (const l of V.X.lines) if (Number(l.balance) > 0) xrows.push([hexName(l.currency), Number(l.balance), '']); }
+  const keptRows = L.map(l => { const k = kept[l.asset]; return `<tr><td><b>${esc(l.xrpl)} ⇄ ${esc(l.luma)}</b></td><td class="r mono">${k != null ? fmt(k, 4) : '0'} ${esc(l.xrpl)}</td></tr>`; }).join('');
+  const rep = (ST.rep || []).map((x: any) => `<tr><td><b>${esc(x.lane.title)}</b></td><td class="r mono">${x.locked == null ? '–' : fmt(x.locked, 4)} ${esc(x.lockedUnit || '')}</td><td class="r mono">${x.out == null ? '–' : fmt(x.out, 4)} ${esc(x.outUnit || '')}</td></tr>`).join('');
+  setHtml('br_bw', `<div class="row" style="justify-content:space-between;align-items:center"><div class="k" style="margin:0">The two bridge wallets</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div>
+    <div class="mut" style="font-size:.8rem;margin:.3rem 0 .6rem">Everything you send to the bridge is held in these wallets. They are read live from both ledgers. A flat 1% of every transfer stays here, which keeps the bridge funded.</div>
+    <div class="grid"><div class="card c6"><div class="k">XRPL bridge wallet <span class="mut">(holds XRP, RLUSD, MINT, MAGIC)</span></div><div class="mono" style="font-size:.74rem;word-break:break-all;margin:.3rem 0">${esc(V.X ? V.X.addr : 'not set')}</div>${V.X ? cp(V.X.addr) : ''}<div style="margin-top:.5rem">${V.X ? (V.X.ok ? tbl(xrows) : '<div class="dn" style="font-size:.82rem">Not found on XRPL yet.</div>') : '<div class="mut">Link the operator in Settings.</div>'}</div></div>
+    <div class="card c6"><div class="k">LUMA bridge wallet <span class="mut">(pays out ${esc(nat)} side)</span></div><div class="mono" style="font-size:.74rem;word-break:break-all;margin:.3rem 0">${esc(V.L ? lAddr(V.L.addr) : 'not set')}</div>${V.L ? cp(lAddr(V.L.addr)) : ''}<div style="margin-top:.5rem">${V.L ? (V.L.ok ? tbl(lrows) : '<div class="dn" style="font-size:.82rem">Not found on this LUMA network.</div>') : '<div class="mut">Link the operator in Settings.</div>'}</div></div></div>
+    <div class="grid" style="margin-top:.6rem"><div class="card c6"><div class="k">Locked on XRPL vs issued on LUMA</div><table class="hxt" style="width:100%;font-size:.82rem"><thead><tr><th></th><th class="r">Locked</th><th class="r">On LUMA</th></tr></thead><tbody>${rep || '<tr><td class="mut" colspan="3">Reading…</td></tr>'}</tbody></table></div>
+    <div class="card c6"><div class="k">1% fees kept on the bridge so far</div><table class="hxt" style="width:100%;font-size:.82rem"><tbody>${keptRows}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.3rem">Counted from completed transfers on the operator.</div></div></div>`);
+}
+
 function walletOptions(kind: 'luma' | 'xrpl') {
   if (kind === 'luma') { const a = ctx.account(); return a ? `<option>${esc(short(ctx.showL(a), 8, 6))} (selected wallet)</option>` : '<option>No wallet selected</option>'; }
   const xw = xrplWallets();
@@ -375,7 +395,14 @@ function paintClaim() {
     ],
   };
   const eta = `Typical time: ${o && o.everySec ? `scan every ${o.everySec}s` : 'about a minute'} plus ledger confirmations.`;
-  setHtml('br_claim', `<div class="k">How to claim · ${esc(ln.title)}</div><ol style="margin:.4rem 0 .6rem 1.1rem;padding:0;font-size:.84rem;line-height:1.5">${(steps[ln.id] || steps.tok).map(s => `<li style="margin-bottom:.35rem">${s}</li>`).join('')}</ol>
+  const startHere = `<div class="k">Start here: bridge in 3 steps</div>
+    <div class="brsteps"><div><b>1</b><span>Pick a direction with the ⇄ button: <b>LUMA → XRPL</b> or <b>XRPL → LUMA</b>.</span></div><div><b>2</b><span>Pick what to move and enter an amount (or tap 25% / 50% / 75% / Max). You instantly see the 1% fee and what you receive.</span></div><div><b>3</b><span>Press <b>Bridge</b>. If a one-time trust line is needed, the button says “Set up &amp; Bridge” and adds it for you. Funds arrive in 1 to 3 minutes. Nothing to claim.</span></div></div>
+    <table class="hxt" style="width:100%;font-size:.82rem;margin:.6rem 0"><thead><tr><th>You send</th><th>You get</th><th>Rate</th></tr></thead><tbody>
+    <tr><td>RLUSD on XRPL</td><td>USD on LUMA</td><td>1 : 1, minus 1%</td></tr><tr><td>USD on LUMA</td><td>RLUSD on XRPL</td><td>1 : 1, minus 1%</td></tr>
+    <tr><td>XRP on XRPL</td><td>XRPZ on LUMA</td><td>1 : 1, minus 1%</td></tr><tr><td>XRPZ on LUMA</td><td>XRP on XRPL</td><td>1 : 1, minus 1%</td></tr>
+    <tr><td>MINT / MAGIC on XRPL</td><td>MINT / MAGIC on LUMA</td><td>1 : 1, minus 1%</td></tr><tr><td>MINT / MAGIC on LUMA</td><td>MINT / MAGIC on XRPL</td><td>1 : 1, minus 1%</td></tr></tbody></table>
+    <div class="mut" style="font-size:.8rem;margin-bottom:.8rem"><b>Before your first time:</b> to bridge from XRPL you need an XRPL wallet in this app (Wallets → XRPL → import your seed) holding the token plus about 2 XRP for the XRPL reserve. To receive on XRPL the destination must be activated and have a trust line for the token (the Bridge button adds it for your own wallets). <b>Never send directly to a vault address by hand:</b> always use the Bridge button so your destination is attached. The 1% fee never leaves the bridge wallets. See the “Bridge wallets” tab for live balances.</div><hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:.4rem 0 .8rem">`;
+  setHtml('br_claim', startHere + `<div class="k">How to claim · ${esc(ln.title)}</div><ol style="margin:.4rem 0 .6rem 1.1rem;padding:0;font-size:.84rem;line-height:1.5">${(steps[ln.id] || steps.tok).map(s => `<li style="margin-bottom:.35rem">${s}</li>`).join('')}</ol>
     <div class="mut" style="font-size:.78rem">Fee ${(r.feeBps / 100).toFixed(2)}% (min ${fmt(r.minFee, 4)}) · allowed ${fmt(r.min, 4)} to ${fmt(r.max, 4)} per transfer${r.daily ? ` · daily room ${fmt(Math.max(0, r.daily - ((o && o.used && o.used[ln.asset]) || 0)), 2)}` : ''}${r.guess ? ' (typical values until the operator is linked)' : ''}<br>${esc(eta)}<br>Nothing is sent without you pressing Send; if a trust line is missing the transfer waits and completes by itself once you add it.</div>
     ${c.lumaVault ? `<div class="mut mono" style="font-size:.7rem;margin-top:.5rem;word-break:break-all">LUMA vault ${esc(lAddr(c.lumaVault))}<br>XRPL vault ${esc(c.xrplVault)}<br>XRPL issuer ${esc(c.xrplIssuer)}</div>` : ''}`);
 }
@@ -445,7 +472,7 @@ async function estimateNow() {
   { const rc = $('br_recv'), wn = $('br_warn'), go = $('br_go') as HTMLButtonElement | null;
     const p2 = amt > 0 ? price(ln.asset, amt) : null;
     const fixable = problems.length > 0 && ST.trustAct.length > 0 && problems.length === ST.trustAct.length;   // the only blockers are trust lines we add for the user
-    if (rc) rc.innerHTML = p2 && p2.net > 0 ? `<span class="mut">You receive about</span> <b style="font-size:1.15rem">${fmt(p2.net, 6)} ${esc(to)}</b>${withUsd(ln.asset, p2.net)} <span class="mut" style="font-size:.78rem">· fee ${fmt(p2.fee, 6)} ${esc(from)} · about 1 to 3 min</span>` : '<span class="mut" style="font-size:.84rem">Enter an amount, or tap a % button.</span>';
+    if (rc) rc.innerHTML = p2 && p2.net > 0 ? `<div class="brbox"><div class="row" style="justify-content:space-between"><span class="mut">You send</span><span>${fmt(amt, 6)} ${esc(from)}${withUsd(ln.asset, amt)}</span></div><div class="row" style="justify-content:space-between"><span class="mut">Bridge fee ${(rules(ln.asset).feeBps / 100).toFixed(2)}% <small>(stays on the bridge)</small></span><span style="color:#ffc400">− ${fmt(p2.fee, 6)} ${esc(from)}${withUsd(ln.asset, p2.fee)}</span></div><div class="row" style="justify-content:space-between;border-top:1px solid rgba(255,255,255,.12);margin-top:.3rem;padding-top:.3rem"><b>You receive about</b><b style="font-size:1.1rem" class="up">${fmt(p2.net, 6)} ${esc(to)}</b></div>${withUsd(ln.asset, p2.net) ? `<div class="mut" style="text-align:right;font-size:.76rem">${withUsd(ln.asset, p2.net)}</div>` : ''}<div class="mut" style="font-size:.74rem;margin-top:.25rem">Arrives in about 1 to 3 minutes. No claim button needed.</div></div>` : `<div class="brbox"><span class="mut" style="font-size:.84rem">Enter an amount or tap a % button. A flat ${(rules(ln.asset).feeBps / 100).toFixed(2)}% fee on every transfer stays on the bridge to keep it funded.</span></div>`;
     if (wn) wn.innerHTML = amt > 0 && problems.length && !fixable ? problems.filter(Boolean).slice(0, 2).map(x => `<div style="font-size:.8rem;color:#ffc400">! ${esc(x)}</div>`).join('') : fixable ? `<div class="mut" style="font-size:.8rem">One-time setup: the ${esc(ST.trustAct.map((z: any) => z.label).join(' and '))} will be added automatically when you press Bridge.</div>` : '';
     if (go) { go.disabled = !!(amt > 0 && problems.length && !fixable); go.textContent = !(amt > 0) ? 'Enter an amount' : fixable ? 'Set up & Bridge' : `Bridge ${fmt(amt, 4)} ${from} → ${to}`; }
   }
@@ -606,10 +633,10 @@ export async function bridgeLoad() {
     if (g !== gen || !$('br')) return;
     ST.chk = await runChecks();
     if (g !== gen || !$('br')) return;
-    paintSetup(); paintChecks(); paintXfer(); paintTabs();
+    paintSetup(); paintChecks(); paintXfer(); paintBW(); paintTabs();
     await reserves();
     if (g !== gen || !$('br')) return;
-    paintRep(); paintTabs(); estimate();
+    paintRep(); paintBW(); paintTabs(); estimate();
     await history(g);
   } catch (e: any) {
     setHtml('br_chk', `<div class="k">Bridge checklist</div><div class="dn" style="padding:.6rem">${esc(e?.message || e)}</div>`);
