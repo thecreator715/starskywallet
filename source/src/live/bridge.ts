@@ -66,12 +66,12 @@ const TOKEN_ISSUER = 'rwCsCz93A1svS6Yv8hFqUeKLdTLhBpvqGD';   // XRPL issuer of M
 const miIss = (fromFeed?: string) => (OP.snap && OP.snap.net === 'testnet' && fromFeed) ? fromFeed : TOKEN_ISSUER;
 const xIss = (ln: Lane, c: BCfg) => ln.id === 'luma' ? c.xrplIssuer : ln.xiss ? ln.xiss : (OP.snap && OP.snap.rlusd && OP.snap.rlusd.issuer) || '';
 const lumaIss = async (ln: Lane) => ln.id === 'usd' ? M.MAIN_USD : await issuerOnLuma(ln.luma);
-const SHOW_LUMAX = false;   // LUMA ⇄ LUMAX comes later: only XRP, RLUSD, MINT and MAGIC are bridged for now
+const showLumax = () => !!(OP.snap && OP.snap.assets && OP.snap.assets.LUMA && OP.snap.assets.LUMA.on);   // LUMA ⇄ LUMAX comes later: only XRP, RLUSD, MINT and MAGIC are bridged for now
 const lanes = (): Lane[] => {
   const o = OP.snap, codes = (o && o.codes) || { XRP: 'XRPZ', LUMA: 'LUMAX', USD: 'USD' }, rl = (o && o.rlusd && o.rlusd.code) || 'RLUSD';
   return [
     { id: 'xrp', asset: 'XRP', pri: 1, title: `XRP ⇄ ${codes.XRP}`, luma: codes.XRP, xrpl: 'XRP' },
-    ...(SHOW_LUMAX ? [{ id: 'luma' as const, asset: 'LUMA' as const, pri: 2, title: `${ctx.native()} ⇄ ${codes.LUMA}`, luma: ctx.native(), xrpl: codes.LUMA }] : []),
+    ...(showLumax() ? [{ id: 'luma' as const, asset: 'LUMA' as const, pri: 2, title: `${ctx.native()} ⇄ ${codes.LUMA}`, luma: ctx.native(), xrpl: codes.LUMA }] : []),
     { id: 'usd', asset: 'USD', pri: 1, title: `${rl} ⇄ ${codes.USD}`, luma: codes.USD, xrpl: rl },
     ...(['MINT', 'MAGIC'] as const).map(k => { const t = (o && o.tokenLanes && o.tokenLanes[k]) || {}; return { id: k.toLowerCase() as 'mint' | 'magic', asset: k, pri: 1, title: `${t.xrplName || k} ⇄ ${t.luma || k}`, luma: t.luma || k, xrpl: t.xrplName || k, xiss: miIss(t.xrplIssuer) }; }),
   ];
@@ -317,15 +317,15 @@ function paintBW() {
   const V = ST.bal.V || {}, o = OP.snap, nat = ctx.native(), kept = (o && o.feesKept) || {}, L = lanes().slice().sort(byPri);
   const cp = (a: string) => `<button class="sm ghost" onclick="window.copyText('${esc(a)}')">Copy</button>`;
   const tbl = (rows: [string, number, string][]) => rows.length ? `<table class="hxt" style="width:100%;font-size:.84rem"><tbody>${rows.map(([n, b, u]) => `<tr><td><b>${esc(n)}</b></td><td class="r mono">${fmt(b, 4)}</td><td class="r mut">${u}</td></tr>`).join('')}</tbody></table>` : '<div class="mut" style="font-size:.82rem">Nothing held yet.</div>';
-  const lrows: [string, number, string][] = [];
-  if (V.L && V.L.ok) { lrows.push([nat, V.L.native, withUsd('LUMA', V.L.native)]); for (const l of V.L.lines) if (Number(l.balance) > 0) lrows.push([hexName(l.currency), Number(l.balance), '']); }
-  const xrows: [string, number, string][] = [];
-  if (V.X && V.X.ok) { xrows.push(['XRP', V.X.xrp, withUsd('XRP', V.X.xrp)]); for (const l of V.X.lines) if (Number(l.balance) > 0) xrows.push([hexName(l.currency), Number(l.balance), '']); }
+  const lrows: [string, number, string][] = [], xrows: [string, number, string][] = [];
+  const lnX = L.filter(l => l.id !== 'luma' || showLumax());
+  if (V.L && V.L.ok) { lrows.push([nat, V.L.native, withUsd('LUMA', V.L.native)]); const seen = new Set<string>(); for (const l of lnX) { if (l.id === 'luma' || seen.has(l.luma)) continue; seen.add(l.luma); const b = V.L.lines.filter((z: any) => hexName(z.currency) === l.luma).reduce((a: number, z: any) => a + Number(z.balance), 0); if (b > 0) lrows.push([l.luma, b, '']); } }
+  if (V.X && V.X.ok) { xrows.push(['XRP', V.X.xrp, withUsd('XRP', V.X.xrp)]); for (const l of lnX) { if (l.id === 'xrp') continue; const iss = xIss(l, bcfg()); const b = V.X.lines.filter((z: any) => sameCur(z.currency, l.xrpl) && (!iss || z.account === iss)).reduce((a: number, z: any) => a + Number(z.balance), 0); xrows.push([l.xrpl, b, '']); } }
   const keptRows = L.map(l => { const k = kept[l.asset]; return `<tr><td><b>${esc(l.xrpl)} ⇄ ${esc(l.luma)}</b></td><td class="r mono">${k != null ? fmt(k, 4) : '0'} ${esc(l.xrpl)}</td></tr>`; }).join('');
   const rep = (ST.rep || []).map((x: any) => `<tr><td><b>${esc(x.lane.title)}</b></td><td class="r mono">${x.locked == null ? '–' : fmt(x.locked, 4)} ${esc(x.lockedUnit || '')}</td><td class="r mono">${x.out == null ? '–' : fmt(x.out, 4)} ${esc(x.outUnit || '')}</td></tr>`).join('');
   setHtml('br_bw', `<div class="row" style="justify-content:space-between;align-items:center"><div class="k" style="margin:0">The two bridge wallets</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div>
     <div class="mut" style="font-size:.8rem;margin:.3rem 0 .6rem">Everything you send to the bridge is held in these wallets. They are read live from both ledgers. A flat 1% of every transfer stays here, which keeps the bridge funded.</div>
-    <div class="grid"><div class="card c6"><div class="k">XRPL bridge wallet <span class="mut">(holds XRP, RLUSD, MINT, MAGIC)</span></div><div class="mono" style="font-size:.74rem;word-break:break-all;margin:.3rem 0">${esc(V.X ? V.X.addr : 'not set')}</div>${V.X ? cp(V.X.addr) : ''}<div style="margin-top:.5rem">${V.X ? (V.X.ok ? tbl(xrows) : '<div class="dn" style="font-size:.82rem">Not found on XRPL yet.</div>') : '<div class="mut">Link the operator in Settings.</div>'}</div></div>
+    <div class="grid"><div class="card c6"><div class="k">XRPL bridge wallet <span class="mut">(holds XRP, RLUSD, MINT, MAGIC and LUMAX when on)</span></div><div class="mono" style="font-size:.74rem;word-break:break-all;margin:.3rem 0">${esc(V.X ? V.X.addr : 'not set')}</div>${V.X ? cp(V.X.addr) : ''}<div style="margin-top:.5rem">${V.X ? (V.X.ok ? tbl(xrows) : '<div class="dn" style="font-size:.82rem">Not found on XRPL yet.</div>') : '<div class="mut">Link the operator in Settings.</div>'}</div></div>
     <div class="card c6"><div class="k">LUMA bridge wallet <span class="mut">(pays out ${esc(nat)} side)</span></div><div class="mono" style="font-size:.74rem;word-break:break-all;margin:.3rem 0">${esc(V.L ? lAddr(V.L.addr) : 'not set')}</div>${V.L ? cp(lAddr(V.L.addr)) : ''}<div style="margin-top:.5rem">${V.L ? (V.L.ok ? tbl(lrows) : '<div class="dn" style="font-size:.82rem">Not found on this LUMA network.</div>') : '<div class="mut">Link the operator in Settings.</div>'}</div></div></div>
     <div class="grid" style="margin-top:.6rem"><div class="card c6"><div class="k">Locked on XRPL vs issued on LUMA</div><table class="hxt" style="width:100%;font-size:.82rem"><thead><tr><th></th><th class="r">Locked</th><th class="r">On LUMA</th></tr></thead><tbody>${rep || '<tr><td class="mut" colspan="3">Reading…</td></tr>'}</tbody></table></div>
     <div class="card c6"><div class="k">1% fees kept on the bridge so far</div><table class="hxt" style="width:100%;font-size:.82rem"><tbody>${keptRows}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.3rem">Counted from completed transfers on the operator.</div></div></div>`);
@@ -401,7 +401,7 @@ function paintClaim() {
     <tr><td>RLUSD on XRPL</td><td>USD on LUMA</td><td>1 : 1, minus 1%</td></tr><tr><td>USD on LUMA</td><td>RLUSD on XRPL</td><td>1 : 1, minus 1%</td></tr>
     <tr><td>XRP on XRPL</td><td>XRPZ on LUMA</td><td>1 : 1, minus 1%</td></tr><tr><td>XRPZ on LUMA</td><td>XRP on XRPL</td><td>1 : 1, minus 1%</td></tr>
     <tr><td>MINT / MAGIC on XRPL</td><td>MINT / MAGIC on LUMA</td><td>1 : 1, minus 1%</td></tr><tr><td>MINT / MAGIC on LUMA</td><td>MINT / MAGIC on XRPL</td><td>1 : 1, minus 1%</td></tr></tbody></table>
-    <div class="mut" style="font-size:.8rem;margin-bottom:.8rem"><b>Before your first time:</b> to bridge from XRPL you need an XRPL wallet in this app (Wallets → XRPL → import your seed) holding the token plus about 2 XRP for the XRPL reserve. To receive on XRPL the destination must be activated and have a trust line for the token (the Bridge button adds it for your own wallets). <b>Never send directly to a vault address by hand:</b> always use the Bridge button so your destination is attached. The 1% fee never leaves the bridge wallets. See the “Bridge wallets” tab for live balances.</div><hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:.4rem 0 .8rem">`;
+    <div class="mut" style="font-size:.8rem;margin-bottom:.8rem"><b>Before your first time:</b> to bridge from XRPL you need an XRPL wallet in this app (Wallets → XRPL → import your seed) holding the token plus 1 XRP for the XRPL reserve. To receive on XRPL the destination must be activated and have a trust line for the token (the Bridge button adds it for your own wallets). <b>Never send directly to a vault address by hand:</b> always use the Bridge button so your destination is attached. The 1% fee never leaves the bridge wallets. See the “Bridge wallets” tab for live balances.</div><hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:.4rem 0 .8rem">`;
   setHtml('br_claim', startHere + `<div class="k">How to claim · ${esc(ln.title)}</div><ol style="margin:.4rem 0 .6rem 1.1rem;padding:0;font-size:.84rem;line-height:1.5">${(steps[ln.id] || steps.tok).map(s => `<li style="margin-bottom:.35rem">${s}</li>`).join('')}</ol>
     <div class="mut" style="font-size:.78rem">Fee ${(r.feeBps / 100).toFixed(2)}% (min ${fmt(r.minFee, 4)}) · allowed ${fmt(r.min, 4)} to ${fmt(r.max, 4)} per transfer${r.daily ? ` · daily room ${fmt(Math.max(0, r.daily - ((o && o.used && o.used[ln.asset]) || 0)), 2)}` : ''}${r.guess ? ' (typical values until the operator is linked)' : ''}<br>${esc(eta)}<br>Nothing is sent without you pressing Send; if a trust line is missing the transfer waits and completes by itself once you add it.</div>
     ${c.lumaVault ? `<div class="mut mono" style="font-size:.7rem;margin-top:.5rem;word-break:break-all">LUMA vault ${esc(lAddr(c.lumaVault))}<br>XRPL vault ${esc(c.xrplVault)}<br>XRPL issuer ${esc(c.xrplIssuer)}</div>` : ''}`);
@@ -660,7 +660,7 @@ export const brApi = {
   pct(f: number) {
     const ln = laneOf(), out = ST.dir === 'out', from = out ? ln.luma : ln.xrpl, srcX = (($('br_xw') as HTMLSelectElement) || { value: '' }).value;
     let b = out ? lumaBal(from) : xrplBal(srcX, from);
-    if (f >= 1) { if (out && from === ctx.native()) b = Math.max(0, b - 0.3); if (!out && from === 'XRP') b = Math.max(0, b - 1.5 - 0.2 * ((ST.bal.X[srcX] || {}).owners || 0)); } else b = b * f;
+    if (f >= 1) { if (out && from === ctx.native()) b = Math.max(0, b - 0.3); if (!out && from === 'XRP') b = Math.max(0, b - 1.1 - 0.2 * ((ST.bal.X[srcX] || {}).owners || 0)); } else b = b * f;
     const a = $('br_amt') as HTMLInputElement; if (a) a.value = String(Math.floor(b * 1e6) / 1e6);
     estimate();
   },
@@ -669,7 +669,7 @@ export const brApi = {
     const ln = laneOf(), out = ST.dir === 'out', from = out ? ln.luma : ln.xrpl, srcX = (($('br_xw') as HTMLSelectElement) || { value: '' }).value;
     let b = out ? lumaBal(from) : xrplBal(srcX, from);
     if (out && from === ctx.native()) b = Math.max(0, b - 0.3);
-    if (!out && from === 'XRP') b = Math.max(0, b - 1.5 - 0.2 * ((ST.bal.X[srcX] || {}).owners || 0));
+    if (!out && from === 'XRP') b = Math.max(0, b - 1.1 - 0.2 * ((ST.bal.X[srcX] || {}).owners || 0));
     const a = $('br_amt') as HTMLInputElement; if (a) a.value = String(Math.floor(b * 1e6) / 1e6);
     estimate();
   },

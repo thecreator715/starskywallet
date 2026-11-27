@@ -2017,10 +2017,10 @@ function renderWalletsView(a: AccountData | undefined, n: NetworkDef) {
             <div class="k">Classic XRPL Address:</div>
             <div class="mono font-bold" style="font-size:1.15rem;color:#ffe39f;word-break:break-all">${esc(classic)}</div>
             <p class="mut" style="font-size:.86rem;margin-top:.4rem;line-height:1.5">
-              This XRPL classic address corresponds to your active LUMA e-wallet (<b>${esc(showAddr(lumaAcc.address))}</b>) using the identical private key. On the XRP Ledger, new accounts require a <b>10 XRP base reserve</b> to activate before they can submit transactions.
+              This XRPL classic address corresponds to your active LUMA e-wallet (<b>${esc(showAddr(lumaAcc.address))}</b>) using the identical private key. On the XRP Ledger, new accounts require a <b>1 XRP base reserve</b> to activate before they can submit transactions.
             </p>
             <div class="row" style="margin-top:.8rem;gap:.6rem;flex-wrap:wrap">
-              <span class="chip">Base Reserve: <b>10 XRP</b></span>
+              <span class="chip">Base Reserve: <b>1 XRP</b></span>
               <span class="chip warn">Status: <b>Unactivated (0 XRP on XRPL)</b></span>
               <span class="chip ok">Connected to LUMA Network: <b>✓ Active</b></span>
             </div>
