@@ -2378,6 +2378,10 @@ export function initWindowBindings() {
       try { const r: any = await submitTx(tx, undefined, true); return r.ok ? { ok: true, hash: r.hash } : { ok: false, msg: r.msg }; }
       catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
     },
+    lumaSubmitAs: async (seed: string, tx: any) => {
+      try { const r: any = await submitTx(tx, seed, true); return r.ok ? { ok: true, hash: r.hash } : { ok: false, msg: r.msg }; }
+      catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
+    },
     xrpl: () => st.walletMode === 'xrpl',
     online: () => st.status === 'online' && !!st.client,
     native: () => (st.walletMode === 'xrpl' ? 'XRP' : getNet().native),

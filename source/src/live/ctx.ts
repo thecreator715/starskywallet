@@ -22,6 +22,7 @@ export interface Ctx {
   book?: () => Array<{ name: string; addr: string }>; // saved contacts
   lumaReq?: (command: string, params?: any) => Promise<any>; // always the LUMA node, even under an XRPL wallet (Social lives on LUMA)
   lumaSubmit?: (tx: any) => Promise<{ ok: boolean; msg?: string; hash?: string }>;
+  lumaSubmitAs?: (seed: string, tx: any) => Promise<{ ok: boolean; msg?: string; hash?: string }>; // sign with this LUMA wallet and send to the LUMA node (even in the XRPL tab)
   xrpl: () => boolean; // true while the XRPL wallet tab is active: every read and write goes to the XRPL node
 }
 const nope = () => {

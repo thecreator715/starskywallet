@@ -5,7 +5,7 @@ import * as X from './extras.ts';
 import { ctx } from './ctx.ts';
 import * as M from './market.ts';
 import { Asset, NATIVE, amtTx, esc, fmt, fromKey, hexName, nameToCur, short, ago, rippleToMs } from './util.ts';
-import { req, tryReq } from './chain.ts';
+import { tryReq as chainTry } from './chain.ts';
 
 const $ = (id: string) => document.getElementById(id);
 const setHtml = (id: string, h: string) => { const e = $(id) as any; if (e && e.__h !== h) { e.innerHTML = h; e.__h = h; } };
@@ -89,6 +89,14 @@ const vaultHas = (ln: Lane, out: boolean): number | null => {   // how much of t
 const byPri = (a: any, b: any) => (a.pri || (a.lane && a.lane.pri) || 9) - (b.pri || (b.lane && b.lane.pri) || 9);
 const rules = (asset: string) => { const a = OP.snap && OP.snap.assets && OP.snap.assets[asset]; return a || { on: true, feeBps: 100, minFee: 0, min: asset === 'LUMA' ? 20 : 2, max: asset === 'LUMA' ? 500000 : 5000, daily: 0, approvalOver: 0, guess: true }; };
 const price = (asset: string, amt: number) => { const a = rules(asset); const fee = Math.max(+(amt * a.feeBps / 1e4).toFixed(6), a.minFee || 0); return { fee, net: Math.max(0, Math.floor((amt - fee) * 1e6 + 1e-7) / 1e6) }; };
+
+// Under the XRPL wallet tab the app's normal node is the XRPL node, but the bridge needs BOTH chains at once:
+// LUMA reads always go to the LUMA node, and the LUMA side of a bridge uses a LUMA wallet chosen here.
+const tryReq = async (command: string, params: any = {}, ttl = 0) => ctx.xrpl() && ctx.lumaReq ? ctx.lumaReq(command, params).catch(() => null) : chainTry(command, params, ttl);
+const lumaWallets = () => ctx.wallets().filter(w => w.type !== 'xrpl');
+const selX = () => { if (!ctx.xrpl()) return ''; const a = ctx.account(); return ctx.wallets().some(w => w.type === 'xrpl' && w.address === a) ? (a as string) : ''; };   // the XRPL wallet selected in the XRPL tab
+const lumaAcc = (): string | undefined => { if (!ctx.xrpl()) return ctx.account(); const lw = lumaWallets(), pick = lw.find(w => ctx.toClassic(w.address) === (ST as any).lw) || lw[0]; return pick ? ctx.toClassic(pick.address) : undefined; };
+const lsubmit = async (tx: any) => { if (!ctx.xrpl()) return ctx.submit(tx); const w = lumaWallets().find(z => ctx.toClassic(z.address) === lumaAcc()); if (!w || !ctx.lumaSubmitAs) return { ok: false, msg: 'Add or select a LUMA wallet first (Wallets → LUMA).' }; return ctx.lumaSubmitAs(w.seed, tx); };
 const xrplWallets = () => ctx.wallets().filter(w => w.type === 'xrpl');
 const mineLuma = () => new Set(ctx.wallets().filter(w => w.type !== 'xrpl').map(w => w.address));
 const lAddr = (a: string) => { try { return ctx.showL(ctx.toClassic(a)); } catch { return a; } };
@@ -123,7 +131,7 @@ function applyOperator(): string {
 
 /* ---------------------------------- balances ---------------------------------- */
 async function loadBalances() {
-  const acc = ctx.account();
+  const acc = lumaAcc();
   const L: any = { native: 0, lines: [], ok: false };
   if (acc) {
     const ai = await tryReq('account_info', { account: acc, ledger_index: 'validated' });
@@ -161,7 +169,7 @@ async function runChecks(): Promise<Chk[]> {
   if (!c.lumaVault || !c.xrplVault) add('bad', 'Bridge settings incomplete', `Missing: ${[!c.lumaVault && 'LUMA vault', !c.xrplVault && 'XRPL vault', !c.xrplIssuer && 'XRPL issuer'].filter(Boolean).join(', ')}`, 'Use “Load from operator” or fill the four boxes.');
   if (c.lumaVault) {
     const v = ctx.toClassic(c.lumaVault);
-    if (mineLuma().has(v) || v === ctx.account()) add('bad', 'The LUMA vault is one of YOUR wallets', `${lAddr(v)} is a wallet in this app. Paying yourself fails with temREDUNDANT and nothing would be bridged.`, 'Use the operator’s BRIDGE VAULT (LUMA) address from the control panel, not your own address.');
+    if (mineLuma().has(v) || v === lumaAcc()) add('bad', 'The LUMA vault is one of YOUR wallets', `${lAddr(v)} is a wallet in this app. Paying yourself fails with temREDUNDANT and nothing would be bridged.`, 'Use the operator’s BRIDGE VAULT (LUMA) address from the control panel, not your own address.');
     else {
       const ai = await tryReq('account_info', { account: v, ledger_index: 'validated' });
       if (!ai) add('bad', 'LUMA vault does not exist on this network', lAddr(v), 'Check the address or the network (Mainnet/Testnet) switch.');
@@ -179,7 +187,7 @@ async function runChecks(): Promise<Chk[]> {
   if (up && c.xrplIssuer) { const ai = await xtry('account_info', { account: c.xrplIssuer, ledger_index: 'validated' }); if (c.xrplIssuer === TOKEN_ISSUER) add('bad', 'This is the MINT/MAGIC issuer, not the LUMAX issuer', c.xrplIssuer, 'Press “Load from operator”: it fills in the bridge\'s own issuer. MINT and MAGIC use their own issuer automatically.'); else if (!ai || !ai.account_data) add('bad', 'XRPL issuer not found', c.xrplIssuer, /altnet|testnet|devnet/.test(c.xrplUrl) ? 'This node is the XRPL TEST network. If the bridge runs on mainnet, load the settings from the operator so the node matches.' : 'Check the issuer address and network.'); else { const rip = (ai.account_data.Flags & 0x00800000) !== 0; add(rip ? 'ok' : 'warn', rip ? 'XRPL issuer prepared' : 'XRPL issuer not prepared (DefaultRipple off)', '', rip ? '' : 'The operator should press Prepare issuer.'); } }
   if (up) { const ti = await xtry('account_info', { account: TOKEN_ISSUER, ledger_index: 'validated' }); const tl2: any = (OP.snap && OP.snap.tokenLanes) || {}; const on = Object.keys(tl2).filter(k => (OP.snap.assets || {})[k] && OP.snap.assets[k].on); if (on.length || ti) add(ti && ti.account_data ? 'ok' : 'warn', ti && ti.account_data ? 'MINT / MAGIC issuer found' : 'MINT / MAGIC issuer not found on this XRPL', `${TOKEN_ISSUER}${ti && ti.account_data ? '' : ''}`, ti && ti.account_data ? '' : 'MINT and MAGIC live on the XRPL mainnet. Use a mainnet node (wss://xrplcluster.com) when the operator bridge runs on mainnet.'); }
   // your wallets
-  const acc = ctx.account();
+  const acc = lumaAcc();
   if (acc) { const b = ST.bal.L; add(b && b.ok ? 'ok' : 'warn', 'Your LUMA wallet', b && b.ok ? `${fmt(b.native, 4)} ${nat}` : 'This wallet is not active on the network yet.', b && b.ok ? '' : 'Receive some LUMA first.'); }
   const xw = xrplWallets();
   if (!xw.length) add('warn', 'No XRPL wallet in this app', 'To send from XRPL (XRP, RLUSD, MINT, MAGIC) or to receive on XRPL you need an XRPL wallet here.', 'Wallets → switch to XRPL → import your seed (or create one). Fund it with XRP first.');
@@ -372,28 +380,30 @@ function paintStats() {
 }
 
 function walletOptions(kind: 'luma' | 'xrpl') {
-  if (kind === 'luma') { const a = ctx.account(); return a ? `<option>${esc(short(ctx.showL(a), 8, 6))} (selected wallet)</option>` : '<option>No wallet selected</option>'; }
+  if (kind === 'luma' && ctx.xrpl() && lumaWallets().length) { const cur = lumaAcc(); return lumaWallets().map(w => { const c = ctx.toClassic(w.address); return `<option value="${esc(c)}" ${c === cur ? 'selected' : ''}>${esc(w.label)} · ${esc(short(ctx.showL(c), 8, 6))} (LUMA)</option>`; }).join(''); }
+  if (kind === 'luma') { const a = lumaAcc(); return a ? `<option>${esc(short(ctx.showL(a), 8, 6))} (selected wallet)</option>` : '<option>No wallet selected</option>'; }
   const xw = xrplWallets();
-  return xw.map(w => `<option value="${esc(w.address)}">${esc(w.label)} · ${esc(short(w.address, 6, 5))}</option>`).join('') || '<option value="">No XRPL wallet (Wallets → XRPL → import seed)</option>';
+  return xw.map(w => `<option value="${esc(w.address)}" ${w.address === selX() ? 'selected' : ''}>${esc(w.label)} · ${esc(short(w.address, 6, 5))}</option>`).join('') || '<option value="">No XRPL wallet (Wallets → XRPL → import seed)</option>';
 }
 function paintXfer() {
+  if (ST.lastX !== ctx.xrpl()) { const first = ST.lastX === undefined; ST.lastX = ctx.xrpl(); if (ctx.xrpl()) ST.dir = 'in'; else if (!first) ST.dir = 'out'; }   // XRPL tab: bridge XRPL → LUMA from the selected XRPL wallet, like LUMA → XRPL from a LUMA wallet
   const L = lanes().slice().sort(byPri), ln = laneOf(), out = ST.dir === 'out', nat = ctx.native();
   const xw = xrplWallets();
   const prev = { amt: (($('br_amt') as HTMLInputElement) || { value: '' }).value, dst: (($('br_dst') as HTMLInputElement) || { value: '' }).value, xw: (($('br_xw') as HTMLSelectElement) || { value: '' }).value };
   const e = $('br_xfer');
   if (!e) return;
   const from = out ? ln.luma : ln.xrpl, to = out ? ln.xrpl : ln.luma, fromNet = out ? 'LUMA' : 'XRPL', toNet = out ? 'XRPL' : 'LUMA';
-  const srcX = prev.xw && xw.some(w => w.address === prev.xw) ? prev.xw : (xw[0] ? xw[0].address : '');
+  const srcX = prev.xw && xw.some(w => w.address === prev.xw) ? prev.xw : ((xw.find(w => w.address === selX()) || xw[0]) ? (xw.find(w => w.address === selX()) || xw[0]).address : '');
   const keep = ST.dstFor === ST.dir && prev.dst;          // a destination typed for the other direction is never reused
-  const dflt = out ? (xw[0] ? xw[0].address : '') : (ctx.account() ? ctx.showL(ctx.account() as string) : '');
+  const dflt = out ? ((xw.find(w => w.address === selX()) || xw[0]) ? (xw.find(w => w.address === selX()) || xw[0]).address : '') : (lumaAcc() ? ctx.showL(lumaAcc() as string) : '');
   const dst = keep ? prev.dst : dflt; ST.dstFor = ST.dir;
-  const mine = out ? xw.find(w => w.address === dst.split(':')[0]) : (dst && ctx.account() && dst === ctx.showL(ctx.account() as string) ? { label: 'your selected wallet' } : null);
+  const mine = out ? xw.find(w => w.address === dst.split(':')[0]) : (dst && lumaAcc() && dst === ctx.showL(lumaAcc() as string) ? { label: 'your selected wallet' } : null);
   const chipBal = (l: Lane) => { if (!ST.bal.L) return ''; const b = out ? lumaBal(l.luma) : (srcX ? xrplBal(srcX, l.xrpl) : 0); return b > 0 ? `<small class="mut"> ${fmt(b, b >= 100 ? 0 : 2)}</small>` : ''; };
   const needXw = !out && !xw.length;
   e.innerHTML = `<div class="row" style="align-items:center;justify-content:center;gap:.7rem;margin-bottom:.8rem"><div style="flex:1;text-align:center"><div class="mut" style="font-size:.72rem">FROM</div><div style="font-weight:800;font-size:1.15rem">${fromNet}</div></div><button class="pri acc" style="border-radius:50%;width:2.6rem;height:2.6rem;padding:0;font-size:1.2rem" title="Swap direction" onclick="window.br.dir('${out ? 'in' : 'out'}')">⇄</button><div style="flex:1;text-align:center"><div class="mut" style="font-size:.72rem">TO</div><div style="font-weight:800;font-size:1.15rem">${toNet}</div></div></div>
     <div class="row" style="gap:.4rem;flex-wrap:wrap;justify-content:center">${L.map(l => `<button class="${l.id === ln.id ? 'pri acc' : 'ghost'}" onclick="window.br.lane('${l.id}')">${esc(out ? l.luma : l.xrpl)}${chipBal(l)}${l.pri > 1 ? ' <small>later</small>' : ''}</button>`).join('')}</div>
     ${needXw ? `<div class="al" style="margin:.8rem 0;padding:.7rem;border:1px solid rgba(255,196,0,.4);border-radius:.6rem">To bridge from XRPL, add an XRPL wallet first. <button class="sm pri" onclick="window.goTab&&window.goTab('wallets')">Open Wallets</button></div>` : ''}
-    <select id="br_xw" ${out || xw.length < 2 ? 'style="display:none"' : 'class="grow" style="margin-top:.7rem;width:100%"'} onchange="window.br.est()">${out ? walletOptions('luma') : walletOptions('xrpl')}</select>
+    <select id="br_xw" ${(out ? !(ctx.xrpl() && lumaWallets().length > 1) : xw.length < 2) ? 'style="display:none"' : 'class="grow" style="margin-top:.7rem;width:100%"'} onchange="${out ? 'window.br.lw(this.value)' : 'window.br.est()'}">${out ? walletOptions('luma') : walletOptions('xrpl')}</select>
     <div class="row" style="gap:.5rem;margin-top:.8rem"><input id="br_amt" class="grow" style="font-size:1.4rem;padding:.7rem" placeholder="0.00 ${esc(from)}" inputmode="decimal" oninput="window.br.est()"></div>
     <div class="row" style="gap:.4rem;margin-top:.4rem;justify-content:flex-end"><button class="sm ghost" onclick="window.br.pct(.25)">25%</button><button class="sm ghost" onclick="window.br.pct(.5)">50%</button><button class="sm ghost" onclick="window.br.pct(.75)">75%</button><button class="sm ghost" onclick="window.br.pct(1)">Max</button></div>
     <div id="br_recv" style="margin-top:.7rem;min-height:1.3rem"></div>
@@ -494,7 +504,7 @@ async function estimateNow() {
         const iss = await lumaIss(ln);
         const al = d ? await tryReq('account_lines', { account: d, ledger_index: 'validated', limit: 300 }) : null;
         if (!al) problems.push('That LUMA account is not active on this network yet.');
-        else if (iss && !(al.lines || []).some((l: any) => l.account === iss && hexName(l.currency) === ln.luma)) { problems.push(`That LUMA account has no ${ln.luma} trust line yet: the payout waits until it does.`); if (d === ctx.account()) { act.push(`<button class="sm pri" onclick="window.br.trust('l','${esc(iss)}',this)">Add ${esc(ln.luma)} trust line on LUMA</button>`); ST.trustAct.push({ side: 'l', target: iss, label: ln.luma + ' trust line on LUMA' }); } } else row('Destination', `<span class="up">✓ ready to receive ${esc(ln.luma)}</span>`);
+        else if (iss && !(al.lines || []).some((l: any) => l.account === iss && hexName(l.currency) === ln.luma)) { problems.push(`That LUMA account has no ${ln.luma} trust line yet: the payout waits until it does.`); if (d === lumaAcc()) { act.push(`<button class="sm pri" onclick="window.br.trust('l','${esc(iss)}',this)">Add ${esc(ln.luma)} trust line on LUMA</button>`); ST.trustAct.push({ side: 'l', target: iss, label: ln.luma + ' trust line on LUMA' }); } } else row('Destination', `<span class="up">✓ ready to receive ${esc(ln.luma)}</span>`);
       }
     }
     if (srcX && c.xrplVault && srcX === c.xrplVault) row('Heads up', '<span class="mut">This is the bridge vault itself, so your tokens stay in it on XRPL (the balance does not drop) while the same amount is credited on LUMA, backed by what the vault holds. Use a different XRPL wallet as the sender for a normal one-way move.</span>');
@@ -519,7 +529,7 @@ async function estimateNow() {
   el.innerHTML = rows.join('') + (problems.length ? `<div style="margin-top:.4rem">${problems.filter(Boolean).map(p => `<div style="font-size:.8rem;color:#ffc400">! ${esc(p)}</div>`).join('')}</div>` : amt > 0 ? '<div style="font-size:.8rem;color:#00ff8c;margin-top:.4rem">✓ Everything needed is in place.</div>' : '') + (act.length ? `<div class="row" style="gap:.4rem;margin-top:.4rem">${act.join('')}</div>` : '');
 }
 async function history(g: number) {
-  const c = bcfg(), acc = ctx.account(), rows: { ms: number; html: string }[] = [];
+  const c = bcfg(), acc = lumaAcc(), rows: { ms: number; html: string }[] = [];
   const memoOf = (t: any) => (t.Memos || []).map((mm: any) => { try { return decodeURIComponent(((mm.Memo || {}).MemoData || '').replace(/../g, '%$&')); } catch { return ''; } }).join(' ');
   if (acc && c.lumaVault) {
     const v = ctx.toClassic(c.lumaVault);
@@ -571,13 +581,13 @@ const nbMemo = (txt: string) => [{ Memo: { MemoType: hex(MEMO_TYPE), MemoData: h
 async function nbLoad(light?: boolean) {
   try {
     NB.feed = await nbFetch('/api/public/nftbridge'); NB.err = '';
-    const addrs: string[] = []; if (ctx.account()) addrs.push(ctx.showL(ctx.account() as string)); for (const w of xrplWallets()) addrs.push(w.address);
+    const addrs: string[] = []; if (lumaAcc()) addrs.push(ctx.showL(lumaAcc() as string)); for (const w of xrplWallets()) addrs.push(w.address);
     const all: any[] = []; for (const a of addrs) { try { const r = await nbFetch('/api/public/nftbridge/activity?addr=' + encodeURIComponent(a)); for (const i of r.items) if (!all.find(z => z.id === i.id)) all.push(i); } catch {} }
     NB.act = all.sort((a, b) => b.upd - a.upd);
     if (!light && NB.feed.set) {
       const sel = ($('nb_xw') as HTMLSelectElement | null); NB.xw = (sel && sel.value) || NB.xw || (xrplWallets()[0] || { address: '' }).address;
       NB.xErr = ''; if (NB.xw) { const r: any = await xtry('account_nfts', { account: NB.xw, limit: 400 }); if (!r) { NB.xErr = 'Could not read this wallet from the XRPL node: it may be busy (press Refresh), or the wallet is not activated yet (it has never received XRP).'; NB.x = NB.x || []; } else if (r.error) { NB.xErr = r.error === 'actNotFound' ? 'This XRPL wallet is not activated yet (it has never received XRP).' : 'The XRPL node said: ' + r.error; NB.x = []; } else NB.x = r.account_nfts || []; } else NB.x = [];
-      const lv = NB.feed.lumaVault ? ctx.toClassic(NB.feed.lumaVault) : '', acc = ctx.account();
+      const lv = NB.feed.lumaVault ? ctx.toClassic(NB.feed.lumaVault) : '', acc = lumaAcc();
       NB.l = acc && lv ? (((await tryReq('account_nfts', { account: acc, limit: 400 })) || {}).account_nfts || []).filter((n: any) => n.Issuer === lv) : [];
     }
     NB.loaded = true;
@@ -601,12 +611,12 @@ function paintNft() {
     ${(e.problems || []).map((p: string) => `<div class="dn" style="font-size:.84rem">✗ ${esc(p)}</div>`).join('')}${(e.notes || []).map((p: string) => `<div class="mut" style="font-size:.8rem">• ${esc(p)}</div>`).join('')}
     ${e.ok ? '<div class="up" style="font-size:.84rem;margin-top:.2rem">✓ Ready to send</div>' : ''}
     <details style="margin-top:.3rem"><summary class="mut" style="cursor:pointer;font-size:.78rem">What happens, step by step</summary><ol style="font-size:.8rem;margin:.3rem 0 0 1.1rem;padding:0">${(e.steps || []).map((x: string) => `<li>${esc(x.replace(/^\d+\.\s*/, ''))}</li>`).join('')}</ol></details></div>` : '';
-  const arow = (i: any) => { const mineL = ctx.account() && i.dest && (() => { try { return ctx.toClassic(i.dest) === ctx.account(); } catch { return false; } })(); const xwal = xw.find(w => w.address === i.dest);
+  const arow = (i: any) => { const mineL = lumaAcc() && i.dest && (() => { try { return ctx.toClassic(i.dest) === lumaAcc(); } catch { return false; } })(); const xwal = xw.find(w => w.address === i.dest);
     const btn = i.dir === 'in' && i.state === 'offered' && i.lumaOffer && mineL ? `<button class="sm pri" onclick="window.br.nbAccept('${esc(i.lumaOffer)}')">Accept the copy</button>` : i.dir === 'out' && i.xrplOffer && ['done', 'released'].includes(i.state) && xwal ? `<button class="sm pri" onclick="window.br.nbAcceptX('${esc(i.xrplOffer)}','${esc(xwal.address)}')">Accept the original</button>` : '';
     return `<tr style="vertical-align:top"><td class="mut" style="white-space:nowrap">${esc(new Date(i.upd).toLocaleString())}</td><td>${i.dir === 'in' ? 'XRPL → LUMA' : 'LUMA → XRPL'}</td><td><b>${esc(i.name || '–')}</b>${i.collection ? `<div class="mut">${esc(i.collection)}</div>` : ''}</td><td class="${nbStateCol(i.state)}"><b>${esc(i.state)}</b></td><td style="max-width:22rem">${esc(((i.events || []).slice(-1)[0] || {}).m || '')}${i.err && !['done', 'offered'].includes(i.state) ? `<div class="dn">${esc(i.err)}</div>` : ''}<details><summary class="mut" style="cursor:pointer;font-size:.72rem">history</summary>${(i.events || []).map((v: any) => `<div class="mut" style="font-size:.7rem">${esc(new Date(v.t).toLocaleTimeString())} <b>${esc(v.s)}</b> ${esc(v.m)}</div>`).join('')}${i.image ? `<div class="mono mut" style="font-size:.66rem">image ${esc(i.image)}</div>` : ''}</details></td><td style="text-align:right">${btn}</td></tr>`; };
   setHtml('br_nft', `<div class="row" style="justify-content:space-between;gap:.6rem;flex-wrap:wrap"><div><div class="row" style="gap:.6rem;align-items:center"><div class="k" style="margin:0">NFT bridge · XRPL ⇄ LUMA</div><button class="sm pri acc" onclick="window.nbw.start()">Bridge an NFT in 3 steps</button></div><div class="mut" style="font-size:.82rem;margin-top:.3rem"><b>1</b> Pick the NFT &nbsp;·&nbsp; <b>2</b> Confirm what happens &nbsp;·&nbsp; <b>3</b> Accept the copy in your wallet. The tables below are for advanced use.</div><div class="mut" style="font-size:.8rem;max-width:44rem;margin-top:.25rem">The original is ${f.mode === 'burn' ? '<b class="dn">burned on XRPL</b> (it can never come back)' : '<b>locked</b> in the bridge vault (it comes back when you send the copy back)'}. Name, collection, traits and the image are copied to this network and the copy is minted for you. ${f.approveAll ? 'The operator approves each NFT by hand. ' : ''}${f.running ? '<span class="up">Validator running</span>' : '<span class="dn">Validator not running</span>'} · ${f.usedToday}/${f.perDay} used today</div></div><button class="sm ghost" onclick="window.br.nbLoad()">Refresh</button></div>
     <div class="grid" style="margin-top:.8rem"><div class="card c6"><div class="k">From XRPL → LUMA</div>${xw.length ? `<select id="nb_xw" class="grow" onchange="window.br.nbLoad()">${xw.map(w => `<option value="${esc(w.address)}" ${w.address === NB.xw ? 'selected' : ''}>${esc(w.label)} · ${esc(short(w.address, 6, 5))}</option>`).join('')}</select>` : '<div class="mut">Import an XRPL wallet first (Wallets → XRPL mode → import seed).</div>'}
-      <div class="mut" style="font-size:.76rem;margin:.4rem 0">The copy goes to your selected LUMA wallet: <b>${ctx.account() ? esc(short(ctx.showL(ctx.account() as string), 8, 6)) : 'none selected'}</b>. It arrives as an offer you accept below.</div>
+      <div class="mut" style="font-size:.76rem;margin:.4rem 0">The copy goes to your selected LUMA wallet: <b>${lumaAcc() ? esc(short(ctx.showL(lumaAcc() as string), 8, 6)) : 'none selected'}</b>. It arrives as an offer you accept below.</div>
       <div style="overflow:auto;max-height:18rem"><table class="hxt" style="width:100%;font-size:.8rem"><tbody>${NB.x.length ? NB.x.map(xrow).join('') : `<tr><td style="padding:.6rem">${NB.xErr ? `<span class="dn">${esc(NB.xErr)}</span>` : '<span class="mut">This XRPL wallet holds no NFTs.</span>'}<div class="mut" style="font-size:.78rem;margin-top:.4rem">Wallet checked: <span class="mono">${esc(NB.xw || 'none')}</span><br>Is your NFT in a different XRPL wallet (for example the rphatR… one)? Paste its seed to add it here:</div><div class="row" style="gap:.4rem;margin-top:.3rem"><input id="nb_seed" type="password" placeholder="XRPL seed (s…)" class="grow"><button class="sm pri" onclick="window.br.nbImport()">Add wallet</button></div></td></tr>`}</tbody></table></div></div>
     <div class="card c6"><div class="k">From LUMA → XRPL (wrapped copies)</div><div class="mut" style="font-size:.76rem;margin:.2rem 0 .4rem">Only copies made by this bridge can go back. The original is offered to your XRPL wallet <b>${esc(short(NB.xw || '', 6, 5))}</b>.</div>
       <div style="overflow:auto;max-height:18rem"><table class="hxt" style="width:100%;font-size:.8rem"><tbody>${NB.l.length ? NB.l.map(lrow).join('') : '<tr><td class="mut" style="padding:.6rem">No wrapped NFTs in this LUMA wallet.</td></tr>'}</tbody></table></div></div></div>
@@ -614,7 +624,7 @@ function paintNft() {
     <div class="k" style="margin-top:1rem">Your NFT bridge activity</div><div style="overflow:auto"><table class="hxt" style="width:100%;font-size:.8rem"><thead><tr><th>Time</th><th>Way</th><th>NFT</th><th>State</th><th>Latest</th><th></th></tr></thead><tbody>${NB.act.length ? NB.act.map(arow).join('') : '<tr><td colspan="6" class="mut" style="padding:.7rem">Nothing bridged yet.</td></tr>'}</tbody></table></div>`);
 }
 const nbSay = (m: string) => { NB.msg = m; const e = $('nb_msg'); if (e) e.textContent = m; };
-const nbDest = (dir: string) => dir === 'in' ? (ctx.account() ? ctx.showL(ctx.account() as string) : '') : NB.xw;
+const nbDest = (dir: string) => dir === 'in' ? (lumaAcc() ? ctx.showL(lumaAcc() as string) : '') : NB.xw;
 const nbApi = {
   nbLoad() { nbLoad(); },
   async nbImport() { try { const sd = (($('nb_seed') as HTMLInputElement) || { value: '' }).value; const a = await (window as any).importXrplSeed(sd); NB.xw = a; const e = $('nb_seed') as HTMLInputElement | null; if (e) e.value = ''; ctx.toast('✓ XRPL wallet added'); await nbLoad(); } catch (e: any) { ctx.toast(String(e?.message || e), true); } },
@@ -635,9 +645,9 @@ const nbApi = {
         const res: any = await cl.submitAndWait(wal.sign(p).tx_blob); if (res.result.meta?.TransactionResult !== 'tesSUCCESS') throw new Error('XRPL rejected the offer: ' + res.result.meta?.TransactionResult);
         nbSay('Offer made. Telling the validator…'); await nbFetch('/api/public/nftbridge/announce', { dir: 'in', tx: res.result.hash });
       } else {
-        if (!ctx.account()) throw new Error('Select a LUMA wallet first.');
+        if (!lumaAcc()) throw new Error('Select a LUMA wallet first.');
         nbSay('Making the offer on LUMA…');
-        const r = await ctx.submit({ TransactionType: 'NFTokenCreateOffer', Account: ctx.account(), NFTokenID: id, Amount: '0', Flags: 1, Destination: ctx.toClassic(f.lumaVault), Memos: nbMemo('xrpl:' + NB.xw) });
+        const r = await lsubmit({ TransactionType: 'NFTokenCreateOffer', Account: lumaAcc(), NFTokenID: id, Amount: '0', Flags: 1, Destination: ctx.toClassic(f.lumaVault), Memos: nbMemo('xrpl:' + NB.xw) });
         if (!r.ok) throw new Error('LUMA rejected the offer: ' + r.msg);
         nbSay('Offer made. Telling the validator…'); await nbFetch('/api/public/nftbridge/announce', { dir: 'out', tx: r.hash });
       }
@@ -647,7 +657,7 @@ const nbApi = {
     NB.busy = false; paintNft();
   },
   async nbAccept(offer: string) {
-    try { nbSay('Accepting on LUMA…'); const r = await ctx.submit({ TransactionType: 'NFTokenAcceptOffer', Account: ctx.account(), NFTokenSellOffer: offer }); if (!r.ok) throw new Error(r.msg || 'rejected'); ctx.toast('✓ NFT received'); nbSay('Received. It is in your NFTs.'); setTimeout(() => nbLoad(), 2500); } catch (e: any) { nbSay('Could not accept: ' + String(e?.message || e) + ' (your LUMA wallet needs a little LUMA for the NFT reserve)'); }
+    try { nbSay('Accepting on LUMA…'); const r = await lsubmit({ TransactionType: 'NFTokenAcceptOffer', Account: lumaAcc(), NFTokenSellOffer: offer }); if (!r.ok) throw new Error(r.msg || 'rejected'); ctx.toast('✓ NFT received'); nbSay('Received. It is in your NFTs.'); setTimeout(() => nbLoad(), 2500); } catch (e: any) { nbSay('Could not accept: ' + String(e?.message || e) + ' (your LUMA wallet needs a little LUMA for the NFT reserve)'); }
   },
   async nbAcceptX(offer: string, addr: string) {
     try { const seed = xrplSeedOf(addr); if (!seed) throw new Error('That XRPL wallet is not in this app.'); nbSay('Accepting on XRPL…'); const cl = await xclient(), wal = xrpl.Wallet.fromSeed(seed); const p = await cl.autofill({ TransactionType: 'NFTokenAcceptOffer', Account: wal.address, NFTokenSellOffer: offer } as any); const res: any = await cl.submitAndWait(wal.sign(p).tx_blob); if (res.result.meta?.TransactionResult !== 'tesSUCCESS') throw new Error(res.result.meta?.TransactionResult); ctx.toast('✓ Original received on XRPL'); nbSay('Received on XRPL.'); setTimeout(() => nbLoad(), 3000); } catch (e: any) { nbSay('Could not accept: ' + String(e?.message || e) + ' (the XRPL wallet needs XRP for the reserve)'); }
@@ -705,6 +715,7 @@ export const brApi = {
     estimate();
   },
   est() { estimate(); },
+  lw(v: string) { ST.lw = v; ST.bal.L = null; bridgeLoad(); },
   max() {
     const ln = laneOf(), out = ST.dir === 'out', from = out ? ln.luma : ln.xrpl, srcX = (($('br_xw') as HTMLSelectElement) || { value: '' }).value;
     let b = out ? lumaBal(from) : xrplBal(srcX, from);
@@ -730,7 +741,7 @@ export const brApi = {
     const v = (id: string) => (($(id) as HTMLInputElement).value || '').trim(), msg = $('br_cmsg');
     try {
       const o: BCfg = { lumaVault: v('br_lv') ? ctx.toClassic(v('br_lv')) : '', xrplVault: v('br_xv'), xrplUrl: v('br_xu') || defWs(), xrplIssuer: '', opUrl: bcfg().opUrl };
-      if (o.lumaVault && (mineLuma().has(o.lumaVault) || o.lumaVault === ctx.account())) throw new Error('That LUMA vault is one of YOUR wallets. The vault is a separate account made by the operator (BRIDGE VAULT (LUMA) on the control panel). Sending to yourself fails with temREDUNDANT.');
+      if (o.lumaVault && (mineLuma().has(o.lumaVault) || o.lumaVault === lumaAcc())) throw new Error('That LUMA vault is one of YOUR wallets. The vault is a separate account made by the operator (BRIDGE VAULT (LUMA) on the control panel). Sending to yourself fails with temREDUNDANT.');
       if (o.xrplVault && !xrpl.isValidClassicAddress(o.xrplVault)) throw new Error('The XRPL vault must be a classic r… address');
       if (o.xrplIssuer && !xrpl.isValidClassicAddress(o.xrplIssuer)) throw new Error('The XRPL issuer must be a classic r… address');
       const tl: any = (OP.snap && OP.snap.tokenLanes) || {}; if (o.xrplIssuer && (o.xrplIssuer === TOKEN_ISSUER || Object.values(tl).some((t: any) => t.xrplIssuer === o.xrplIssuer))) throw new Error('That address is the issuer of MINT and MAGIC on XRPL. This box needs the bridge\'s OWN issuer for LUMAX (the operator shows it on the control panel Bridge page; “Load from operator” fills it in). MINT and MAGIC issuers are used automatically.');
@@ -759,7 +770,7 @@ export const brApi = {
     btn.disabled = true;
     try {
       if (side === 'l') {
-        const r = await ctx.submit({ TransactionType: 'TrustSet', Account: ctx.account(), LimitAmount: { currency: nameToCur(ln.luma), issuer: target, value: '1000000000' } });
+        const r = await lsubmit({ TransactionType: 'TrustSet', Account: lumaAcc(), LimitAmount: { currency: nameToCur(ln.luma), issuer: target, value: '1000000000' } });
         if (!r.ok) throw new Error(r.msg || 'rejected');
         ctx.toast('✓ Trust line added');
       } else {
@@ -794,23 +805,23 @@ export const brApi = {
       btn.disabled = true;
       const pr = price(ln.asset, amt), fromNet = out ? 'LUMA' : 'XRP Ledger', toNet = out ? 'XRP Ledger' : 'LUMA';
       const srcX = (($('br_xw') as HTMLSelectElement) || { value: '' }).value;
-      const fromWallet = out ? ctx.showL(ctx.account() || '') : srcX, toWallet = out ? dst.replace(/^xrpl:/i, '') : dst;
+      const fromWallet = out ? ctx.showL(lumaAcc() || '') : srcX, toWallet = out ? dst.replace(/^xrpl:/i, '') : dst;
       fl = flowModal({ title: `${ln.xrpl === ln.luma || ln.id === 'usd' ? '' : ''}Bridging ${ln.id === 'usd' ? (out ? 'USD → RLUSD' : 'RLUSD → USD') : `${out ? ln.luma : ln.xrpl} → ${out ? ln.xrpl : ln.luma}`}`,
         rows: [['You send', `${fmt(amt, 6)} ${out ? ln.luma : ln.xrpl} on ${fromNet}`], ['From wallet', `<span class="mono">${esc(short(fromWallet, 10, 8))}</span> (${fromNet})`], ['Bridge fee', `${fmt(pr.fee, 6)} ${out ? ln.luma : ln.xrpl}`], ['You receive about', `<b>${fmt(pr.net, 6)} ${out ? ln.xrpl : ln.luma}</b> on ${toNet}`], ['To wallet', `<span class="mono">${esc(short(toWallet, 10, 8))}</span> (${toNet})`], ['Usual time', '1 to 3 minutes']],
         steps: [`Sign and send on ${fromNet}`, `Validated on ${fromNet}`, 'Bridge confirms and pays out', `Arrives in your ${toNet} wallet`] });
       fl.step(0, 'run'); say('Sending…');
       let srcId = '';
       if (out) {
-        if (!ctx.account()) throw new Error('Select a wallet first.');
+        if (!lumaAcc()) throw new Error('Select a wallet first.');
         if (!c.lumaVault) throw new Error('Save the LUMA vault address first.');
         const v = ctx.toClassic(c.lumaVault);
-        if (v === ctx.account() || mineLuma().has(v)) throw new Error('The LUMA vault is your own wallet. Use the operator’s vault address.');
+        if (v === lumaAcc() || mineLuma().has(v)) throw new Error('The LUMA vault is your own wallet. Use the operator’s vault address.');
         const [addr, tag] = dst.replace(/^xrpl:/i, '').split(':');
         if (!xrpl.isValidClassicAddress(addr) || (tag != null && !/^\d{1,10}$/.test(tag))) throw new Error('The XRPL destination must be an r… address, optionally followed by :tag');
         let Amount: any;
         if (ln.luma === ctx.native()) Amount = String(Math.round(amt * 1e6));
         else { const iss = await lumaIss(ln); const l = ((ST.bal.L && ST.bal.L.lines) || []).find((z: any) => z.account === iss && hexName(z.currency) === ln.luma); if (!l) throw new Error(`You hold no ${ln.luma} on this wallet.`); Amount = amtTx({ c: l.currency, i: iss } as Asset, amt); }
-        const r = await ctx.submit({ TransactionType: 'Payment', Account: ctx.account(), Destination: v, Amount, Memos: [{ Memo: { MemoType: hex(MEMO_TYPE), MemoData: hex('xrpl:' + addr + (tag != null ? ':' + tag : '')) } }] });
+        const r = await lsubmit({ TransactionType: 'Payment', Account: lumaAcc(), Destination: v, Amount, Memos: [{ Memo: { MemoType: hex(MEMO_TYPE), MemoData: hex('xrpl:' + addr + (tag != null ? ':' + tag : '')) } }] });
         if (!r.ok) throw new Error('Rejected on LUMA: ' + r.msg);
         srcId = 'l:' + (r.hash || ''); fl.step(0, 'ok'); fl.step(1, 'ok', short(r.hash || '', 8, 6));
         say(`Sent. Transaction ${short(r.hash || '', 8, 6)} is validated on LUMA.`);
@@ -908,7 +919,7 @@ async function wzPaint() {
       <div class="row" style="gap:.4rem;flex-wrap:wrap">${L.map(l => `<button class="${l.id === ln.id ? 'pri acc' : 'ghost'}" onclick="window.brw.set('lane','${l.id}')">${esc(out ? `${l.luma} → ${l.xrpl}` : `${l.xrpl} → ${l.luma}`)}</button>`).join('')}</div>
       <div class="mut" style="margin-top:.7rem;font-size:.84rem">${esc(from)} on ${out ? 'LUMA' : 'the XRP Ledger'} becomes <b>${esc(to)}</b> on ${out ? 'the XRP Ledger' : 'LUMA'}, 1:1 minus a small fee.</div>`;
   } else if (WZ.step === 1) {
-    if (out) { const a = ctx.account(); body = `<div class="card" style="background:rgba(0,255,140,.04)"><div class="k">Sending from your selected LUMA wallet</div><div class="mono" style="font-size:.8rem;word-break:break-all">${esc(a ? ctx.showL(a) : 'none selected')}</div><div style="margin-top:.4rem">Balance: <b>${fmt(lumaBal(from), 6)} ${esc(from)}</b></div></div><div class="mut" style="font-size:.78rem;margin-top:.5rem">To use another LUMA wallet, close this, pick it in the wallet picker, then start again.</div>`; }
+    if (out) { const a = lumaAcc(); body = `<div class="card" style="background:rgba(0,255,140,.04)"><div class="k">Sending from your selected LUMA wallet</div><div class="mono" style="font-size:.8rem;word-break:break-all">${esc(a ? ctx.showL(a) : 'none selected')}</div><div style="margin-top:.4rem">Balance: <b>${fmt(lumaBal(from), 6)} ${esc(from)}</b></div></div><div class="mut" style="font-size:.78rem;margin-top:.5rem">To use another LUMA wallet, close this, pick it in the wallet picker, then start again.</div>`; }
     else body = xw.length ? `<div class="mut" style="margin-bottom:.4rem">Pick the XRPL wallet that holds your ${esc(from)}. Use a wallet other than the bridge vault if you have one.</div>${xw.map(w => `<label class="row" style="gap:.6rem;padding:.45rem;border:1px solid ${WZ.xw === w.address ? '#00ff8c' : '#2a3a33'};border-radius:.5rem;margin:.3rem 0;cursor:pointer"><input type="radio" name="wzx" ${WZ.xw === w.address ? 'checked' : ''} onchange="window.brw.set('xw','${esc(w.address)}')"><span class="grow"><b>${esc(w.label)}</b><div class="mono mut" style="font-size:.72rem">${esc(short(w.address, 10, 8))}</div></span><b>${fmt(xrplBal(w.address, from), 4)} ${esc(from)}</b></label>`).join('')}` : `<div class="warn">No XRPL wallet in this app yet. Wallets → XRPL → create or import one.</div>`;
   } else if (WZ.step === 2) {
     const have = out ? lumaBal(from) : xrplBal(WZ.xw, from), pr = parseFloat(WZ.amt) > 0 ? price(ln.asset, parseFloat(WZ.amt)) : null;
@@ -935,7 +946,7 @@ const brw = {
   async next() {
     const bad = (t: string) => { const e = document.getElementById('wz_err'); if (e) e.textContent = t; };
     if (WZ.step === 1 && WZ.dir === 'in' && !WZ.xw) return bad('Pick the XRPL wallet to send from.');
-    if (WZ.step === 1 && WZ.dir === 'out' && !ctx.account()) return bad('Select a LUMA wallet first.');
+    if (WZ.step === 1 && WZ.dir === 'out' && !lumaAcc()) return bad('Select a LUMA wallet first.');
     if (WZ.step === 2 && !(parseFloat(WZ.amt) > 0)) return bad('Enter an amount.');
     if (WZ.step === 3 && !WZ.dst) return bad('Pick or paste the destination address.');
     WZ.step++; if (WZ.step === 4) { WZ.est = ''; await wzPaint(); wzSync(); await estimateNow().catch(() => {}); WZ.est = ($('br_est') || { innerHTML: '' }).innerHTML; } wzPaint();
@@ -958,7 +969,7 @@ async function nwPaint() {
   else if (NW.step === 0) body = `<div class="seg" style="margin-bottom:.7rem"><button class="${inn ? 'on' : ''}" onclick="window.nbw.set('dir','in')">XRPL → LUMA</button><button class="${inn ? '' : 'on'}" onclick="window.nbw.set('dir','out')">LUMA → XRPL</button></div><div class="mut" style="font-size:.86rem">${inn ? `Your XRPL NFT is handed to the bridge vault (${f.mode === 'burn' ? '<b class="dn">then burned: it can never come back</b>' : 'locked: it comes back when you send the copy back'}). A copy with the same name, traits and image is minted for you on LUMA.` : 'The wrapped copy is taken and burned on LUMA, and the original XRPL NFT is offered back to your XRPL wallet.'}</div>`;
   else if (NW.step === 1) {
     const list = inn ? NB.x : NB.l;
-    body = `${inn ? (xw.length ? `<div class="mut" style="margin-bottom:.3rem">XRPL wallet</div><select id="nw_xw" style="width:100%;margin-bottom:.6rem" onchange="window.nbw.wallet(this.value)">${xw.map(w => `<option value="${esc(w.address)}" ${w.address === NB.xw ? 'selected' : ''}>${esc(w.label)} · ${esc(short(w.address, 6, 5))}</option>`).join('')}</select>` : '<div class="warn">No XRPL wallet in this app yet.</div>') : `<div class="mut" style="margin-bottom:.4rem">From your selected LUMA wallet <b>${ctx.account() ? esc(short(ctx.showL(ctx.account() as string), 8, 6)) : 'none'}</b></div>`}
+    body = `${inn ? (xw.length ? `<div class="mut" style="margin-bottom:.3rem">XRPL wallet</div><select id="nw_xw" style="width:100%;margin-bottom:.6rem" onchange="window.nbw.wallet(this.value)">${xw.map(w => `<option value="${esc(w.address)}" ${w.address === NB.xw ? 'selected' : ''}>${esc(w.label)} · ${esc(short(w.address, 6, 5))}</option>`).join('')}</select>` : '<div class="warn">No XRPL wallet in this app yet.</div>') : `<div class="mut" style="margin-bottom:.4rem">From your selected LUMA wallet <b>${lumaAcc() ? esc(short(ctx.showL(lumaAcc() as string), 8, 6)) : 'none'}</b></div>`}
       <div style="max-height:16rem;overflow:auto">${(list || []).length ? (list as any[]).map(n => { const id = n.NFTokenID, nm = inn ? (nwUri(n).slice(0, 40) || 'NFT') : (nbName(id) || 'Wrapped NFT'); return `<label class="row" style="gap:.6rem;padding:.45rem;border:1px solid ${NW.id === id ? '#00ff8c' : '#2a3a33'};border-radius:.5rem;margin:.3rem 0;cursor:pointer"><input type="radio" name="nwn" ${NW.id === id ? 'checked' : ''} onchange="window.nbw.set('id','${esc(id)}')"><span class="grow"><b>${esc(nm)}</b><div class="mono mut" style="font-size:.72rem">${esc(short(id, 10, 8))}</div></span>${inn && !(n.Flags & 8) ? '<span class="dn" style="font-size:.74rem">not transferable</span>' : ''}</label>`; }).join('') : `<div class="mut" style="padding:.6rem">${inn ? 'This XRPL wallet holds no NFTs. Close this and use <b>Add wallet</b> in the NFT bridge card if your NFT is in another XRPL wallet.' : 'No wrapped NFTs in this LUMA wallet.'}</div>`}</div>`;
   } else if (NW.step === 2) {
     const dest = nbDest(NW.dir);
@@ -987,7 +998,7 @@ const nbw = {
   async go() {
     if (NW.busy) return; NW.busy = true; const dir = NW.dir, id = NW.id; nbw.close();
     const inn = dir === 'in', nm = (NW.est && NW.est.meta && NW.est.meta.name) || nbName(id) || 'NFT';
-    const fl = flowModal({ title: `Bridging "${nm}" ${inn ? 'XRPL → LUMA' : 'LUMA → XRPL'}`, rows: [['From', inn ? `XRPL wallet ${short(NB.xw || '', 8, 6)}` : `LUMA wallet ${short(ctx.showL(ctx.account() as string), 8, 6)}`], ['To', inn ? `LUMA wallet ${short(nbDest('in'), 8, 6)}` : `XRPL wallet ${short(NB.xw || '', 8, 6)}`], ['What you get', inn ? 'A copy minted on LUMA (you accept it)' : 'The original back on XRPL (you accept it)'], ['Usual time', NW.est && NW.est.seconds ? `about ${NW.est.seconds.typical}s` : '1 to 2 minutes']],
+    const fl = flowModal({ title: `Bridging "${nm}" ${inn ? 'XRPL → LUMA' : 'LUMA → XRPL'}`, rows: [['From', inn ? `XRPL wallet ${short(NB.xw || '', 8, 6)}` : `LUMA wallet ${short(ctx.showL(lumaAcc() as string), 8, 6)}`], ['To', inn ? `LUMA wallet ${short(nbDest('in'), 8, 6)}` : `XRPL wallet ${short(NB.xw || '', 8, 6)}`], ['What you get', inn ? 'A copy minted on LUMA (you accept it)' : 'The original back on XRPL (you accept it)'], ['Usual time', NW.est && NW.est.seconds ? `about ${NW.est.seconds.typical}s` : '1 to 2 minutes']],
       steps: [`Make the offer on ${inn ? 'XRPL' : 'LUMA'}`, 'Validator takes the NFT', inn ? 'Copy minted on LUMA' : 'Original released on XRPL', 'You accept it']});
     fl.step(0, 'run');
     try {
