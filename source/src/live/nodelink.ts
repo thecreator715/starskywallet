@@ -51,7 +51,7 @@ const HS: H[] = [];
 function hist(i: any) { const v = i.validated_ledger || {}; HS.push({ t: Date.now(), fee: Number(v.base_fee_xrp ?? 0), res: Number(v.reserve_base_xrp ?? 0), inc: Number(v.reserve_inc_xrp ?? 0), load: Number(i.load_factor ?? 1), age: Number(v.age ?? 0), peers: Number(i.peers ?? 0) }); if (HS.length > 120) HS.shift(); }
 // ---- duplicate-send guard, outcome tracking, offline queue ----
 const RECENT = new Map<string, number>(); const QK = 'starsky.x.nl.queue';
-const sig = (tx: any) => JSON.stringify([tx.TransactionType, tx.Account, tx.Destination, tx.Amount, tx.DestinationTag, tx.TakerGets, tx.TakerPays, tx.LimitAmount, tx.OfferSequence]);
+const sig = (tx: any) => JSON.stringify([tx.TransactionType, tx.Account, tx.Destination, tx.Amount, tx.DestinationTag, tx.TakerGets, tx.TakerPays, tx.LimitAmount, tx.OfferSequence, tx.SendMax, tx.CheckID, tx.DeliverMin]);
 export function guard(tx: any): string | null { const k = sig(tx), t = RECENT.get(k); if (t && Date.now() - t < 20000) return 'This looks identical to a transaction you sent a moment ago. Wait for it to confirm, then send again if you really mean to pay twice.'; RECENT.set(k, Date.now()); return null; }
 export function guardClear(tx: any) { RECENT.delete(sig(tx)); }
 export interface Q { id: string; t: number; net: string; tx: any }

@@ -13,6 +13,7 @@ import * as Bot from './live/bot.ts';
 import * as Mg from './live/margin.ts';
 import * as PL from './live/poolinfo.ts';
 import * as Bn from './live/burn.ts';
+import * as Ck from './live/checks.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
 import * as Social from './live/social.ts';
@@ -305,7 +306,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -880,7 +881,7 @@ export async function refreshAccount(quiet = false) {
     const sig = JSON.stringify([String(bal.drops), bal.owner, lines, st.hist.length, (st.hist[0] as any)?.tx?.hash || (st.hist[0] as any)?.hash || '', st.px, st.nfts.length, st.mpts.length]);
     const changed = sig !== lastSig;
     lastSig = sig;
-    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
+    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'checks', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
     else if ((changed || !quiet) && !(quiet && /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement as HTMLElement | null)?.tagName || ''))) renderApp();   // never rebuild the page under someone who is typing
     else renderTop();
   } catch (e: any) {
@@ -1141,6 +1142,7 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['rewards', 'Rewards'],
   ['send', 'Send'],
   ['receive', 'Receive'],
+  ['checks', 'Checks'],
   ['markets', 'Markets & Tokens'],
   ['mktoken', 'Create Token'],
   ['mgtoken', 'Mint, Burn & Cap'],
@@ -1585,6 +1587,10 @@ export function renderApp() {
       body = Supply.supplyShell();
       break;
 
+    case 'checks':
+      body = Ck.shell();
+      break;
+
     case 'burn':
       body = Bn.pageShell();
       break;
@@ -1821,6 +1827,7 @@ export function renderApp() {
         ${renderNavItem('rewards', 'Rewards')}
         ${renderNavItem('send', 'Send')}
         ${renderNavItem('receive', 'Receive')}
+        ${renderNavItem('checks', 'Checks')}
         ${renderNavItem('markets', 'Markets & Tokens')}
         ${renderNavItem('mktoken', 'Create token')}
         ${renderNavItem('mgtoken', 'Mint, burn & cap')}
@@ -1914,6 +1921,7 @@ export function renderApp() {
   if (st.tab === 'activity') Hist.mount();
   if (st.tab === 'holders') Hold.mount();
   if (st.tab === 'burn') Bn.pageMount();
+  if (st.tab === 'checks') Ck.mount();
   if (st.tab === 'supply') Supply.supplyMount();
   else Supply.supplyUnmount();
   if (st.tab === 'bot') Bot.botMount();
@@ -2353,6 +2361,7 @@ export function initWindowBindings() {
   (window as any).bt = Bot.btApi;
   (window as any).mg = Mg.mgApi;
   (window as any).bn = Bn.api;
+  (window as any).ck = Ck.api;
   (window as any).mk = Pages.mkApi;
   (window as any).br = Pages.brApi;
   (window as any).pa = Pages.paApi;

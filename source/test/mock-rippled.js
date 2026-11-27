@@ -111,10 +111,13 @@ function applyTx(addr, tx) {
     if (!e.ca || rNowS() <= e.ca) return 'tecNO_PERMISSION'; S.escrows.splice(i, 1); const o = S.accounts.get(e.owner); o.owner--; o.bal += e.amount;
   } else if (tx.TransactionType === 'CheckCreate') {
     S.checks.push({ index: crypto.randomBytes(32).toString('hex').toUpperCase(), Account: addr, Destination: tx.Destination, SendMax: BigInt(tx.SendMax), Sequence: a.seq, exp: tx.Expiration }); a.owner++;
+  } else if (tx.TransactionType === 'CheckCancel') {
+    const i = S.checks.findIndex(c => c.index === tx.CheckID); if (i < 0) return 'tecNO_ENTRY'; const c = S.checks[i]; const ex = c.exp && rNowS() > c.exp;
+    if (!ex && c.Account !== addr && c.Destination !== addr) return 'tecNO_PERMISSION'; S.checks.splice(i, 1); S.accounts.get(c.Account).owner--;
   } else if (tx.TransactionType === 'CheckCash') {
     const i = S.checks.findIndex(c => c.index === tx.CheckID); if (i < 0) return 'tecNO_ENTRY'; const c = S.checks[i]; if (c.Destination !== addr) return 'tecNO_PERMISSION';
-    if (c.exp && rNowS() > c.exp) return 'tecEXPIRED'; const amt = BigInt(tx.Amount); if (amt > c.SendMax) return 'tecPATH_PARTIAL'; const src = S.accounts.get(c.Account);
-    if (src.bal - amt < RESERVE) return 'tecPATH_PARTIAL'; src.bal -= amt; a.bal += amt; S.checks.splice(i, 1); src.owner--;
+    if (c.exp && rNowS() > c.exp) return 'tecEXPIRED'; const src = S.accounts.get(c.Account); let amt; if (tx.DeliverMin != null) { const mn = BigInt(tx.DeliverMin); amt = c.SendMax < src.bal - RESERVE ? c.SendMax : (src.bal - RESERVE > 0n ? src.bal - RESERVE : 0n); if (amt < mn) return 'tecPATH_PARTIAL'; } else { amt = BigInt(tx.Amount); if (amt > c.SendMax) return 'tecPATH_PARTIAL'; }
+    if (src.bal - amt < RESERVE) return 'tecPATH_PARTIAL'; src.bal -= amt; a.bal += amt; S.checks.splice(i, 1); src.owner--; (S.ckOwner = S.ckOwner || {})[tx.CheckID] = c.Account;
   } else if (/^AMM(Create|Deposit|Withdraw|Vote|Bid|Delete)$/.test(tx.TransactionType)) {
     const t = tx.TransactionType, fee = t === 'AMMCreate' ? OWNER : FEE; if (a.bal < fee) return 'terINSUF_FEE_B';
     const r = ammApply(addr, a, tx, reserve); if (r !== 'tesSUCCESS') return r;
@@ -230,7 +233,7 @@ const methods = {
   account_nfts: p => { const a = S.accounts.get(p.account); return a ? { account_nfts: a.nfts } : { error: 'actNotFound' }; },
   account_objects: p => { const a = S.accounts.get(p.account); if (!a) return { error: 'actNotFound' };
     if (p.type === 'mpt_issuance') return { account_objects: [...S.issuances].filter(([, i]) => i.issuer === p.account).map(([id, i]) => ({ LedgerEntryType: 'MPTokenIssuance', Issuer: i.issuer, Sequence: parseInt(id.slice(0, 8), 16) })) };
-    if (p.type === 'check') return { account_objects: S.checks.filter(c => c.Account === p.account).map(c => ({ LedgerEntryType: 'Check', index: c.index, Sequence: c.Sequence, Destination: c.Destination })) };
+    if (p.type === 'check') return { account_objects: S.checks.filter(c => c.Account === p.account || c.Destination === p.account).map(c => ({ LedgerEntryType: 'Check', index: c.index, Sequence: c.Sequence, Account: c.Account, Destination: c.Destination, SendMax: String(c.SendMax), ...(c.exp ? { Expiration: c.exp } : {}) })) };
     if (p.type === 'mptoken') return { account_objects: [...a.mpts].map(([id, v]) => ({ LedgerEntryType: 'MPToken', MPTokenIssuanceID: id, MPTAmount: String(v) })) }; return { account_objects: [] }; },
   wallet_propose: p => mkWallet(p.passphrase),
   ledger: p => { const i = ['validated', 'closed', 'current'].includes(p.ledger_index) ? S.ledgers.size : +p.ledger_index; const l = S.ledgers.get(i);
@@ -241,7 +244,7 @@ const methods = {
     const rev = []; for (const [addr, h] of S.accounts) if (addr !== p.account) for (const [k, v] of h.lines) { const [iss, cur] = k.split('|'); if (iss === p.account && v.bal !== 0n) rev.push({ account: addr, currency: cur, balance: '-' + fromMicro(v.bal), limit: '0' }); }
     return { lines: own.concat(rev) }; },
   account_offers: p => ({ offers: S.offers.filter(o => o.Account === p.account).map(o => ({ seq: o.Sequence, flags: o.Flags, taker_gets: o.TakerGets, taker_pays: o.TakerPays })) }),
-  account_tx: p => ({ transactions: [...S.txs.values()].filter(r => r.ledger && ([r.tx.Account, r.tx.Destination, r.tx.LimitAmount?.issuer].includes(p.account) || (r.amm || []).includes(p.account))).reverse().slice(0, p.limit || 25)
+  account_tx: p => ({ transactions: [...S.txs.values()].filter(r => r.ledger && ([r.tx.Account, r.tx.Destination, r.tx.LimitAmount?.issuer, r.tx.CheckID && S.ckOwner && S.ckOwner[r.tx.CheckID]].includes(p.account) || (r.amm || []).includes(p.account))).reverse().slice(0, p.limit || 25)
     .map(r => ({ tx: { ...txObj(r), date: r.date, ledger_index: r.ledger }, meta: { ...r.meta, ...(r.tx.TransactionType === 'Payment' ? { delivered_amount: r.tx.Amount } : {}) }, validated: true, ledger_index: r.ledger })) }),
   gateway_balances: p => { const ob = {}; for (const a of S.accounts.values()) for (const [k, v] of a.lines) { const [iss, cur] = k.split('|'); if (iss === p.account) ob[cur] = (ob[cur] || 0n) + v.bal; }
     return { obligations: Object.fromEntries(Object.entries(ob).map(([k, v]) => [k, fromMicro(v)])) }; },
