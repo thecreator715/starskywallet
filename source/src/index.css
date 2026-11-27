@@ -1476,3 +1476,12 @@ main:has(#tkpg){max-width:none}
 .bt2 .btmsg{margin:.4rem 0;font-family:ui-monospace,monospace;word-break:break-word}.bt2 .btmeta{justify-content:space-between;font-size:.68rem;color:var(--mut);border-top:1px solid var(--line,#1f2b26);padding-top:.4rem;gap:.5rem;flex-wrap:wrap}
 .bt2 .btlh label.mut{display:flex;gap:.4rem;align-items:center;white-space:nowrap}.bt2 label.btfld input[type=checkbox]{width:auto}.bt2 .btchips.three.bigc{font-size:inherit}
 .bt2 .btchk{display:flex!important;justify-content:flex-start;align-items:center;gap:.5rem}.bt2 .btchk input{width:auto}
+@media(max-width:700px){
+.dxtools{display:flex;flex-wrap:wrap;gap:.3rem;align-items:stretch}
+.dxtools>div[style*="flex:1"]{display:none}
+.dxtools .seg{display:flex;min-width:0;border-radius:.4rem}
+.dxtools .seg button{flex:1 1 auto;padding:.34rem .14rem;font-size:.64rem;white-space:nowrap;text-align:center}
+.dxtools .seg:first-child{flex:1 1 100%}
+.dxtools .seg:not(:first-child){flex:1 1 0}
+.dxtools .seg:nth-child(4){flex:2.4 1 0}
+}
