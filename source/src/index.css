@@ -1485,3 +1485,14 @@ main:has(#tkpg){max-width:none}
 .dxtools .seg:not(:first-child){flex:1 1 0}
 .dxtools .seg:nth-child(4){flex:2.4 1 0}
 }
+.dxbrk{display:none}
+@media(max-width:700px){
+#dx_head{flex-wrap:wrap;gap:.45rem}
+#dx_head>.dxsel{order:1;flex:1 1 0;min-width:0;max-width:52%}
+#dx_head>button[onclick*="flip"]{order:2}
+#dx_head>button[onclick*="share"]{order:3;margin-left:auto;white-space:nowrap;padding:.4rem .6rem;font-size:.74rem}
+#dx_head>.dxbrk{display:block;order:4;flex:0 0 100%;height:0}
+#dx_head>.dxprice{order:5}
+#dx_head>div:not(.dxprice){order:6}
+#dx_head>.dxnote{order:7}
+}

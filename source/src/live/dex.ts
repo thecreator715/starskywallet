@@ -414,7 +414,7 @@ function renderHead() {
      ${d24 ? `<div>${pctHtml(d24.v)}${d24.partial ? '<small class="mut" title="Longer than this market has existed: change since it listed"> *</small>' : ''}<small class="mut"> 24h</small></div>` : ''}
      <div style="flex:1"></div>
      <button class="sm ghost" title="Post this chart and the token data to Social" onclick="window.dx.share()">Share to Social</button>
-     <span class="mut dxnote">${DX.cd && DX.cd.note ? esc(DX.cd.note) : ''}</span>`
+     <span class="dxbrk"></span><span class="mut dxnote">${DX.cd && DX.cd.note ? esc(DX.cd.note) : ''}</span>`
   );
 }
 function renderTools() {
