@@ -14,13 +14,13 @@ interface Cfg {
   slip: number; swaps: number; compound: boolean; reinvest: number; tpOn: boolean; tpAmt: number; reserve: number;
   act: { dep: boolean; wd: boolean; swap: boolean };
   method: 'base' | 'pct' | 'target'; buySz: number; sellSz: number; baseAmt: number; targetAmt: number; over: Record<string, { buy: number; sell: number }>;
-  pair: string; mode: 'cycle' | 'dedicated'; ded: string; off: string[]; baseOn: string[]; tri: string[]; arbMin: number;
+  pair: string; mode: 'cycle' | 'dedicated'; ded: string; off: string[]; baseOn: string[]; allPools: boolean; tri: string[]; arbMin: number;
   spread: number; ttl: number; maxOpen: number; stopLoss: number; stopDraw: number; stopOrders: number; autoTrust: boolean;
 }
 const DEF: Cfg = {
   strat: 'maker', dir: 'neutral', buyPct: 50, every: 5, customOn: false, slip: 0.5, swaps: 1, compound: true, reinvest: 50, tpOn: false, tpAmt: 50, reserve: 20,
   act: { dep: true, wd: true, swap: true }, method: 'pct', buySz: 25, sellSz: 25, baseAmt: 10, targetAmt: 10, over: {},
-  pair: 'all', mode: 'cycle', ded: '', off: [], baseOn: ['native'], tri: ['native'], arbMin: 0.5, spread: 0.6, ttl: 180, maxOpen: 6, stopLoss: 0, stopDraw: 0, stopOrders: 0, autoTrust: true,
+  pair: 'all', mode: 'cycle', ded: '', off: [], baseOn: ['native'], allPools: true, tri: ['native'], arbMin: 0.5, spread: 0.6, ttl: 180, maxOpen: 6, stopLoss: 0, stopDraw: 0, stopOrders: 0, autoTrust: true,
 };
 interface Entry { id: number; ts: number; kind: 'trade' | 'lp' | 'arb' | 'note' | 'warn'; tag: string; msg: string; route?: string; size?: string; st: 'pending' | 'ok' | 'fail' | 'info'; hash?: string }
 const zero = () => ({ arb: 0, vol: 0, tx: 0, gas: 0, deps: 0, wds: 0, swaps: 0, orders: 0, arbs: 0, cancelled: 0, fails: 0 });
@@ -113,6 +113,7 @@ const toUsd = (n: number) => (BT.SN && BT.SN.usdPerNative != null ? n * BT.SN.us
 const money = (n: number) => { const u = toUsd(n); return u != null ? (u < 0 ? '-' : '') + usd(Math.abs(u)) : fmt(n, 4) + ' ' + ctx.native(); };
 const sg = (n: number) => (n >= 0 ? '+' : '') + n;
 
+const isUsdK = (k: string) => { try { const a = fromKey(k); return !isNative(a) && hexName(a.c).toUpperCase() === ctx.usdName().toUpperCase(); } catch { return false; } };
 /* ---------- universe of pools the bot may use ---------- */
 interface Venue { p: M.PoolState; T: Asset; B: Asset; m: M.Market }
 function venues(sn: any): Venue[] {
@@ -120,9 +121,11 @@ function venues(sn: any): Venue[] {
   for (const p of sn.pools as M.PoolState[]) {
     if (M.isOldUsd(p.a) || M.isOldUsd(p.b) || !(p.ra > 0 && p.rb > 0)) continue;
     const ka = akey(p.a), kb = akey(p.b), ab = bases.includes(ka), bb = bases.includes(kb);
-    if (!ab && !bb) continue;
     let B: Asset, T: Asset;
-    if (ab && bb) { B = isNative(p.a) ? p.a : isNative(p.b) ? p.b : p.a; T = B === p.a ? p.b : p.a; } else { B = ab ? p.a : p.b; T = ab ? p.b : p.a; }
+    if (!ab && !bb) {   // neither side is a chosen base: still trade it (new tokens and pools from Genesis appear here automatically), spending LUMA, else the dollar token, else side A
+      if (c.allPools === false) continue;
+      B = isNative(p.a) ? p.a : isNative(p.b) ? p.b : isUsdK(ka) ? p.a : isUsdK(kb) ? p.b : p.a; T = B === p.a ? p.b : p.a;
+    } else if (ab && bb) { B = isNative(p.a) ? p.a : isNative(p.b) ? p.b : p.a; T = B === p.a ? p.b : p.a; } else { B = ab ? p.a : p.b; T = ab ? p.b : p.a; }
     if (c.off.includes(akey(T))) continue;
     if (c.pair !== 'all' && p.account !== c.pair) continue;
     if (c.mode === 'dedicated' && c.ded && akey(T) !== c.ded) continue;
@@ -457,7 +460,7 @@ function suiteHtml(): string {
   const act = all.filter(a => !c.off.includes(akey(a))).length;
   return `<div class="row btlh"><div><div class="k" style="margin:0">⚙ Bot configuration suite</div><div class="mut sm" style="margin-top:.25rem">Where the bot trades: pools, base coins and tokens.</div></div><button class="sm ghost" onclick="window.bt.reset()">↺ Reset defaults</button></div>
   <div class="btbox"><div class="row btlh"><b>⇄ AMM target pair</b><span class="chip">${pools.length} pools</span></div><select class="btsel" onchange="window.bt.pair(this.value)"><option value="all" ${c.pair === 'all' ? 'selected' : ''}>All tokens (rotational mode)</option>${pools.filter(p => !M.isOldUsd(p.a) && !M.isOldUsd(p.b)).map(p => `<option value="${esc(p.account)}" ${c.pair === p.account ? 'selected' : ''}>${esc(nm(p.a))} / ${esc(nm(p.b))}</option>`).join('')}</select></div>
-  <div class="btbox"><div class="row btlh"><b>▤ AMM base pool liquidity</b><span class="chip">Multi-select active</span></div><div class="mut sm" style="margin-bottom:.6rem">The coins the bot spends and deposits. Rotational scans spread trades across the pools they sit in.</div><div class="btchips three bigc">${hubs().map(h => tog(nm(h.a), c.baseOn.includes(akey(h.a)), `window.bt.base('${esc(akey(h.a))}')`, h.sub)).join('')}</div></div>
+  <div class="btbox"><div class="row btlh"><b>▤ AMM base pool liquidity</b><span class="chip">Multi-select active</span></div><div class="mut sm" style="margin-bottom:.6rem">The coins the bot spends and deposits. Rotational scans spread trades across the pools they sit in.</div><div class="btchips three bigc">${hubs().map(h => tog(nm(h.a), c.baseOn.includes(akey(h.a)), `window.bt.base('${esc(akey(h.a))}')`, h.sub)).join('')}</div><label class="mut sm" style="display:flex;gap:.4rem;align-items:center;margin-top:.6rem"><input type="checkbox" ${c.allPools !== false ? 'checked' : ''} onchange="window.bt.allPools(this.checked)"> Also trade every other pool (new tokens and pools made from Genesis show up here by themselves)</label></div>
   <div class="btbox"><div class="row btlh"><b>◎ Active rotational tokens</b><span><span class="chip">${act} of ${all.length} active</span> <a href="#" class="mut sm" onclick="window.bt.allTok(${act === all.length ? 0 : 1});return false">${act === all.length ? 'Minimal' : 'All'}</a></span></div><div class="mut sm" style="margin-bottom:.6rem">Select or deselect tokens to narrow the bot's scan radius.</div>${tokenChips()}</div>`;
 }
 function logHtml(list: Entry[]): string {
@@ -564,6 +567,7 @@ export const btApi = {
   ded(k: string) { BT.cfg.ded = k; saveCfg(); paintPane(); },
   tok(k: string) { BT.cfg.off = toggleIn(BT.cfg.off, k); saveCfg(); paintPane(); },
   allTok(on: number) { BT.cfg.off = on ? [] : tokens().filter(a => !isNative(a)).map(a => akey(a)); saveCfg(); paintPane(); },
+  allPools(v: boolean) { BT.cfg.allPools = !!v; saveCfg(); paintPane(); },
   base(k: string) { const n = toggleIn(BT.cfg.baseOn, k); BT.cfg.baseOn = n.length ? n : BT.cfg.baseOn; saveCfg(); paintPane(); },
   tri(k: string) { const n = toggleIn(BT.cfg.tri, k); BT.cfg.tri = n.length ? n : BT.cfg.tri; saveCfg(); paintPane(); },
   pair(v: string) { BT.cfg.pair = v; saveCfg(); paintPane(); },
