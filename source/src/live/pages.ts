@@ -13,8 +13,16 @@ const setHtml = (id: string, h: string) => {
   if (e && e.__h !== h) {
     e.innerHTML = h;
     e.__h = h;
+    if (id === 'mk_tokens' || id === 'mk_pools') mkFilter();
   }
 };
+const mkQ: Record<string, string> = { mk_tokens: '', mk_pools: '' };
+function mkFilter() {
+  for (const id of ['mk_tokens', 'mk_pools']) {
+    const q = (mkQ[id] || '').trim().toLowerCase(), box = $(id); if (!box) continue;
+    box.querySelectorAll('tbody tr').forEach(tr => { const el = tr as HTMLElement; el.style.display = !q || (el.textContent || '').toLowerCase().includes(q) ? '' : 'none'; });
+  }
+}
 const kv = (k: string, v: string, sub = '') => `<div class="tile kvt"><div class="k">${k}</div><div class="big2">${v}</div>${sub ? `<div class="mut" style="font-size:.78rem">${sub}</div>` : ''}</div>`;
 const wait = (m: string) => `<div class="mut" style="padding:1rem">${m}</div>`;
 let gen = 0;
@@ -38,10 +46,10 @@ export function marketsShell() {
     <div class="pgrid" id="mk_tiles">${wait('Reading pools…')}</div>
     <div class="k" style="margin:1.2rem 0 .5rem">Growth</div>
     <div class="pgrid" id="mk_growth">${wait('')}</div>
-    <div class="card" style="margin-top:1rem"><div class="k">Tokens</div><div id="mk_tokens" style="overflow:auto">${wait('Reading history…')}</div>
+    <div class="card" style="margin-top:1rem"><div class="row" style="justify-content:space-between;gap:.6rem;flex-wrap:wrap"><div class="k">Tokens</div><input placeholder="Search tokens" oninput="window.mk.q('mk_tokens',this.value)" style="width:min(16rem,100%)"></div><div id="mk_tokens" style="overflow:auto">${wait('Reading history…')}</div>
       <div class="row" style="margin-top:.8rem;gap:.5rem;flex-wrap:wrap"><input id="mk_cur" placeholder="Currency (USD, or a longer name)" style="width:13rem"><input id="mk_iss" class="grow" placeholder="Issuer (r… or L…/T…)"><input id="mk_lim" value="1000000000" style="width:9rem" title="Trust limit"><button class="pri acc" onclick="window.mk.addCustom(this)">Set trust line</button></div>
       <div id="mk_msg" class="mut" style="font-size:.8rem;margin-top:.4rem"></div></div>
-    <div class="card" style="margin-top:1rem"><div class="k">AMM pools</div><div id="mk_pools" style="overflow:auto">${wait('Reading history…')}</div></div>
+    <div class="card" style="margin-top:1rem"><div class="row" style="justify-content:space-between;gap:.6rem;flex-wrap:wrap"><div class="k">AMM pools</div><input placeholder="Search pools or pairs" oninput="window.mk.q('mk_pools',this.value)" style="width:min(16rem,100%)"></div><div id="mk_pools" style="overflow:auto">${wait('Reading history…')}</div></div>
     <div class="card" style="margin-top:1rem"><div class="k">Your portfolio</div><div id="mk_port">${wait('')}</div></div>
     <div class="card" style="margin-top:1rem"><div class="k">Top holders of the native coin</div><div id="mk_hold" style="overflow:auto">${wait('')}</div></div></div>`;
 }
@@ -295,6 +303,7 @@ async function trustTx(a: Asset, limit: string) {
   return ctx.submit({ TransactionType: 'TrustSet', Account: ctx.account(), LimitAmount: { currency: a.c, issuer: a.i, value: limit } });
 }
 export const mkApi = {
+  q(id: string, v: string) { mkQ[id] = v; mkFilter(); },
   range(k: string) {
     MK.range = k;
     ['1h', '24h', '7d', 'all'].forEach(x => $('mk_r_' + x)?.classList.toggle('on', x === k));

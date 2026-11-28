@@ -51,10 +51,16 @@ export const amtTx = (a: Asset, n: number) => {
 };
 
 /** compact, readable numbers */
+/** tiny numbers keep 4 significant digits instead of rounding to 0 (0.00000123 stays 0.00000123) */
+export const small = (v: number) => {
+  const a = Math.abs(v), dec = Math.min(16, Math.max(2, Math.ceil(-Math.log10(a)) + 3));
+  return v.toFixed(dec).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+};
 export const fmt = (n: number | null | undefined, d?: number) => {
   if (n == null || !isFinite(n as number)) return '–';
   const v = Number(n);
   const a = Math.abs(v);
+  if (a > 0 && a < 0.01 && (d == null || a < Math.pow(10, -d))) return small(v);
   if (d != null) return v.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 });
   if (a >= 1e9) return (v / 1e9).toFixed(2) + 'B';
   if (a >= 1e6) return (v / 1e6).toFixed(2) + 'M';
@@ -63,9 +69,9 @@ export const fmt = (n: number | null | undefined, d?: number) => {
   if (a >= 1) return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
   if (a === 0) return '0';
   if (a >= 0.0001) return v.toLocaleString(undefined, { maximumFractionDigits: 6 });
-  return v.toExponential(2);
+  return small(v);
 };
-export const usd = (n: number | null | undefined) => (n == null || !isFinite(n as number) ? '–' : '$' + fmt(n, Math.abs(n as number) < 1 ? 4 : 2));
+export const usd = (n: number | null | undefined) => (n == null || !isFinite(n as number) ? '–' : n === 0 ? '$0' : Math.abs(n as number) < 0.01 ? (n < 0 ? '-$' : '$') + small(Math.abs(n as number)) : '$' + fmt(n, Math.abs(n as number) < 1 ? 4 : 2));
 export const pct = (v: number | null | undefined) => (v == null || !isFinite(v as number) ? null : v);
 export const pctHtml = (v: number | null | undefined, cls = '') => {
   if (v == null || !isFinite(v as number)) return `<span class="mut ${cls}">–</span>`;

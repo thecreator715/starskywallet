@@ -5,7 +5,7 @@
 // No company server holds anything. Anyone can rebuild the same network from the chain, and nobody can post as you without your key.
 import { ctx } from './ctx.ts';
 import * as PM from './procmodal.ts';
-import { amtTx, esc, fmt, hexName } from './util.ts';
+import { amtTx, esc, fmt, hexName, small } from './util.ts';
 import { ipfsAdd, mintFromImage } from './nft.ts';
 import * as CAM from './camera.ts';
 import { base } from './nodelink.ts';
@@ -96,7 +96,7 @@ interface Px { usd: number; chg: number; hist: number[] }
 let PX: Record<string, Px> = {}, pxAt = 0;
 async function loadPrices() { if (Date.now() - pxAt < 60000) return; pxAt = Date.now(); const j = await pcall('prices'); if (j && j.tokens) { PX = j.tokens; updCard(); paint(); } }
 const pxFor = (sym: string): { sym: string; p: Px } | null => { const s = sym.replace(/^\$/, '').toUpperCase(); for (const c of [s, s + 'Z', s + 'X']) for (const k of Object.keys(PX)) if (k.toUpperCase() === c) return { sym: k, p: PX[k] }; return null; };
-const usdFmt = (n: number) => '$' + (n >= 1 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n >= 0.01 ? n.toFixed(4) : n.toPrecision(3));
+const usdFmt = (n: number) => '$' + (n >= 1 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n >= 0.01 ? n.toFixed(4) : n > 0 ? small(n) : '0');
 function spark(h: number[], up: boolean) {
   const a = h.length > 1 ? h : [h[0] || 0, h[0] || 0], mn = Math.min(...a), mx = Math.max(...a), W = 300, H = 56, dy = mx - mn || 1, col = up ? '#34d399' : '#f87171';
   const pts = a.map((v, i) => `${(i / (a.length - 1) * W).toFixed(1)},${(H - 4 - ((v - mn) / dy) * (H - 10)).toFixed(1)}`);
