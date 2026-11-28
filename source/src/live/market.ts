@@ -244,7 +244,7 @@ export async function supplyOf(a: Asset): Promise<number | null> {
   return k ? Number(ob[k]) : 0;
 }
 /** every asset on the network that has a pool, plus any extra assets (the wallet's lines, watch list) */
-export async function tokenTable(extra: Asset[] = []): Promise<{ rows: TokenRow[]; now: Snap; ws: WinSnap[] }> {
+export async function tokenTable(extra: Asset[] = [], fast = false): Promise<{ rows: TokenRow[]; now: Snap; ws: WinSnap[] }> {
   const [ws, now] = await Promise.all([windowSnaps(), snapshot()]);
   const keys = new Set<string>(['native']);
   for (const p of now.pools) {
@@ -255,7 +255,7 @@ export async function tokenTable(extra: Asset[] = []): Promise<{ rows: TokenRow[
   for (const a of await discoverTokens().catch(() => [] as Asset[])) keys.add(akey(a)); // every token on the ledger, pooled or not
   const useUsd = now.usdPerNative != null;
   const mode = (s: Snap, k: string) => (useUsd ? (s.usdPerNative != null ? usdPx(s, k) : null) : (s.px.get(k) ?? null));
-  const rows = await pool([...keys].filter(k => k === 'native' || !isOldUsd(fromKey(k))), 12, async k => {
+  const rows = await pool([...keys].filter(k => k === 'native' || !isOldUsd(fromKey(k))), fast ? 40 : 12, async k => {
     const a = fromKey(k);
     const np = now.px.get(k) ?? null,
       up = usdPx(now, k);
@@ -263,8 +263,8 @@ export async function tokenTable(extra: Asset[] = []): Promise<{ rows: TokenRow[
     const ch: Record<string, number | null> = {},
       part: Record<string, boolean> = {};
     const mine = now.pools.filter(p => akey(p.a) === k || akey(p.b) === k);
-    const firsts = k === 'native' || !mine.length ? [] : await Promise.all(mine.map(p => firstSeen(p)));
-    const listed = k === 'native' ? await Promise.all(now.pools.map(p => firstSeen(p))).then(a => (a.length ? Math.min(...a) : null)) : firsts.length ? Math.min(...firsts) : null;
+    const firsts = fast || k === 'native' || !mine.length ? [] : await Promise.all(mine.map(p => firstSeen(p)));
+    const listed = fast ? null : k === 'native' ? await Promise.all(now.pools.map(p => firstSeen(p))).then(a => (a.length ? Math.min(...a) : null)) : firsts.length ? Math.min(...firsts) : null;
     let listedSnap: Snap | null = null;
     for (const w of ws) {
       const had = w.snap.px.has(k) && (mode(w.snap, k) != null);
@@ -285,7 +285,7 @@ export async function tokenTable(extra: Asset[] = []): Promise<{ rows: TokenRow[
         if (pa != null && pb != null) tvl += akey(p.a) === k ? p.ra * pa : p.rb * pb;
       }
     }
-    const sup = await supplyOf(a);
+    const sup = fast ? null : await supplyOf(a);   // fast pass: no per-token supply or history reads, those arrive in the full pass
     return {
       key: k,
       a,

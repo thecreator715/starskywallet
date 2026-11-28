@@ -423,7 +423,9 @@ export async function loadAssets() {
     }
     const lineAssets: Asset[] = (MK.bal ? MK.bal.lines : []).map((l: any) => ({ c: l.currency, i: l.account }));
     const [regList, bl] = await Promise.all([regP, blP]);
-    const [t] = await Promise.all([M.tokenTable([...lineAssets, ...regList.map(x => x.a), ...bl]), M.poolRefs().catch(() => [])]);
+    const allX = [...lineAssets, ...regList.map(x => x.a), ...bl];
+    // pass 1 (fast): every token with its price and balance, no supply or history reads, so the real table is on screen straight away
+    const [t1] = await Promise.all([M.tokenTable(allX, true), M.poolRefs().catch(() => [])]);
     if (!$('pa')) return;
     const lpLines = (MK.bal ? MK.bal.lines : []).filter((l: any) => +l.balance > 0 && M.lpPoolOf({ c: l.currency, i: l.account }));
     const lps = await Promise.all(
@@ -437,13 +439,16 @@ export async function loadAssets() {
         return { l, ref, st };
       })
     );
+    if (!PA.data) { PA.data = { t: t1, reg: new Map(regList.map(x => [x.key, x])), lps, pools: [] }; renderAssets(); }
     const prefs = await M.poolRefs().catch(() => [] as M.PoolRef[]);
-    // show the token table now; every pool's reserves load after, for the pool tabs
-    PA.data = { t, reg: new Map(regList.map(x => [x.key, x])), lps, pools: PA.data ? PA.data.pools : [] };
+    // every pool's reserves (for the pool tabs) load alongside pass 2
+    const poolsP = Pool_all(prefs).then(pools => { PA.data = { ...PA.data, pools }; if ($('pa')) renderAssets(); });
+    // pass 2: supply, market cap and the 1h/24h/7d history, filled in behind it
+    const t = await M.tokenTable(allX);
+    if (!$('pa')) return;
+    PA.data = { ...PA.data, t, reg: new Map(regList.map(x => [x.key, x])), lps };
     renderAssets();
-    const pools = await Pool_all(prefs);
-    PA.data = { ...PA.data, pools };
-    renderAssets();
+    await poolsP;
   } catch (e: any) {
     setHtml('pa', wait('Could not read the node: ' + esc(e?.message || e)));
   } finally {
