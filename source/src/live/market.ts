@@ -403,11 +403,11 @@ export async function candles(m: Market, range: RangeDef): Promise<{ list: Candl
   const first = isFinite(range.sec) ? Math.max(i.minSeq, Math.round(i.seq - range.sec / per)) : i.minSeq;
   const clamped = isFinite(range.sec) && i.seq - range.sec / per < i.minSeq - 1;
   const n = range.candles;
-  const stepSeq = Math.max(1, Math.round((i.seq - first) / (n * 2)));
+  const stepSeq = Math.max(1, Math.round((i.seq - first) / n));
   const seqs: number[] = [];
-  for (let k = 0; k <= n * 2; k++) {
-    let s = Math.round(first + ((i.seq - first) * k) / (n * 2));
-    s = k === n * 2 ? i.seq : Math.max(first, Math.round(s / stepSeq) * stepSeq);
+  for (let k = 0; k <= n; k++) {   // one reading per candle edge (half the reads it used to take)
+    let s = Math.round(first + ((i.seq - first) * k) / n);
+    s = k === n ? i.seq : Math.max(first, Math.round(s / stepSeq) * stepSeq);
     seqs.push(Math.min(s, i.seq));
   }
   const refs = await poolRefs();
@@ -416,7 +416,7 @@ export async function candles(m: Market, range: RangeDef): Promise<{ list: Candl
   const list: Candle[] = [];
   let lastP: number | null = null;
   for (let c = 0; c < n; c++) {
-    const trio = [pts[c * 2], pts[c * 2 + 1], pts[c * 2 + 2]];
+    const trio = [pts[c], pts[c], pts[c + 1]];
     const ps = trio.map(x => x.p).filter(x => x != null && x > 0) as number[];
     if (!ps.length) continue;
     const o = trio[0].p ?? lastP ?? ps[0],
@@ -424,7 +424,7 @@ export async function candles(m: Market, range: RangeDef): Promise<{ list: Candl
     const q0 = trio[0].qres,
       q2 = trio[2].qres;
     list.push({
-      t: nowMs - (i.seq - seqs[c * 2]) * per * 1000,
+      t: nowMs - (i.seq - seqs[c]) * per * 1000,
       o: o as number,
       h: Math.max(...ps, o as number),
       l: Math.min(...ps, o as number),

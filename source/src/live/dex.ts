@@ -92,10 +92,29 @@ const lastPair = (): { id: string; inv: boolean; fl: boolean } | null => { try {
 const savePair = () => { try { if (DX.mid) localStorage.setItem(LPK, JSON.stringify({ id: DX.mid, inv: DX.inv, fl: DX.flipped })); } catch {} };
 const nm = (a: Asset) => M.labelOf(a);
 // never leave the chart on "Reading price history…": give up after 30s or on any error and show why, with a retry
-async function safeCandles(m: M.Market): Promise<any> {
+async function safeCandles(m: M.Market, up?: (c: any) => void): Promise<any> {
+  const r0 = RANGE();
+  const key = 'cd2|' + m.id + '|' + JSON.stringify([m.base, m.quote]) + '|' + r0.k;
+  const slow = async () => { const r = RANGE(); return M.candles(m, r); };
+  const quick = async () => { const r = RANGE(); const q = await Promise.race([M.quickCandles(m, r).catch(() => null), new Promise<null>(res => setTimeout(() => res(null), 6000))]); return q && q.list.length > 1 ? q : null; };
   let to: any;
   try {
-    return await Promise.race([(async () => { const r = RANGE(); if (r.sec <= 3600) { const q = await Promise.race([M.quickCandles(m, r).catch(() => null), new Promise<null>(res => setTimeout(() => res(null), 5000))]); if (q && q.list.length) return q; } return M.candles(m, r); })(), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('The node took too long to answer.')), 25000); })]);
+    // 1) last time's chart for this pair and range, shown at once and refreshed behind it
+    const hit = (() => { try { const j = JSON.parse(localStorage.getItem('starsky.cc.' + 'cdq|' + key) || 'null'); return j && j.v && j.v.list && j.v.list.length > 1 ? j.v : null; } catch { return null; } })();
+    const refresh = async () => {
+      const q = await quick();
+      if (q) { try { localStorage.setItem('starsky.cc.cdq|' + key, JSON.stringify({ t: Date.now(), v: q })); } catch {} }
+      return q;
+    };
+    if (hit) { refresh().then(q => q && up && up(q)).catch(() => {}); return hit; }
+    // 2) trades-based chart from the pool's own history: one read, so the chart is up in a moment
+    const q = await refresh();
+    if (q) {
+      // 3) the exact ledger-by-ledger history follows for the longer ranges and replaces it when ready
+      if (up && r0.sec > 3600) Promise.race([slow(), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('slow')), 60000); })]).then((c: any) => c && c.list && c.list.length > 3 && c.list.length >= q.list.length * 0.6 && up(c)).catch(() => {}).finally(() => clearTimeout(to));
+      return q;
+    }
+    return await Promise.race([slow(), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('The node took too long to answer.')), 40000); })]);
   } catch (e: any) {
     return { list: [], first: 0, clamped: false, note: 'Could not read price history: ' + String(e?.message || e) + ' Tap a range to retry.' };
   } finally { clearTimeout(to); }
@@ -267,7 +286,7 @@ export async function load(keepSelection = true) {
     const m = mkt() as M.Market;
     const jobs: Promise<any>[] = [
       loadBal().then(() => !stale(g) && (renderTrade(), renderTok())),
-      safeCandles(m).then(c => {
+      safeCandles(m, c2 => { if (!stale(g) && DX.mid + (DX.inv ? '~' : '') === DX.loadedMid) { DX.cd = c2; renderChart(); renderHead(); } }).then(c => {
         if (stale(g)) return;
         DX.cd = c;
         renderChart();
@@ -1029,7 +1048,7 @@ export const api: any = {
     const m = mkt();
     const g = DX.gen;
     if (m)
-      safeCandles(m).then(c => {
+      safeCandles(m, c2 => { if (!stale(g) && DX.range === k) { DX.cd = c2; renderChart(); renderHead(); } }).then(c => {
         if (stale(g) || DX.range !== k) return;
         DX.cd = c;
         renderChart();
