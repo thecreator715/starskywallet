@@ -19,7 +19,7 @@ export interface Cfg { name: string; token: string; mode: Mode; amount: number; 
 export interface Row { addr: string; ref: number; amt: number; skip?: string }
 export interface Ev { t: number; camp: string; run: string; to: string; token: string; amt: number; ok: boolean; hash?: string; msg?: string }
 interface Camp { id: string; cfg: Cfg; auto: { on: boolean; hours: number; last: number }; paid: string[] }
-type VW = 'new' | 'camps' | 'stats' | 'log';
+type VW = 'new' | 'camps' | 'snaps' | 'stats' | 'log';
 let VIEW = 'new' as VW;
 let CFG: Cfg = { name: '', token: 'native', mode: 'fixed', amount: 1, pct: 1, ref: 'native', minRef: 0, cap: 0, onePer: true, list: '', source: 'list', holdTok: '', maxN: 200, exclude: '', memo: '' };
 let PREV: Row[] = [], PMSG = '', running = false, stop = false, prog = { n: 0, of: 0, ok: 0, bad: 0 }, BAL: { native: number; lines: any[] } | null = null, tmr: any = 0, TOK: Asset[] = [];
@@ -36,9 +36,9 @@ async function loadBal() {
 async function holderOf(a: Asset, addr: string): Promise<number> {
   try { if (isNative(a)) { const r = await ctx.req('account_info', { account: addr, ledger_index: 'validated' }); return Number(r.account_data.Balance) / 1e6; } const r = await ctx.req('account_lines', { account: addr, peer: a.i, ledger_index: 'validated', limit: 50 }); const l = (r.lines || []).find((x: any) => x.currency === a.c); return l ? Number(l.balance) : 0; } catch { return 0; }
 }
-async function holdersOf(a: Asset, max: number): Promise<{ addr: string; bal: number }[]> {
+async function holdersOf(a: Asset, max: number, pages = 8): Promise<{ addr: string; bal: number }[]> {
   if (isNative(a)) return []; const out: { addr: string; bal: number }[] = []; let marker: any;
-  for (let p = 0; p < 8 && out.length < max; p++) { const r: any = await ctx.req('account_lines', { account: a.i, ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) }); for (const l of r.lines || []) if (l.currency === a.c && Number(l.balance) < 0) out.push({ addr: l.account, bal: -Number(l.balance) }); marker = r.marker; if (!marker) break; }
+  for (let p = 0; p < pages && out.length < max; p++) { const r: any = await ctx.req('account_lines', { account: a.i, ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) }); for (const l of r.lines || []) if (l.currency === a.c && Number(l.balance) < 0) out.push({ addr: l.account, bal: -Number(l.balance) }); marker = r.marker; if (!marker) break; }
   return out.slice(0, max);
 }
 export async function preview() {
@@ -95,6 +95,26 @@ function tickAuto() { if (running || !ctx.account() || !ctx.online()) return; co
 export function startAuto() { clearInterval(tmr); tmr = setInterval(tickAuto, 60000); }
 export function exportCsv() { const l = LOG(); const s = 'time,campaign,run,to,token,amount,ok,hash,error\n' + l.map(e => [new Date(e.t).toISOString(), e.camp, e.run, e.to, e.token, e.amt, e.ok, e.hash || '', (e.msg || '').replace(/[",\n]/g, ' ')].join(',')).join('\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([s], { type: 'text/csv' })); a.download = 'airdrops.csv'; a.click(); }
 export function clearLog() { if (confirm('Clear the activity log on this device?')) { saveLog([]); paint(); } }
+// ---------- holder snapshots: capture every wallet that holds a token at one moment ----------
+interface Snap { id: string; t: number; token: string; name: string; label: string; rows: [string, number][] }
+const SK = () => `starsky.airdrop.snaps.${net()}`; const SNAPS = (): Snap[] => rd(SK(), []); let SMSG = '';
+export async function snapshot() {
+  const tok = fromKey(($('ad_stok') || { value: CFG.token }).value || CFG.token); if (isNative(tok)) { SMSG = 'bad:Pick a token with an issuer. The native coin has no holder list on the issuer.'; return paint(); }
+  SMSG = 'Reading every holder… this can take a minute for big tokens.'; paint();
+  try { const h = await holdersOf(tok, 50000, 150); const rows: [string, number][] = h.map(x => [x.addr, x.bal] as [string, number]).sort((a, b) => b[1] - a[1]); const label = (($('ad_slabel') || { value: '' }).value || '').trim();
+    const sn: Snap = { id: 's' + Date.now().toString(36), t: Date.now(), token: akey(tok), name: nm(tok), label, rows }; const all = SNAPS(); all.push(sn); let json = JSON.stringify(all.slice(-6)); while (json.length > 4.2e6 && all.length > 1) { all.shift(); json = JSON.stringify(all.slice(-6)); } try { localStorage.setItem(SK(), json); } catch { SMSG = 'bad:Snapshot taken (' + rows.length + ' holders) but this browser has no room to keep it. Download the CSV now.'; dl(sn); return paint(); }
+    SMSG = `ok:Captured ${rows.length.toLocaleString()} ${nm(tok)} holders (${fmt(rows.reduce((s, r) => s + r[1], 0), 4)} in total).`; } catch (e: any) { SMSG = 'bad:' + String(e?.message || e); } paint();
+}
+function dl(sn: Snap) { const csv = 'address,balance\n' + sn.rows.map(r => r[0] + ',' + r[1]).join('\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `holders-${sn.name}-${new Date(sn.t).toISOString().slice(0, 10)}.csv`; a.click(); }
+export function snapCsv(id: string) { const sn = SNAPS().find(x => x.id === id); if (sn) dl(sn); }
+export function snapDel(id: string) { if (!confirm('Delete this snapshot?')) return; wr(SK(), SNAPS().filter(x => x.id !== id)); paint(); }
+export function snapUse(id: string, min = 0) { const sn = SNAPS().find(x => x.id === id); if (!sn) return; const mn = Number(($('ad_smin') || { value: String(min) }).value) || 0; CFG.source = 'list'; CFG.ref = sn.token; CFG.list = sn.rows.filter(r => r[1] >= mn).map(r => r[0]).join('\n'); CFG.maxN = Math.max(CFG.maxN, sn.rows.length); VIEW = 'new'; PREV = []; PMSG = ''; paint(); ctx.toast('Snapshot loaded as the recipient list'); }
+function snapsHtml(): string {
+  const all = SNAPS().slice().reverse(), pm = SMSG.split(':'), pk = pm[0], pt = pm.slice(1).join(':');
+  const diff = (sn: Snap) => { const prev = SNAPS().filter(x => x.token === sn.token && x.t < sn.t).pop(); if (!prev) return ''; const a = new Set(prev.rows.map(r => r[0])), b = new Set(sn.rows.map(r => r[0])); const nw = sn.rows.filter(r => !a.has(r[0])).length, gone = prev.rows.filter(r => !b.has(r[0])).length; return `<span class="mut">since the last one: +${nw} new, −${gone} left</span>`; };
+  return `<div class="card c12"><div class="k">Take a snapshot</div><div class="mut" style="font-size:.84rem;margin:.3rem 0">Captures the address and balance of every wallet that holds a token right now, so you can air drop to exactly those wallets later, or download the list.</div><div class="row" style="gap:.5rem;flex-wrap:wrap;align-items:center">${tokSel('ad_stok', CFG.token, '')}<input id="ad_slabel" placeholder="Label (optional)" style="width:11rem"><button class="pri sm" onclick="window.ad.snapshot()">Snapshot holders</button></div>${pt ? `<div style="margin-top:.5rem;color:${pk === 'bad' ? RED : pk === 'ok' ? GREEN : 'inherit'}">${esc(pt)}</div>` : ''}</div>
+  <div class="card c12"><div class="k">Saved snapshots</div>${all.length ? `<div style="overflow:auto"><table style="width:100%;font-size:.86rem"><tr class="mut" style="text-align:left"><th>Taken</th><th>Token</th><th>Holders</th><th>Total held</th><th>Top holder</th><th></th></tr>${all.map(sn => `<tr><td>${esc(new Date(sn.t).toLocaleString())}${sn.label ? '<br><b>' + esc(sn.label) + '</b>' : ''}</td><td>${esc(sn.name)}</td><td>${sn.rows.length.toLocaleString()}<br>${diff(sn)}</td><td>${fmt(sn.rows.reduce((x, r) => x + r[1], 0), 4)}</td><td class="mono">${sn.rows[0] ? esc(short(sn.rows[0][0], 6, 4)) + ' · ' + fmt(sn.rows[0][1], 2) : '–'}</td><td style="white-space:nowrap"><button class="sm" onclick="window.ad.snapUse('${sn.id}')">Air drop to these</button> <button class="sm" onclick="window.ad.snapCsv('${sn.id}')">CSV</button> <button class="sm" onclick="window.ad.snapDel('${sn.id}')">Delete</button></td></tr>`).join('')}</table></div><div class="row" style="gap:.4rem;align-items:center;margin-top:.5rem"><span class="mut">Only wallets holding at least</span><input id="ad_smin" value="0" style="width:6rem"><span class="mut">(applies to “Air drop to these”)</span></div>` : '<div class="mut" style="margin-top:.4rem">No snapshots yet.</div>'}</div>`;
+}
 export function view(v: VW) { VIEW = v; paint(); }
 
 // ---------- drawing ----------
@@ -135,13 +155,13 @@ function logHtml(): string {
   const l = LOG().slice().reverse().slice(0, 300);
   return `<div class="card c12"><div class="row" style="gap:.5rem;align-items:center"><div class="k">Activity log</div><span class="grow"></span><button class="sm" onclick="window.ad.exportCsv()">Download CSV</button><button class="sm" onclick="window.ad.clearLog()">Clear</button></div><div style="overflow:auto;max-height:32rem"><table style="width:100%;font-size:.82rem;margin-top:.4rem"><tr class="mut" style="text-align:left"><th>Time</th><th>Campaign</th><th>To</th><th>Amount</th><th>Result</th></tr>${l.map(e => `<tr><td>${esc(new Date(e.t).toLocaleString())}</td><td>${esc(e.camp)}</td><td class="mono">${esc(short(e.to, 8, 6))}</td><td>${fmt(e.amt, 6)} ${esc(e.token)}</td><td>${e.ok ? chip('sent', GREEN) + ' <span class="mono mut">' + esc(short(e.hash || '', 6, 4)) + '</span>' : chip('failed', RED) + ' <span class="mut">' + esc(e.msg || '') + '</span>'}</td></tr>`).join('') || '<tr><td colspan="5" class="mut">Nothing yet.</td></tr>'}</table></div></div>`;
 }
-const TABS: [VW, string][] = [['new', 'New air drop'], ['camps', 'Campaigns & automation'], ['stats', 'Analytics'], ['log', 'Activity log']];
+const TABS: [VW, string][] = [['new', 'New air drop'], ['camps', 'Campaigns & automation'], ['snaps', 'Holder snapshots'], ['stats', 'Analytics'], ['log', 'Activity log']];
 export function shell() { return `<div id="ad_root" style="width:100%"><div class="row" id="ad_tabs" style="gap:.4rem;margin-bottom:.7rem;flex-wrap:wrap"></div><div id="ad_body" class="grid" style="width:100%"></div></div>`; }
 function paint() {
   const t = document.getElementById('ad_tabs'), b = document.getElementById('ad_body'); if (!t || !b) return;
   t.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.ad.view('${k}')">${l}</button>`).join('');
   const a = document.activeElement as HTMLElement | null; if (a && b.contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName) && VIEW === 'new') return;   // never wipe what is being typed
-  b.innerHTML = VIEW === 'new' ? newHtml() : VIEW === 'camps' ? campsHtml() : VIEW === 'stats' ? statsHtml() : logHtml();
+  b.innerHTML = VIEW === 'new' ? newHtml() : VIEW === 'camps' ? campsHtml() : VIEW === 'snaps' ? snapsHtml() : VIEW === 'stats' ? statsHtml() : logHtml();
 }
 export async function mount() { paint(); await loadBal(); paint(); startAuto(); }
-export const api = { view, set, preview, saveCamp, loadCamp, delCamp, auto, run, stopRun, exportCsv, clearLog };
+export const api = { snapshot, snapCsv, snapDel, snapUse, view, set, preview, saveCamp, loadCamp, delCamp, auto, run, stopRun, exportCsv, clearLog };

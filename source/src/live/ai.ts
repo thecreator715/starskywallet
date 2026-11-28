@@ -3,6 +3,7 @@
 import { ctx } from './ctx.ts';
 import { esc, fmt, short, akey, NATIVE, isNative, amtTx, type Asset } from './util.ts';
 import * as M from './market.ts';
+import { publicGet } from './devapi.ts';
 import { parse, LEGEND, type Intent } from './aiParse.ts';
 
 interface Msg { who: 'me' | 'ai'; html: string; id: number }
@@ -55,8 +56,9 @@ async function swapCard(it: Intent) {
   if (!(x > 0)) return say(`You have no ${esc(nm(from))} to trade.`);
   if (x > bal + 1e-9) return say(`You have ${fmt(bal)} ${esc(nm(from))}, which is less than ${fmt(x)}. ${chips([`trade all my ${nm(from)} for ${nm(to)}`, `trade half my ${nm(from)} for ${nm(to)}`])}`);
   const q = await M.quote(m, side, x); if (!q) return say('There is not enough liquidity for that size. Try a smaller amount.');
-  const slip = it.slip && it.slip > 0 && it.slip <= 50 ? it.slip : 1, min = q.out * (1 - slip / 100);
-  const warns: string[] = []; if (q.impact > 0.05) warns.push(`High price impact: ${(q.impact * 100).toFixed(1)}%.`); else if (q.impact > 0.02) warns.push(`Price impact ${(q.impact * 100).toFixed(1)}%.`);
+  const P0 = POL || {}, slip = it.slip && it.slip > 0 && it.slip <= 50 ? Math.min(it.slip, P0.maxSlipPct || 50) : (P0.defaultSlipPct || 1), min = q.out * (1 - slip / 100);
+  const warns: string[] = []; if (P0.maxImpactPct && q.impact * 100 > P0.maxImpactPct) return say(`That would move the price by ${(q.impact * 100).toFixed(1)}%, above the ${P0.maxImpactPct}% limit set for trades here. Try a smaller amount.`);
+  if (q.impact > 0.05) warns.push(`High price impact: ${(q.impact * 100).toFixed(1)}%.`); else if (q.impact > 0.02) warns.push(`Price impact ${(q.impact * 100).toFixed(1)}%.`);
   if (isNative(from) && bal - x < 0.5) warns.push('This leaves almost nothing for fees.'); if (!hasLine(to)) warns.push(`${nm(to)} needs a trust line. Accept adds it first (a small reserve is held).`);
   const c: Card = { id: seq++, kind: 'swap', state: 'ready', data: { from, to, m, side, x, q, min, slip, warns } }; CARDS.push(c); lastCard = c.id;
   say(`Here is what that would do. Nothing is sent until you press Accept.<div data-card="${c.id}"></div>`);
@@ -89,8 +91,12 @@ async function historyReply() {
   say(t.length ? `<table class="aitb">${t.map((e: any) => { const x = e.tx || e.tx_json || {}; return `<tr><td>${esc(x.TransactionType || '')}</td><td class="mono">${esc(short(e.hash || x.hash || '', 8, 6))}</td><td class="mut">${esc((e.meta || e.metaData || {}).TransactionResult || '')}</td></tr>`; }).join('')}</table>` : 'No transactions yet.');
 }
 function go(tab: string, after?: () => void) { (window as any).goTab(tab); if (after) setTimeout(after, 400); }
+let POL: any = null, polAt = 0;
+async function policy() { if (Date.now() - polAt < 300000) return POL; polAt = Date.now(); const j = await publicGet('/api/public/ai'); POL = j && j.ok ? j : null; return POL; }
+const KMAP: Record<string, string> = { swap: 'swap', send: 'send', balance: 'balance', price: 'price', history: 'history', lend: 'lend', check: 'check', bridge: 'bridge', api: 'api', nav: 'nav' };
 async function handle(text: string) {
-  const it = parse(text, prev); const gate = (k: string) => k;
+  const it = parse(text, prev); const gate = (k: string) => k; const P = await policy();
+  if (P) { if (P.enabled === false) return say('The AI page is switched off right now. You can still do everything from the other pages.'); const k = KMAP[it.kind]; if (k && Array.isArray(P.disabled) && P.disabled.includes(k)) return say('That request is turned off by the network operator for now. You can do it from the normal page instead.'); if (P.notice && !(P as any).__shown) { (P as any).__shown = 1; say('<b>Notice:</b> ' + esc(String(P.notice))); } if (it.slip && P.maxSlipPct && it.slip > P.maxSlipPct) it.slip = P.maxSlipPct; }
   if (it.kind === 'yes') { const c = cardOf(lastCard); if (c && c.state === 'ready') return void accept(c.id); return say('Nothing is waiting for your answer.'); }
   if (it.kind === 'cancel') { const c = cardOf(lastCard); if (c && c.state === 'ready') { c.state = 'cancelled'; paint(true); return; } prev = null; return say('Okay.'); }
   if (it.kind === 'help') return say(legendHtml());

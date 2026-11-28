@@ -40,6 +40,7 @@ async function http(method: string, path: string, body?: any, key?: string): Pro
   }
   throw new Error(last);
 }
+export async function publicGet(path: string): Promise<any | null> { try { const x = await http('GET', path); return x.s === 200 ? x.j : null; } catch { return null; } }
 export async function load(force = false) {
   if (!document.getElementById('dv_root')) return; if (busy && !force) return; busy = true;
   try {

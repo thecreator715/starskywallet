@@ -97,6 +97,7 @@ const KIND: Record<string, { title: string; verb: string; money: 'in' | 'out'; b
   withdrawcol: { title: 'Take back collateral', verb: 'Take back collateral', money: 'out', blurb: 'Unlocks collateral you do not need. Not allowed if it would push your loan past the borrow limit.' },
   borrow: { title: 'Borrow', verb: 'Borrow', money: 'out', blurb: 'You receive the money now and owe it back with interest. Your collateral is at risk if your health factor falls under 1.' },
   repay: { title: 'Repay', verb: 'Repay', money: 'in', blurb: 'Pays down your debt. If you send more than you owe, the extra is returned.' },
+  claim: { title: 'Claim hold rewards', verb: 'Claim', money: 'out', blurb: 'Your hold interest, paid out of the rewards pool. What you do not claim keeps accruing.' },
 };
 function ready(): string {
   const s = OP.snap; if (!s) return 'Not connected to the lending operator yet.'; if (!s.set) return 'The operator has not set up lending yet.'; if (s.mode !== 'on') return 'Lending is switched off by the operator right now.';
@@ -182,6 +183,15 @@ export async function act(kind: string) {
     });
   } catch (e: any) { pg.fail(String(e?.message || e)); }
 }
+export async function claim(a: string) {
+  const bad = ready(); if (bad) return ctx.toast(bad, true); const acc = ctx.account()!, p: any = pos(), e = p && p.earnings && p.earnings.per.find((x: any) => x.asset === a); if (!e || !(e.accrued >= 0.000001)) return ctx.toast('Nothing to claim yet.', true);
+  if (e.poolLeft < e.accrued) return ctx.toast(`The rewards pool holds ${N(e.poolLeft, 4)} ${a === 'LUMA' ? ctx.native() : a}, less than your ${N(e.accrued, 4)}. Your earnings keep growing and can be claimed after the operator tops it up.`, true);
+  await readWallet(acc); const nmA = a === 'LUMA' ? ctx.native() : 'USD';
+  const ok = await PM.review({ title: 'Claim hold rewards', tone: 'buy', hero: `<div style="font-size:1.4rem;font-weight:800">≈ ${N(e.accrued, 6)} ${esc(nmA)}</div><div class="mut">${esc(KIND.claim.blurb)}</div>`, rows: [{ k: 'Asset', v: esc(nmA) }, { k: 'Paid from', v: 'The lending rewards pool' }, { k: 'Network fee', v: '~0.00001 ' + esc(ctx.native()) + ' (plus 1 drop to carry the request)' }], confirm: 'Claim' });
+  if (!ok) return; const asset = a as any as Asset;
+  if (a === 'USD' && !(await ensureUsdLine(acc))) return; const r = await send('claim', asset, 0); if (!r.ok) return ctx.toast(r.msg || 'The network refused the request', true);
+  ctx.toast('Claim sent. It arrives in a few seconds.'); setTimeout(() => void load(true), 6000); setTimeout(() => void load(true), 15000);
+}
 export async function liquidate(target: string, debtAsset: Asset, col: Asset) {
   const bad = ready(); if (bad) return ctx.toast(bad, true); const acc = ctx.account()!; await readWallet(acc);
   const v = (LIQ && LIQ.list.find((x: any) => x.classic === target)); if (!v) return ctx.toast('That position is no longer liquidatable.', true);
@@ -237,8 +247,12 @@ function actionsHtml(): string {
   const w = ctx.account() ? `<div class="mut" style="font-size:.84rem">In this wallet: <b>${N(WAL.LUMA, 4)} ${esc(ctx.native())}</b> · <b>${WAL.usdLine ? N(WAL.USD, 4) + ' USD' : 'no USD trust line'}</b></div>` : '';
   const row = (a: Asset) => { const e = per(a); const m = mkt(a); return `<tr><td><b>${esc(nm(a))}</b></td><td>${N(e.supplied, 4)}</td><td>${N(e.collateral, 4)}</td><td style="color:${e.debt > 0 ? AMB : 'inherit'}">${N(e.debt, 4)}</td><td>${m ? PCT(m.supplyApy) : '–'} / ${m ? PCT(m.borrowApy) : '–'}</td></tr>`; };
   const summary = p ? `<div class="row" style="gap:.6rem;flex-wrap:wrap;width:100%;margin-top:.6rem">${tile('Health factor', p.debtUsd > 0 ? hfTxt(p.healthFactor) : '–', p.debtUsd > 0 ? 'under 1.00 means liquidation' : 'no loan open')}${tile('Collateral', USD(p.collateralUsd), 'borrow up to ' + USD(p.maxBorrowUsd))}${tile('Debt', USD(p.debtUsd), p.debtUsd > 0 ? 'loan to value ' + PCT(p.ltv, 1) : '')}${tile('Can still borrow', USD(Math.max(0, p.maxBorrowUsd - p.debtUsd)), '')}${tile('Liquidation price', p.liquidation && p.debtUsd > 0 ? `${esc(ctx.native())} ${p.liquidation.when === 'below' ? 'under' : 'over'} $${N(p.liquidation.price, 4)}` : '–', p.debtUsd > 0 && px('LUMA') ? 'now $' + N(px('LUMA'), 4) : '')}</div>` : '<div class="mut" style="margin-top:.5rem">No position yet. Supply to earn interest, or lock collateral to borrow.</div>';
+  const E = p && (p as any).earnings, ER = (OP.snap as any).rewards;
+  const earn = E ? `<div class="card c12" style="margin-top:.6rem"><div class="row" style="align-items:center;gap:.6rem;flex-wrap:wrap"><div class="k">Hold earnings</div>${chip(PCT(E.apr, 1) + ' a year on what you keep supplied', GREEN)}<span class="grow"></span><span class="mut" style="font-size:.8rem">${ER ? 'Rewards pool: ' + E.per.map((x: any) => N(x.poolLeft, 2) + ' ' + esc(x.asset === 'LUMA' ? ctx.native() : 'USD')).join(' · ') : ''}</span></div>
+  <div class="row" style="gap:.6rem;flex-wrap:wrap;width:100%;margin-top:.5rem">${tile('Ready to claim', USD(E.accruedUsd), E.per.map((x: any) => N(x.accrued, 6) + ' ' + esc(x.asset === 'LUMA' ? ctx.native() : 'USD')).join(' · '))}${tile('Claimed so far', USD(E.claimedUsd), E.per.map((x: any) => N(x.claimed, 6) + ' ' + esc(x.asset === 'LUMA' ? ctx.native() : 'USD')).join(' · '))}${tile('Total earned', USD(E.accruedUsd + E.claimedUsd), 'claimed plus waiting')}</div>
+  <div class="row" style="gap:.4rem;margin-top:.5rem;flex-wrap:wrap">${E.per.map((x: any) => `<button class="${x.accrued >= 0.000001 ? 'pri ' : ''}sm" ${x.accrued >= 0.000001 ? '' : 'disabled'} onclick="window.ld.claim('${x.asset}')">Claim ${esc(x.asset === 'LUMA' ? ctx.native() : 'USD')}</button>`).join('')}</div><div class="mut" style="font-size:.78rem;margin-top:.4rem">Earnings build every second on your supplied balance, on top of the normal interest. ${ER && ER.autoPayHours ? `They are also paid to you automatically every ${ER.autoPayHours} h${ER.nextAuto ? ' (next ' + new Date(ER.nextAuto).toLocaleString() + ')' : ''}, no claim needed. ` : ''}You can claim early any time. Claims are paid from a rewards pool the operator funds; if it is low, your earnings wait for the next top-up.</div></div>` : '';
   const btn = (k: string, c = '') => `<button class="sm ${c}" onclick="window.ld.act('${k}')">${KIND[k].verb}</button>`;
-  return `<div class="card c12"><div class="row" style="align-items:center;gap:.6rem"><div class="k">My position</div><span class="grow"></span><button class="sm" onclick="window.ld.load(true)">Refresh</button></div>${w}${summary}
+  return `<div class="card c12"><div class="row" style="align-items:center;gap:.6rem"><div class="k">My position</div><span class="grow"></span><button class="sm" onclick="window.ld.load(true)">Refresh</button></div>${w}${summary}${earn}
   <div style="overflow:auto;margin-top:.6rem"><table style="width:100%;font-size:.88rem"><tr class="mut" style="text-align:left"><th>Asset</th><th>Supplied</th><th>Collateral</th><th>Debt</th><th>Supply / borrow APY</th></tr>${A2.map(row).join('')}</table></div></div>
   <div class="card c12"><div class="k">Lend or borrow</div>${bad ? `<div class="mut" style="margin-top:.4rem;color:${AMB}">${esc(bad)}</div>` : ''}
   <div class="row" style="gap:.5rem;margin-top:.6rem;flex-wrap:wrap"><select id="ld_asset" onchange="window.ld.set('asset',this.value)">${A2.map(a => `<option value="${a}" ${F.asset === a ? 'selected' : ''}>${esc(nm(a))}</option>`).join('')}</select><input id="ld_amt" class="grow" style="min-width:9rem" placeholder="Amount" inputmode="decimal" value="${esc(F.amt)}" oninput="window.ld.set('amt',this.value)"><div class="row" style="gap:.25rem;flex-wrap:wrap">${['supply', 'withdraw', 'collateral', 'withdrawcol', 'borrow', 'repay'].map(k => `<button class="sm" style="opacity:.8" title="Fill the most you can ${KIND[k].verb.toLowerCase()}" onclick="window.ld.max('${k}')">max ${KIND[k].verb.toLowerCase()}</button>`).join('')}</div></div>
@@ -299,4 +313,4 @@ function paint() {
   preview();
 }
 export function mount() { clearInterval(timer); void load(true); timer = setInterval(() => { if (!document.getElementById('ld_root')) { clearInterval(timer); return; } if (document.hidden) return; const a = document.activeElement as HTMLElement | null; if (a && a.id === 'ld_amt') return; void load(); }, 8000); }
-export const api = { load, act, liq: liquidate, view, set, max, setOp };
+export const api = { load, act, claim, liq: liquidate, view, set, max, setOp };

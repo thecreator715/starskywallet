@@ -18,6 +18,7 @@ import * as Ld from './live/lending.ts';
 import * as Ai from './live/ai.ts';
 import * as Dv from './live/devapi.ts';
 import * as Ad from './live/airdrop.ts';
+import * as Hd from './live/held.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
 import * as Social from './live/social.ts';
@@ -2394,7 +2395,10 @@ export function initWindowBindings() {
   (window as any).ai = Ai.api;
   (window as any).dv = Dv.api;
   (window as any).ad = Ad.api;
+  (window as any).hd = Hd.api;
+  (window as any).sendHeld = async () => { const tx = st.pendingTx; if (!tx) return; st.pendingTx = Hd.heldTx(tx); const btn = document.getElementById('cfsend') as HTMLButtonElement | null; const r = await runTx(st.pendingTx, 'Held for the receiver. They can claim it once they add the trust line.', btn); if (r.ok) { closeModal(); (window as any).goTab('checks'); } };
   Ad.startAuto();
+  Hd.start();
   (window as any).mk = Pages.mkApi;
   (window as any).br = Pages.brApi;
   (window as any).pa = Pages.paApi;
@@ -2720,6 +2724,7 @@ export function initWindowBindings() {
         Extras.renderChecks(all, 'xchk');
         const bt = document.getElementById('cfsend') as HTMLButtonElement | null;
         if (bt && all.block.length) bt.disabled = true;
+        void Hd.offerHeld(tx, showAddr(dest), aName(a)).then(need => { const x = document.getElementById('xchk'); if (!need || !x || document.getElementById('held_opt')) return; x.insertAdjacentHTML('afterend', `<div id="held_opt" style="margin:.4rem 0 .8rem;padding:.6rem;border:1px solid #f5b84b;border-radius:10px;font-size:.86rem"><b>This wallet has no ${esc(aName(a))} trust line.</b> A direct payment would fail. You can send it as a held transfer: they get a notification, and claim it as soon as they add the trust line. It expires in 30 days if unclaimed, and you can cancel it any time.<div style="margin-top:.5rem"><button class="pri acc" onclick="window.sendHeld()">Send as held transfer</button></div></div>`); });
       });
     } catch (e: any) {
       toast(e.message, true);
