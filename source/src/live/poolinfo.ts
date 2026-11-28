@@ -69,9 +69,14 @@ async function fillCh(r: Row, ws: M.WinSnap[], un: number | null, refs: M.PoolRe
   r.chAt = Date.now();
   PL.cc.set(p.m.account, { ch, at: r.chAt });
 }
+const NOSNAP: any = { px: new Map(), usdPerNative: null };
 async function compute() {
-  const [sn, ws, refs] = await Promise.all([M.snapshot(), M.windowSnaps().catch(() => [] as M.WinSnap[]), M.poolRefs().catch(() => [] as M.PoolRef[])]);
+  const sn = await M.snapshot();
+  return computeRows(sn);
+}
+function computeRows(sn: any) {
   const un = sn.usdPerNative;
+  const refs: M.PoolRef[] = [];
   const rows: Row[] = [];
   for (let idx = 0; idx < PL.pools.length; idx++) {
     const p = PL.pools[idx];
@@ -84,7 +89,6 @@ async function compute() {
     const ch: Row['ch'] = cached ? cached.ch : {};
     rows.push({ p, idx, ka, kb, ua: na != null && un != null ? na * un : null, ub: nb != null && un != null ? nb * un : null, na, nb, valN, valU: valN != null && un != null ? valN * un : null, fwd: p.price, rev: p.price > 0 ? 1 / p.price : 0, ch, bal: m.bal, share: m.share, lp: Number(p.m.lp_token?.value || 0) });
   }
-  PL.cx = { ws, refs, un };
   return { rows, un };
 }
 const dual = (u: number | null, n: number | null, nat: string) => (u != null ? `${usd(u)}<div class="mut" style="font-size:.7rem">${n != null ? fmt(n, 2) + ' ' + esc(nat) : ''}</div>` : n != null ? fmt(n, 2) + ' ' + esc(nat) : '–');
@@ -219,12 +223,14 @@ async function paint() {
 }
 /** fetch the historic changes for the rows on screen only (a few at a time), then repaint */
 async function fillVisible() {
-  if (PL.fb || !PL.cx || !PL.data) return;
+  if (PL.fb || !PL.data) return;
   const rows: Row[] = PL.sel ? PL.data.rows.filter((x: Row) => x.p.m.account === PL.sel) : PL.vis;
   const todo = rows.filter(r => !r.chAt && !(PL.cc.get(r.p.m.account)?.at > Date.now() - 300000));
   if (!todo.length) return;
   PL.fb = true;
   try {
+    const [ws, refs] = await Promise.all([M.windowSnaps().catch(() => [] as M.WinSnap[]), M.poolRefs().catch(() => [] as M.PoolRef[])]);
+    PL.cx = { ws, refs, un: PL.data.un };
     for (let i = 0; i < todo.length; i += 6) {
       await Promise.all(todo.slice(i, i + 6).map(r => fillCh(r, PL.cx.ws, PL.cx.un, PL.cx.refs).catch(() => {})));
       if ($('pl_body')) repaintKeep();
@@ -236,7 +242,8 @@ async function fillVisible() {
 export async function mount(pools: any[], mine: (p: any) => { bal: number; share: number }) {
   PL.pools = pools;
   PL.mine = mine;
-  if (PL.data) paint();
+  if (!PL.data && PL.pools.length) { PL.data = computeRows(NOSNAP); paint(); }   // pools on screen at once, from their reserves; prices and values follow
+  else if (PL.data) paint();
   if (PL.busy || !ctx.online() || !$('pl_body')) return;
   PL.busy = true;
   try {

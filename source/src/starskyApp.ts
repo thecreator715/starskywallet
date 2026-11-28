@@ -635,6 +635,12 @@ let lastHeavy = 0;
 let lastHk = '';
 let lastPx = 0;
 let retryN = 0;
+let lastReplyAt = 0;
+// at most 10 reads on the wire at once: hundreds of parallel pool reads used to choke the node and the tunnel, which looked like a dropped connection
+let inflightN = 0;
+const waitQ: Array<() => void> = [];
+const slot = () => (inflightN < 10 ? (inflightN++, Promise.resolve()) : new Promise<void>(r => waitQ.push(() => { inflightN++; r(); })));
+const freeSlot = () => { inflightN--; const n = waitQ.shift(); if (n) n(); };
 function backoff(): number { retryN++; return Math.min(15000, 600 * Math.pow(1.6, retryN - 1)); }
 function nudge() {
   if (document.hidden) return;
@@ -657,8 +663,9 @@ export function getCandidates(): string[] {
 
 async function tryNode(url: string, gen: number): Promise<{ client: xrpl.Client; info: any }> {
   const client = new xrpl.Client(url, { connectionTimeout: 8000 });
-  client.on('disconnected', () => {
+  client.on('disconnected', (code: any) => {
     if (connectGen !== gen || st.client !== client) return;
+    Lg.log('network', 'warn', `Node socket closed (code ${code ?? '?'}) after ${Math.round((Date.now() - ((st as any).connAt || Date.now())) / 1000)}s: ${code === 1006 ? 'dropped without a close frame (network, tunnel or node restart)' : code === 1000 || code === 1001 ? 'closed by the node or tunnel' : code === 1008 || code === 1013 ? 'refused: rate or connection limit' : 'see code'}`);
     st.status = 'offline';
     st.err = `Disconnected from ${url}`;
     if (!(st as any).offSince) (st as any).offSince = Date.now();
@@ -681,6 +688,7 @@ async function tryNode(url: string, gen: number): Promise<{ client: xrpl.Client;
   return { client, info: (r.result as any).info };
 }
 
+let lastLedgerRefresh = 0;
 function handleLedgerClosed(l: any) {
   const now = Date.now();
   st.ledger = l.ledger_index;
@@ -703,7 +711,7 @@ function handleLedgerClosed(l: any) {
   st.scan.txPerLedger = st.scan.txPerLedger.slice(-40);
 
   renderTop();
-  refreshAccount(true);
+  if (now - lastLedgerRefresh > 6000) { lastLedgerRefresh = now; refreshAccount(true); }   // one refresh per ~6 s is plenty; account events refresh on their own
   if (st.tab === 'dex' && st.walletMode !== 'xrpl') Dex.tick();
 }
 
@@ -802,7 +810,7 @@ export async function connectNodes() {
     st.client = won.client;
     st.url = won.url;
     st.info = won.info;
-    st.status = 'online'; retryN = 0; Lg.log('network', 'ok', 'Connected to ' + String(won.url));
+    st.status = 'online'; retryN = 0; (st as any).connAt = Date.now(); Lg.log('network', 'ok', 'Connected to ' + String(won.url));
     (st as any).offSince = 0;
     (st as any).lastLedgerAt = Date.now();
     st.err = '';
@@ -2452,6 +2460,8 @@ export function initWindowBindings() {
     book: () => CFG.book,
     req: async (command: string, params: any = {}) => {
       if (!st.client) throw new Error('not connected');
+      await slot();
+      try {
       const cl: any = await chainClient();
       if (!cl.isConnected()) { try { await cl.connect(); } catch {} }   // never send while the socket is still opening
       const t0 = performance.now();
@@ -2464,8 +2474,9 @@ export function initWindowBindings() {
           try { if (!cl.isConnected()) await cl.connect(); } catch {}
           r = await once(20000);
         }
-        Lg.log('node', 'ok', command, performance.now() - t0); return r.result; }
+        lastReplyAt = Date.now(); Lg.log('node', 'ok', command, performance.now() - t0); return r.result; }
       catch (e: any) { Lg.log('node', 'error', `${command} failed: ${String(e?.message || e).slice(0, 120)}`, performance.now() - t0); throw e; }
+      } finally { freeSlot(); }
     },
     lumaReq: async (command: string, params: any = {}) => {
       if (!st.client) throw new Error('not connected');
@@ -3488,13 +3499,22 @@ export function initAutoLock() {
 }
 
 // Keep the node connection alive and replace a silently dead one (idle timeouts, sleeping laptops, restarted nodes).
+// A busy node (big pool reads) can be slow to answer a ping while the socket is perfectly fine, so a ping only counts as a failure when
+// nothing else has arrived for a while either, and it takes two in a row to tear the connection down.
+let pingFails = 0;
 setInterval(async () => {
   if (!VAULT || st.status !== 'online' || !st.client) return;
   const c = st.client;
+  const alive = Date.now() - ((st as any).lastLedgerAt || 0) < 12000 || Date.now() - lastReplyAt < 12000;   // a ledger or any reply arrived in the last 12 s: the link is working
   try {
-    await Promise.race([c.request({ command: 'ping' } as any), new Promise((_, rej) => setTimeout(() => rej(new Error('ping timeout')), 8000))]);
+    await Promise.race([c.request({ command: 'ping' } as any), new Promise((_, rej) => setTimeout(() => rej(new Error('ping timeout')), 15000))]);
+    pingFails = 0;
   } catch {
+    if (alive) return;
+    if (++pingFails < 2) return;
+    pingFails = 0;
     if (st.client === c && st.status === 'online') {
+      Lg.log('network', 'warn', 'Node stopped answering (2 pings, no ledgers): reconnecting');
       st.status = 'offline';
       if (!(st as any).offSince) (st as any).offSince = Date.now();
       connectNodes();
@@ -3503,6 +3523,7 @@ setInterval(async () => {
   }
   if (Date.now() - ((st as any).lastLedgerAt || Date.now()) > 90000 && st.client === c) {
     // answers pings but no ledger events for 90 s: the subscription died, start a fresh connection
+    Lg.log('network', 'warn', 'No ledger events for 90 s: reconnecting');
     connectNodes();
   }
 }, 15000);
