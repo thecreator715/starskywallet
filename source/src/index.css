@@ -1502,3 +1502,4 @@ main:has(#tkpg){max-width:none}
 .brsteps b:first-child{flex:0 0 1.6rem;height:1.6rem;border-radius:50%;display:grid;place-items:center;background:var(--ok-t);color:var(--ok)}
 
 main:has(#ai_root){max-width:none;width:100%}
+main:has(#ld_root){max-width:none;width:100%}
