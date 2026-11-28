@@ -329,6 +329,79 @@ export async function tokenTable(extra: Asset[] = [], fast = false): Promise<{ r
   return { rows, now, ws };
 }
 
+/**
+ * The light way to fill 24h change, supply and market cap on the Portfolio: one pool reading per token at the 24h ledger
+ * (plus the LUMA/USD pool) and one saved supply per token, instead of a history snapshot of every pool on the chain.
+ * Fills the given rows in place and calls onPart as results come in.
+ */
+export async function lightExtras(t: { rows: TokenRow[]; now: Snap; ws: WinSnap[] }, onPart: () => void): Promise<void> {
+  const now = t.now;
+  const SK = 'starsky.sup.' + ctx.netKey() + (ctx.xrpl() ? 'x' : '');
+  let sup: Record<string, { v: number; t: number }> = {};
+  try { sup = JSON.parse(localStorage.getItem(SK) || '{}') || {}; } catch {}
+  // supply: shown from the saved value at once, re-read only when older than an hour
+  const applySup = (r: TokenRow, v: number | null) => { if (v == null) return; r.supply = v; r.mcapUsd = r.usdPx != null ? v * r.usdPx : r.mcapUsd; r.mcapNative = r.nativePx != null ? v * r.nativePx : r.mcapNative; };
+  for (const r of t.rows) { const c = sup[r.key]; if (c && r.supply == null) applySup(r, c.v); }
+  onPart();
+  const supJob = (async () => {
+    const stale = t.rows.filter(r => !sup[r.key] || Date.now() - sup[r.key].t > 3600e3);
+    await pool(stale, 5, async r => {
+      const v = await supplyOf(r.a).catch(() => null);
+      if (v != null) { sup[r.key] = { v, t: Date.now() }; applySup(r, v); onPart(); }
+    });
+    try { localStorage.setItem(SK, JSON.stringify(sup)); } catch {}
+  })();
+  // 24h change
+  const chgJob = (async () => {
+    const ws = await windowSeqs();
+    const w24 = ws.find(z => z.w.k === '24h');
+    if (!w24) return;
+    const seq = w24.seq;
+    const at = (st: PoolState, x: Asset) => (sameAsset(st.a, x) ? (st.ra > 0 ? st.rb / st.ra : null) : st.rb > 0 ? st.ra / st.rb : null);   // other side per x
+    const usdPool = now.pools.filter(p => (isNative(p.a) && isUsdMain(p.b)) || (isNative(p.b) && isUsdMain(p.a))).sort((x, y) => y.ra * y.rb - x.ra * x.rb)[0];
+    const stU = usdPool ? await poolState(usdPool, seq).catch(() => null) : null;
+    let unT: number | null = null;
+    if (stU) { const nat = isNative(stU.a) ? stU.a : stU.b; const r = at(stU, nat); unT = r != null && r > 0 ? r : null; }   // usd per native then
+    const px = new Map<string, number>(); px.set('native', 1);
+    const useUsd = now.usdPerNative != null && unT != null;
+    await pool(t.rows.filter(r => r.key !== 'native'), 6, async r => {
+      const mine = now.pools.filter(p => (akey(p.a) === r.key || akey(p.b) === r.key));
+      const cand = mine.map(p => { const o = akey(p.a) === r.key ? p.b : p.a; return { p, o, tv: p.ra * p.rb }; }).filter(c => isNative(c.o) || isUsdMain(c.o)).sort((x, y) => y.tv - x.tv)[0];
+      if (!cand) return;
+      let st = await poolState(cand.p, seq).catch(() => null);
+      let early = false;
+      if (!st) { st = await poolState(cand.p, await firstSeen(cand.p).catch(() => 0) || undefined).catch(() => null); early = true; }   // listed less than 24h ago: change since its first pool
+      if (!st) return;
+      const o = at(st, r.a);
+      if (o == null || !(o > 0)) return;
+      const nativeThen = isNative(cand.o) ? o : unT != null ? o / unT : null;
+      const usdThen = isUsdMain(cand.o) ? o : unT != null ? o * unT : null;
+      if (nativeThen != null) px.set(r.key, nativeThen);
+      const c = useUsd && usdThen != null ? chg(r.usdPx, usdThen) : chg(r.nativePx, nativeThen);
+      r.chg = { ...r.chg, '24h': c };
+      r.partial = { ...r.partial, '24h': early };
+      onPart();
+    });
+    // the same 24h reference the hero's day P&L reads
+    const snap: any = { seq, pools: [], px, usdPerNative: unT, usdKey: null, root: '' };
+    const ex = t.ws.findIndex(z => z.w.k === '24h');
+    const w: WinSnap = { w: w24.w, seq, ageSec: w24.ageSec, clamped: w24.clamped, snap };
+    if (ex >= 0) t.ws[ex] = w; else t.ws.push(w);
+    // native itself
+    const nr = t.rows.find(r => r.key === 'native');
+    if (nr) nr.chg = { ...nr.chg, '24h': unT != null && now.usdPerNative != null ? chg(now.usdPerNative, unT) : nr.chg['24h'] ?? null };
+    onPart();
+  })();
+  await Promise.all([supJob, chgJob]).catch(() => {});
+  // remember it for the next visit
+  try {
+    const w24 = t.ws.find(z => z.w.k === '24h');
+    localStorage.setItem('starsky.tt.' + ctx.netKey() + (ctx.xrpl() ? 'x' : ''), JSON.stringify({ rows: t.rows.map(r => [r.key, r.chg, r.partial, r.listedSeq, r.supply, r.mcapUsd, r.mcapNative]), w24: w24 ? { w: w24.w, seq: w24.seq, ageSec: w24.ageSec, clamped: w24.clamped, px: [...w24.snap.px.entries()], un: w24.snap.usdPerNative } : null }));
+  } catch {}
+  onPart();
+}
+function isUsdMain(a: Asset): boolean { return !isNative(a) && hexName(a.c).toUpperCase() === 'USD' && (!MAIN_USD || a.i === MAIN_USD); }
+
 /* ---------- markets (pairs) ---------- */
 export interface Market {
   id: string; // base/quote keys
