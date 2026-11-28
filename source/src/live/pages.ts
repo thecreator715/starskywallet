@@ -353,6 +353,9 @@ const catOf = (r: M.TokenRow, reg: Map<string, TK.TokenMeta>): string => {
   return '4 Others';
 };
 import * as CAT from './catalog.ts';
+import * as SP from './spam.ts';
+const spamTag = (v: any, k = '') => (v && v.spam ? `<span class="tag" style="margin-left:.4rem;color:#ff9d6b" title="${esc(v.reasons.join('; '))}">possible spam</span> <a style="cursor:pointer;font-size:.72rem" onclick="window.pa.hideTok('${esc(k)}')">hide</a>` : '');
+const spRow = (k: string): any => (PA.spm ? PA.spm.get(k) : null);
 const PA: any = { tab: 'all', data: null, sort: { c: '', d: -1 } };
 const FAVK = 'starsky.favs';
 const FAV: Set<string> = (() => {
@@ -477,13 +480,22 @@ function renderAssets() {
     const bal = isNative(r.a) ? (MK.bal ? MK.bal.native : 0) : l ? Number(l.balance) : 0;
     return { r, l, bal, cat: catOf(r, reg) };
   });
+  {   // spam: unsolicited tokens that copy a real name, carry a link, or have no market
+    const gen = new Map<string, string>(); let best = new Map<string, number>();
+    for (const x of rows as any[]) { const liq = x.r.tvlUsd ?? x.r.tvlNative ?? 0; if (!isNative(x.r.a) && liq > 0 && liq >= (best.get(SP.norm(x.r.name)) ?? 0)) { best.set(SP.norm(x.r.name), liq); gen.set(SP.norm(x.r.name), x.r.key); } }
+    for (const x of rows as any[]) { if (isNative(x.r.a)) continue; if (reg.has(x.r.key) && !gen.has(SP.norm(x.r.name))) gen.set(SP.norm(x.r.name), x.r.key); }
+    const hid = SP.hidden(ctx.account() || '');
+    for (const x of rows as any[]) { x.sp = isNative(x.r.a) || CAT.labelOf(x.r.name) && gen.get(SP.norm(x.r.name)) === x.r.key ? null : SP.scoreToken({ name: x.r.name, key: x.r.key, balance: x.bal, hasLiquidity: (x.r.tvlUsd ?? x.r.tvlNative ?? 0) > 0, registered: reg.has(x.r.key), genuineKeys: gen }); x.hid = hid.has(x.r.key); }
+  }
   rows.sort((x, y) => x.cat.localeCompare(y.cat) || (y.r.mcapUsd ?? y.r.mcapNative ?? -1) - (x.r.mcapUsd ?? x.r.mcapNative ?? -1));
   heroPaint(rows, t);
   // registered tokens that have no pool and no trust line yet still belong here
   const px = t.now.usdPerNative;
   let total = 0;
   for (const x of rows) if (x.r.nativePx != null) total += x.bal * x.r.nativePx;
-  const show = rows.filter(x => PA.tab === 'all' || (PA.tab === 'dollar' && (x.cat[0] === '2' || x.cat[0] === '1')) || (PA.tab === 'bridged' && x.cat[0] === '3') || (PA.tab === 'others' && x.cat[0] === '4') || (PA.tab === 'currencies' && x.cat[0] === '5') || (PA.tab === 'metals' && x.cat[0] === '6') || (PA.tab === 'fav' && isFav('t:' + x.r.key)));
+  PA.spm = new Map((rows as any[]).map(x => [x.r.key, x.sp]));
+  const spamN = (rows as any[]).filter(x => x.hid || (x.sp && x.sp.spam && x.bal > 0)).length;
+  const show = (rows as any[]).filter(x => PA.showSpam || !(x.hid || (x.sp && x.sp.spam && x.bal > 0))).filter(x => PA.tab === 'all' || (PA.tab === 'dollar' && (x.cat[0] === '2' || x.cat[0] === '1')) || (PA.tab === 'bridged' && x.cat[0] === '3') || (PA.tab === 'others' && x.cat[0] === '4') || (PA.tab === 'currencies' && x.cat[0] === '5') || (PA.tab === 'metals' && x.cat[0] === '6') || (PA.tab === 'fav' && isFav('t:' + x.r.key)));
 
   const nmA = (x: Asset) => M.labelOf(x);
   const poolRow = ({ ref, st }: any) => {
@@ -557,10 +569,10 @@ function renderAssets() {
         ? '<button class="sm pri acc" onclick="window.goTab(\'send\')">Send</button>'
         : `${l ? '<span class="tag ok" title="Trust line is set">trusted</span>' : `<button class="sm pri" onclick="window.mk.trust('${esc(r.key)}',this);setTimeout(window.pa.reload,2500)">Trust</button>`} <button class="sm" onclick="window.pa.trade('${esc(r.key)}')">Trade</button>${others ? ` <button class="sm" onclick="window.tk.openPool('${esc(r.key)}')">Pool</button>` : ''}`;
       const sub = isNative(r.a) ? 'native coin' : meta ? `by ${esc(short(ctx.show(meta.creator), 6, 4))}${meta.ms ? ' · ' + ago(Date.now() - meta.ms) : ''}` : esc(short(ctx.show(r.issuer), 8, 5));
-      return `${head}<tr ondblclick="window.pa.open('trade','${esc(r.key)}')" title="Double-click to open"><td><div class="coin">${star('t:' + r.key)}${coinIcon(r.key, r.name)}<div><b>${esc(r.name)}</b>${CAT.labelOf(r.name) ? `<span class="tag" style="margin-left:.4rem">${esc(CAT.labelOf(r.name))}</span>` : ''}<div class="mut mono" style="font-size:.7rem">${sub}</div>${others && meta && (meta.desc || meta.site) ? `<div class="mut" style="font-size:.72rem;max-width:18rem;white-space:normal">${esc(meta.desc)} ${meta.site ? `<a href="${esc(meta.site)}" target="_blank" rel="noopener noreferrer">site</a>` : ''}</div>` : ''}</div></div></td><td class="r">${r.usdPx != null ? usd(r.usdPx) : r.nativePx != null ? fmt(r.nativePx) + ' ' + esc(nat) : '<span class="mut">no pool</span>'}</td><td class="r">${pctHtml(r.chg['24h'])}${r.partial['24h'] ? '<small class="mut" title="Since listing">*</small>' : ''}</td><td class="r">${l || isNative(r.a) ? fmt(bal) : '<span class="mut">–</span>'}</td><td class="r">${val != null && (l || isNative(r.a)) ? (px != null ? usd(val * px) : fmt(val) + ' ' + esc(nat)) : '<span class="mut">–</span>'}</td><td class="r">${r.supply != null ? fmt(r.supply) : '–'}</td><td class="r">${r.mcapUsd != null ? usd(r.mcapUsd) : r.mcapNative != null ? fmt(r.mcapNative) + ' ' + esc(nat) : '–'}</td><td class="r">${r.tvlUsd != null ? usd(r.tvlUsd) : r.tvlNative ? fmt(r.tvlNative) : '–'}<div class="mut" style="font-size:.7rem">${r.pools} pool${r.pools === 1 ? '' : 's'}</div></td><td class="r" style="white-space:nowrap">${act}</td></tr>`;
+      return `${head}<tr ondblclick="window.pa.open('trade','${esc(r.key)}')" title="Double-click to open"><td><div class="coin">${star('t:' + r.key)}${coinIcon(r.key, r.name)}<div><b>${esc(r.name)}</b>${spamTag(spRow(r.key), r.key)}${CAT.labelOf(r.name) ? `<span class="tag" style="margin-left:.4rem">${esc(CAT.labelOf(r.name))}</span>` : ''}<div class="mut mono" style="font-size:.7rem">${sub}</div>${others && meta && (meta.desc || meta.site) ? `<div class="mut" style="font-size:.72rem;max-width:18rem;white-space:normal">${esc(meta.desc)} ${meta.site ? `<a href="${esc(meta.site)}" target="_blank" rel="noopener noreferrer">site</a>` : ''}</div>` : ''}</div></div></td><td class="r">${r.usdPx != null ? usd(r.usdPx) : r.nativePx != null ? fmt(r.nativePx) + ' ' + esc(nat) : '<span class="mut">no pool</span>'}</td><td class="r">${pctHtml(r.chg['24h'])}${r.partial['24h'] ? '<small class="mut" title="Since listing">*</small>' : ''}</td><td class="r">${l || isNative(r.a) ? fmt(bal) : '<span class="mut">–</span>'}</td><td class="r">${val != null && (l || isNative(r.a)) ? (px != null ? usd(val * px) : fmt(val) + ' ' + esc(nat)) : '<span class="mut">–</span>'}</td><td class="r">${r.supply != null ? fmt(r.supply) : '–'}</td><td class="r">${r.mcapUsd != null ? usd(r.mcapUsd) : r.mcapNative != null ? fmt(r.mcapNative) + ' ' + esc(nat) : '–'}</td><td class="r">${r.tvlUsd != null ? usd(r.tvlUsd) : r.tvlNative ? fmt(r.tvlNative) : '–'}<div class="mut" style="font-size:.7rem">${r.pools} pool${r.pools === 1 ? '' : 's'}</div></td><td class="r" style="white-space:nowrap">${act}</td></tr>`;
     })
     .join('');
-  setHtml('pa', `<table class="dxt tok9"><thead><tr>${sth('Asset', 'name', '')}${sth('Price', 'price')}${sth('24h', 'chg')}${sth('Balance', 'bal')}${sth('Value', 'value')}${sth('Supply', 'supply')}${sth('Market cap', 'mcap')}${sth('Liquidity', 'liq')}<th></th></tr></thead><tbody>${body || `<tr><td colspan="9" class="mut" style="padding:1rem">${others ? 'No tokens have been created on this network yet. Use “Create token” to make the first one.' : 'Nothing here yet.'}</td></tr>`}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.5rem">Every token with a pool on this network, every token created here, and every trust line this wallet has. Categories go by symbol; created tokens are under Others. Wallet total: <b>${px != null ? usd(total * px) : fmt(total) + ' ' + esc(nat)}</b>. * = since the token first appeared in a pool.${TK.genesisAddr() ? '' : ' Created tokens are found through the genesis wallet: set it once in the token creator.'}</div>`);
+  setHtml('pa', `${spamN ? `<div class="mut" style="font-size:.8rem;margin-bottom:.4rem">${PA.showSpam ? 'Showing' : 'Hiding'} ${spamN} spam or hidden token${spamN === 1 ? '' : 's'}. <a style="cursor:pointer" onclick="window.pa.spamToggle()">${PA.showSpam ? 'Hide them' : 'Show them'}</a></div>` : ''}<table class="dxt tok9"><thead><tr>${sth('Asset', 'name', '')}${sth('Price', 'price')}${sth('24h', 'chg')}${sth('Balance', 'bal')}${sth('Value', 'value')}${sth('Supply', 'supply')}${sth('Market cap', 'mcap')}${sth('Liquidity', 'liq')}<th></th></tr></thead><tbody>${body || `<tr><td colspan="9" class="mut" style="padding:1rem">${others ? 'No tokens have been created on this network yet. Use “Create token” to make the first one.' : 'Nothing here yet.'}</td></tr>`}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.5rem">Every token with a pool on this network, every token created here, and every trust line this wallet has. Categories go by symbol; created tokens are under Others. Wallet total: <b>${px != null ? usd(total * px) : fmt(total) + ' ' + esc(nat)}</b>. * = since the token first appeared in a pool.${TK.genesisAddr() ? '' : ' Created tokens are found through the genesis wallet: set it once in the token creator.'}</div>`);
   if (PA.tab === 'fav') {
     const fp = (D.pools || []).map(poolRow).filter((x: any) => isFav(x.k));
     const el = $('pa') as HTMLElement;
@@ -584,6 +596,8 @@ export const paApi = {
     } catch {}
     renderAssets();
   },
+  hideTok(k: string) { SP.hide(ctx.account() || '', k, !SP.hidden(ctx.account() || '').has(k)); renderAssets(); },
+  spamToggle() { PA.showSpam = !PA.showSpam; renderAssets(); },
   sort(c: string) {
     PA.sort = PA.sort.c === c ? (PA.sort.d < 0 ? { c, d: 1 } : { c: '', d: -1 }) : { c, d: c === 'name' || c === 'pair' ? 1 : -1 };
     renderAssets();

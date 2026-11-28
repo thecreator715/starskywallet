@@ -860,6 +860,7 @@ export async function refreshAccount(quiet = false) {
       const msg = JSON.stringify(e?.data || e?.message || e);
       if (/actNotFound/.test(msg)) {
         bal = { drops: 0n, owner: 0, unfunded: true };
+        if (st.walletMode !== 'xrpl') { const f = (window as any).autoFundWallet; if (f) f(a.address, true); }   // a new wallet that was never activated gets its reserve from genesis
       } else {
         throw e;
       }
@@ -3092,22 +3093,32 @@ export function initWindowBindings() {
     `);
   };
 
-  async function autoFund(address: string) {
+  const fundTried = new Map<string, number>();
+  /** Activates a brand-new LUMA wallet (the account reserve) from the genesis wallet through the control panel. Tries the network's panel first, then the site address. */
+  async function autoFund(address: string, quiet = false) {
+    const net = getNet();
+    if (net.isXrpl || !address) return;
+    if (Date.now() - (fundTried.get(address + net.id) || 0) < 45000) return;   // one try every 45 s per wallet
+    fundTried.set(address + net.id, Date.now());
     const c = (window as any).STARSKY_CONFIG || {};
-    const t = getNet().id === 'test' ? 'test' : 'main';
-    let u = String((c[t] || c.main || {}).url || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
-    if (!u) return;
-    try {
-      toast('Activating your wallet from the genesis wallet…');
-      const r = await fetch(u + '/panel/' + t + '/api/fund-new', { method: 'POST', headers: { 'content-type': 'application/json', 'ngrok-skip-browser-warning': '1' }, body: JSON.stringify({ address }) });
-      const j: any = await r.json().catch(() => ({}));
-      if (!r.ok || j.error) throw new Error(j.error || 'status ' + r.status);
-      toast('✓ Wallet activated with ' + (j.amount ?? 1) + ' LUMA for fees');
-      setTimeout(refreshAccount, 4000);
-    } catch (e: any) {
-      toast('Could not auto-activate: ' + e.message, true);
+    const t = net.id === 'test' ? 'test' : 'main';
+    const site = String((c[t] || c.main || {}).url || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
+    const urls = Array.from(new Set([net.fund, site ? site + '/panel/' + t + '/api/fund-new' : '', `http://127.0.0.1:${t === 'test' ? 8091 : 8090}/api/fund-new`].filter(Boolean) as string[]));
+    if (!quiet) toast('Activating your wallet from the genesis wallet…');
+    let last = '';
+    for (const u of urls) {
+      try {
+        const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json', 'ngrok-skip-browser-warning': '1' }, body: JSON.stringify({ address }) });
+        const j: any = await r.json().catch(() => ({}));
+        if (r.ok && !j.error) { toast('✓ Wallet activated with ' + (j.amount ?? 1) + ' LUMA for fees'); setTimeout(() => refreshAccount(true), 4000); return; }
+        last = j.error || 'status ' + r.status;
+        if (/already (funded|exists)/i.test(last)) { setTimeout(() => refreshAccount(true), 1500); return; }
+      } catch (e: any) { last = String(e?.message || e); }
     }
+    if (!quiet || !/Failed to fetch|NetworkError|Load failed/i.test(last)) toast('Could not auto-activate: ' + last, true);
+    fundTried.set(address + net.id, Date.now() - 30000);   // try again in about 15 s if it was the network
   }
+  (window as any).autoFundWallet = autoFund;
   (window as any).confirmAddAcct = async (label: string, seed: string, mode: 'luma' | 'xrpl') => {
     const chk = document.getElementById('savedSeed') as HTMLInputElement | null;
     if (!chk?.checked) {

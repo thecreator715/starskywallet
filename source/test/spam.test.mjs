@@ -1,0 +1,12 @@
+import assert from 'node:assert'; import * as S from '/tmp/spam.mjs';
+const genuine = new Map([[S.norm('GOLD'), 'GOLD|rGen']]);
+const f = o => ({ name: 'X', key: 'X|rA', balance: 5, hasLiquidity: true, registered: true, genuineKeys: genuine, ...o });
+assert(!S.scoreToken(f({})).spam);
+assert(S.scoreToken(f({ name: 'G0LD', key: 'G0LD|rEvil' })).spam, 'lookalike');
+assert(!S.scoreToken(f({ name: 'GOLD', key: 'GOLD|rGen' })).spam, 'the real one');
+assert(S.scoreToken(f({ name: 'Visit www.win.xyz', hasLiquidity: false, registered: false })).spam);
+assert(!S.scoreToken(f({ hasLiquidity: false, registered: true })).spam, 'unpriced alone is not spam');
+assert(S.scorePayment({ amount: 1, assetName: 'LUMA', memo: 'claim your reward at http://x.co', fromKnown: false, fromSelf: false, asset: null }).spam);
+assert(S.scorePayment({ amount: 0.000001, assetName: 'LUMA', memo: '', fromKnown: false, fromSelf: false, asset: null }).score === 3);
+assert(!S.scorePayment({ amount: 5, assetName: 'LUMA', memo: 'lunch', fromKnown: true, fromSelf: false, asset: null }).spam);
+console.log('spam ok');
