@@ -693,9 +693,12 @@ export async function bridgeLoad() {
     { const c0 = bcfg(); if (OP.snap && OP.snap.set && (!c0.lumaVault || !c0.xrplVault)) { try { applyOperator(); ctx.toast('Bridge linked to the operator automatically'); } catch {} } }   // easy setup: nothing to type when the operator is reachable
     { const c1 = bcfg(), w = OP.snap && OP.snap.xrplWs; const isT = (u: string) => /altnet|testnet|devnet/.test(u || ''); const isPub = (u: string) => /xrplcluster|ripple\.com|rippletest|altnet|testnet\.xrpl|xrpl-labs/.test(u || ''); if (w && c1.opUrl && isPub(c1.xrplUrl) && isT(w) !== isT(c1.xrplUrl)) { saveCfg({ ...c1, xrplUrl: w }); ctx.toast('XRPL node switched to ' + (isT(w) ? 'testnet' : 'mainnet') + ' to match the operator'); } }   // never look for a mainnet wallet on testnet
     paintHead(); paintClaim();
-    await within(loadBalances(), 25000, undefined as any);
+    const early = () => { try { paintBW(); paintStats(); paintTabs(); } catch {} };   // panes show what is known at every stage, not only at the end
+    early();
+    await within(loadBalances(), 15000, undefined as any);
     if (g !== gen || !$('br')) return;
-    ST.chk = await within(runChecks(), 25000, [] as Chk[]);
+    early();
+    ST.chk = await within(runChecks(), 20000, [] as Chk[]);
     if (g !== gen || !$('br')) return;
     paintSetup(); paintChecks(); paintXfer(); paintBW(); paintStats(); paintTabs();
     await within(reserves(), 25000, undefined as any);
