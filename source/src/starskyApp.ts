@@ -18,6 +18,7 @@ import * as Ld from './live/lending.ts';
 import * as Ai from './live/ai.ts';
 import * as Dv from './live/devapi.ts';
 import * as Ad from './live/airdrop.ts';
+import * as Tk from './live/toolkit.ts';
 import * as Hd from './live/held.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
@@ -311,7 +312,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'lending' | 'ai' | 'api' | 'airdrop' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'toolkit' | 'lending' | 'ai' | 'api' | 'airdrop' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -886,7 +887,7 @@ export async function refreshAccount(quiet = false) {
     const sig = JSON.stringify([String(bal.drops), bal.owner, lines, st.hist.length, (st.hist[0] as any)?.tx?.hash || (st.hist[0] as any)?.hash || '', st.px, st.nfts.length, st.mpts.length]);
     const changed = sig !== lastSig;
     lastSig = sig;
-    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'checks', 'lending', 'ai', 'api', 'airdrop', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
+    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'checks', 'lending', 'ai', 'api', 'airdrop', 'toolkit', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
     else if ((changed || !quiet) && !(quiet && /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement as HTMLElement | null)?.tagName || ''))) renderApp();   // never rebuild the page under someone who is typing
     else renderTop();
   } catch (e: any) {
@@ -1152,6 +1153,7 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['ai', 'AI'],
   ['api', 'Developer API'],
   ['airdrop', 'Air Dropper'],
+  ['toolkit', 'Toolkit'],
   ['markets', 'Markets & Tokens'],
   ['mktoken', 'Create Token'],
   ['mgtoken', 'Mint, Burn & Cap'],
@@ -1605,6 +1607,9 @@ export function renderApp() {
     case 'api':
       body = Dv.shell();
       break;
+    case 'toolkit':
+      body = Tk.shell();
+      break;
     case 'airdrop':
       body = Ad.shell();
       break;
@@ -1852,6 +1857,7 @@ export function renderApp() {
         ${renderNavItem('lending', 'Lending')}
         ${renderNavItem('ai', 'AI')}
         ${renderNavItem('airdrop', 'Air Dropper')}
+        ${renderNavItem('toolkit', 'Toolkit')}
         ${renderNavItem('api', 'Developer API')}
         ${renderNavItem('markets', 'Markets & Tokens')}
         ${renderNavItem('mktoken', 'Create token')}
@@ -1951,6 +1957,7 @@ export function renderApp() {
   if (st.tab === 'ai') Ai.mount();
   if (st.tab === 'api') Dv.mount();
   if (st.tab === 'airdrop') void Ad.mount();
+  if (st.tab === 'toolkit') void Tk.mount();
   if (st.tab === 'supply') Supply.supplyMount();
   else Supply.supplyUnmount();
   if (st.tab === 'bot') Bot.botMount();
@@ -2395,9 +2402,11 @@ export function initWindowBindings() {
   (window as any).ai = Ai.api;
   (window as any).dv = Dv.api;
   (window as any).ad = Ad.api;
+  (window as any).tkt = Tk.api;
   (window as any).hd = Hd.api;
   (window as any).sendHeld = async () => { const tx = st.pendingTx; if (!tx) return; st.pendingTx = Hd.heldTx(tx); const btn = document.getElementById('cfsend') as HTMLButtonElement | null; const r = await runTx(st.pendingTx, 'Held for the receiver. They can claim it once they add the trust line.', btn); if (r.ok) { closeModal(); (window as any).goTab('checks'); } };
   Ad.startAuto();
+  Tk.start();
   Hd.start();
   (window as any).mk = Pages.mkApi;
   (window as any).br = Pages.brApi;
