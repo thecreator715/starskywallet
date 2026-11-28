@@ -1,7 +1,7 @@
 // Toolkit: bulk pay and split a bill, wallet cleanup and health, watchlist with price alerts, and a journal with CSV export.
 // Everything signs in this browser; alerts run while Starsky is open.
 import { ctx } from './ctx.ts';
-import { esc, fmt, short, fromKey, NATIVE, isNative, amtTx, type Asset } from './util.ts';
+import { esc, fmt, short, akey, fromKey, NATIVE, isNative, amtTx, type Asset } from './util.ts';
 import * as M from './market.ts';
 import * as PM from './procmodal.ts';
 
@@ -12,9 +12,9 @@ const wr = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify
 const GREEN = '#3ddc84', RED = '#ff5b5b', AMB = '#f5b84b';
 const chip = (t: string, c: string) => `<span style="display:inline-block;padding:.08rem .5rem;border-radius:99px;font-size:.78rem;background:${c}22;color:${c}">${esc(t)}</span>`;
 const tile = (k: string, v: string, sub = '') => `<div class="tile" style="min-width:9rem;flex:1"><div class="mut" style="font-size:.8rem">${esc(k)}</div><div style="font-size:1.2rem;font-weight:800;margin:.1rem 0">${v}</div><div class="mut" style="font-size:.78rem">${sub}</div></div>`;
-type VW = 'bulk' | 'clean' | 'watch' | 'journal';
+type VW = 'bulk' | 'orders' | 'clean' | 'watch' | 'journal';
 let VIEW = 'bulk' as VW;
-const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal']];
+const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['orders', 'Auto orders'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal']];
 
 // ---------- pure helpers (tested) ----------
 export function parsePay(txt: string): { rows: { addr: string; amt?: number }[]; bad: string[] } {
@@ -114,19 +114,80 @@ function journalHtml(): string {
   return `<div class="row" style="gap:.6rem;flex-wrap:wrap;width:100%">${tile('Transactions', String(JR.length), 'latest 400')}${tile('Sent', String(sent), 'payments')}${tile('Received', String(rec), 'payments')}</div><div class="card c12" style="margin-top:.6rem"><div class="row" style="align-items:center"><div class="k">Journal</div><span class="grow"></span><button class="sm" onclick="window.tkt.csv()">Download CSV</button></div><div style="max-height:26rem;overflow:auto;margin-top:.4rem"><table style="width:100%">${JR.slice(0, 200).map(j => `<tr><td class="mut">${j.when ? new Date(j.when).toLocaleString() : ''}</td><td>${esc(j.type)} ${esc(j.dir)}</td><td>${esc(j.who ? short(j.who) : '')}</td><td>${esc(j.amt)}</td><td>${j.ok ? '' : chip('failed', RED)}</td></tr>`).join('') || '<tr><td class="mut">No transactions yet.</td></tr>'}</table></div></div>`;
 }
 
+
+// ---------- automatic orders (pure decision logic, tested) ----------
+export interface Order { id: string; kind: 'stop' | 'take' | 'trail' | 'dca'; key: string; label: string; amt: number; trig: number; trailPct: number; high: number; slip: number; every: number; spend: number; runs: number; maxRuns: number; last: number; state: 'active' | 'busy' | 'done' | 'failed'; msg: string }
+/** price = native per 1 token. Returns whether the order should run now, and the order with its tracking updated. */
+export function orderCheck(o: Order, px: number | null, now: number): { fire: boolean; o: Order } {
+  const n = { ...o }; if (n.state !== 'active') return { fire: false, o: n };
+  if (n.kind === 'dca') { const due = now - n.last >= n.every * 60000; return { fire: due && (n.maxRuns <= 0 || n.runs < n.maxRuns), o: n }; }
+  if (px == null || !(px > 0)) return { fire: false, o: n };
+  if (n.kind === 'stop') return { fire: px <= n.trig, o: n };
+  if (n.kind === 'take') return { fire: px >= n.trig, o: n };
+  n.high = Math.max(n.high || 0, px); return { fire: px <= n.high * (1 - n.trailPct / 100), o: n };
+}
+export function sellAllPlan(lines: { currency: string; account: string; balance: string }[], px: (k: string) => number | null, minNative = 0.01): { key: string; bal: number; value: number }[] {
+  return lines.map(l => { const k = l.currency + '|' + l.account, b = Number(l.balance), p = px(k); return { key: k, bal: b, value: p != null ? b * p : 0 }; }).filter(r => r.bal > 0 && r.value >= minNative).sort((a, b) => b.value - a.value);
+}
+const OK = () => `starsky.toolkit.orders.${net()}`; const ORD = (): Order[] => rd(OK(), []); const saveOrd = (o: Order[]) => wr(OK(), o);
+async function execSwap(from: Asset, to: Asset, x: number, slip: number): Promise<{ ok: boolean; msg: string }> {
+  const acc = ctx.account(); if (!acc) return { ok: false, msg: 'Wallet is locked' };
+  try {
+    const refs = await M.poolRefs(), ms = M.marketsFrom(refs); const m = ms.find((q: any) => (akey(q.base) === akey(from) && akey(q.quote) === akey(to)) || (akey(q.base) === akey(to) && akey(q.quote) === akey(from))); if (!m) return { ok: false, msg: 'No market for this pair' };
+    const side: 'buy' | 'sell' = akey(m.quote) === akey(from) ? 'buy' : 'sell', q = await M.quote(m, side, x); if (!q) return { ok: false, msg: 'Not enough liquidity' };
+    await readWallet(); if (!isNative(to) && !LINES.some((l: any) => l.currency === to.c && l.account === to.i)) { const t = await ctx.submit({ TransactionType: 'TrustSet', Account: acc, LimitAmount: { currency: to.c, issuer: to.i, value: '1000000000000' } }); if (!t.ok) return { ok: false, msg: t.msg || 'Could not add the trust line' }; }
+    const r = await ctx.submit({ TransactionType: 'OfferCreate', Account: acc, TakerGets: amtTx(from, x), TakerPays: amtTx(to, q.out * (1 - slip / 100)), Flags: 0x00080000 | 0x00020000 }); return { ok: !!r.ok, msg: r.ok ? 'Done' : r.msg || 'Rejected' };
+  } catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
+}
+async function ordersTick() {
+  const os = ORD(); if (!os.some(o => o.state === 'active') || !ctx.account() || !ctx.online()) return;
+  let snap: M.Snap | null = WSNAP; try { snap = await M.snapshot(); WSNAP = snap; } catch { return; } let ch = false;
+  for (let i = 0; i < os.length; i++) {
+    const px = os[i].key === 'native' ? 1 : (snap.px.get(os[i].key) as number | undefined) ?? null, r = orderCheck(os[i], px ?? null, Date.now()); os[i] = r.o; if (!r.fire) { if (r.o.high !== (ORD()[i] || ({} as any)).high) ch = true; continue; }
+    os[i].state = 'busy'; saveOrd(os); const tok = fromKey(os[i].key); await readWallet(); let res: { ok: boolean; msg: string };
+    if (os[i].kind === 'dca') { const spend = Math.min(os[i].spend, balOf(NATIVE)); res = spend > 0 ? await execSwap(NATIVE, tok, spend, os[i].slip) : { ok: false, msg: 'Not enough ' + ctx.native() }; os[i].last = Date.now(); if (res.ok) os[i].runs++; os[i].state = res.ok && (os[i].maxRuns <= 0 || os[i].runs < os[i].maxRuns) ? 'active' : res.ok ? 'done' : 'active'; os[i].msg = res.ok ? `Bought on ${new Date().toLocaleString()}` : 'Skipped: ' + res.msg; }
+    else { const x = Math.min(os[i].amt > 0 ? os[i].amt : Infinity, balOf(tok)); res = x > 0 ? await execSwap(tok, NATIVE, x, os[i].slip) : { ok: false, msg: 'Nothing to sell' }; os[i].state = res.ok ? 'done' : 'failed'; os[i].msg = res.ok ? 'Sold ' + fmt(x) + ' ' + os[i].label + ' on ' + new Date().toLocaleString() : 'Could not sell: ' + res.msg; }
+    ctx.toast(`${os[i].label}: ${os[i].msg}`, !res.ok); ch = true; saveOrd(os);
+  }
+  if (ch) saveOrd(os); if (document.getElementById('tk_root') && VIEW === 'orders') paint();
+}
+async function addOrder() {
+  const g = (id: string) => $(id)?.value || '', kind = g('od_kind') as Order['kind'], key = g('od_tok'), sel = $('od_tok') as any, label = sel && sel.selectedOptions[0] ? sel.selectedOptions[0].text : key;
+  const o: Order = { id: Math.random().toString(36).slice(2, 9), kind, key, label, amt: Number(g('od_amt')) || 0, trig: Number(g('od_trig')) || 0, trailPct: Number(g('od_trail')) || 0, high: 0, slip: Math.min(10, Math.max(0.1, Number(g('od_slip')) || 2)), every: Number(g('od_every')) || 60, spend: Number(g('od_spend')) || 0, runs: 0, maxRuns: Number(g('od_max')) || 0, last: 0, state: 'active', msg: '' };
+  if (kind === 'dca') { if (!(o.spend > 0)) return ctx.toast('Enter how much ' + ctx.native() + ' to spend each time.', true); o.last = Date.now(); }
+  else { if (!(o.amt >= 0)) return ctx.toast('Enter an amount to sell (0 = everything you hold).', true); if (kind === 'trail' ? !(o.trailPct > 0 && o.trailPct < 100) : !(o.trig > 0)) return ctx.toast(kind === 'trail' ? 'Enter a trailing percent between 0 and 100.' : 'Enter a trigger price in ' + ctx.native() + '.', true); }
+  const what = kind === 'dca' ? `Buy ${fmt(o.spend)} ${ctx.native()} worth of ${label} every ${o.every} min` : kind === 'trail' ? `Sell ${o.amt > 0 ? fmt(o.amt) : 'all'} ${label} if the price falls ${o.trailPct}% from its high` : `Sell ${o.amt > 0 ? fmt(o.amt) : 'all'} ${label} when the price ${kind === 'stop' ? 'falls to' : 'rises to'} ${o.trig} ${ctx.native()}`;
+  const ok = await PM.review({ title: 'Create automatic order', tone: 'tip', hero: `<div style="font-weight:700">${esc(what)}</div>`, rows: [{ k: 'Max slippage', v: o.slip + '%' }], warns: ['This runs only while Starsky is open and unlocked in this browser. It signs with this wallet without asking again.'], confirm: 'Create order' }); if (!ok) return;
+  const os = ORD(); os.push(o); saveOrd(os); paint();
+}
+async function sellAll() {
+  await readWallet(); const snap = await M.snapshot(); WSNAP = snap; const plan = sellAllPlan(LINES, k => (snap.px.get(k) as number | undefined) ?? null); if (!plan.length) return ctx.toast('Nothing to sell: no token worth more than 0.01 ' + ctx.native() + '.');
+  const tot = plan.reduce((a, r) => a + r.value, 0), ok = await PM.review({ title: 'Sell everything to ' + ctx.native(), tone: 'sell', hero: `<div style="font-size:1.4rem;font-weight:800">≈ ${fmt(tot)} ${esc(ctx.native())}</div><div class="mut">${plan.length} tokens, each swapped at the best route with 2% max slippage.</div>`, rows: plan.slice(0, 6).map(r => ({ k: M.labelOf(fromKey(r.key)), v: fmt(r.bal) })), warns: ['Tokens with thin liquidity may not fill. Those are skipped.'], confirm: 'Sell all' }); if (!ok) return;
+  const prog = PM.progress('Selling', plan.map(r => M.labelOf(fromKey(r.key)))); let n = 0; for (let i = 0; i < plan.length; i++) { prog.set(i, 'run'); const r = await execSwap(fromKey(plan[i].key), NATIVE, plan[i].bal, 2); if (r.ok) { n++; prog.set(i, 'ok'); } else prog.set(i, 'bad', r.msg.slice(0, 50)); } prog.done(`${n} of ${plan.length} sold`); await readWallet(); paint();
+}
+function ordersHtml(): string {
+  const os = ORD(), held = LINES.map((l: any) => [l.currency + '|' + l.account, M.labelOf({ c: l.currency, i: l.account })]);
+  return `<div class="card c12"><div class="k">Automatic orders</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Prices are in ${esc(ctx.native())} per token. Orders are checked every minute while Starsky is open and unlocked.</div>
+  <div class="row" style="gap:.5rem;flex-wrap:wrap;align-items:center"><select id="od_kind"><option value="stop">Stop-loss: sell if price falls to</option><option value="take">Take-profit: sell if price rises to</option><option value="trail">Trailing stop: sell if price drops % from its high</option><option value="dca">Buy on a schedule</option></select><select id="od_tok">${held.map(h => `<option value="${esc(h[0])}">${esc(h[1])}</option>`).join('')}</select>
+  <input id="od_amt" placeholder="amount to sell (0 = all)" size="14"><input id="od_trig" placeholder="trigger price" size="10"><input id="od_trail" placeholder="trail %" size="6"><input id="od_spend" placeholder="spend per buy" size="10"><input id="od_every" placeholder="every (min)" size="8" value="60"><input id="od_max" placeholder="max buys (0=no limit)" size="10"><input id="od_slip" placeholder="slippage %" size="6" value="2"><button class="pri" onclick="window.tkt.addOrder()">Create order</button></div>
+  ${os.length ? `<table style="width:100%;margin-top:.6rem">${os.map((o, i) => `<tr><td>${esc(o.kind === 'dca' ? `Buy ${o.label} every ${o.every} min` : o.kind === 'trail' ? `Trailing ${o.trailPct}% on ${o.label}` : `${o.kind === 'stop' ? 'Stop-loss' : 'Take-profit'} ${o.label} at ${o.trig}`)}</td><td>${chip(o.state, o.state === 'done' ? GREEN : o.state === 'failed' ? RED : AMB)}${o.kind === 'dca' ? ` <span class="mut">${o.runs}${o.maxRuns > 0 ? '/' + o.maxRuns : ''} buys</span>` : ''}</td><td class="mut">${esc(o.msg)}</td><td style="text-align:right"><button class="sm" onclick="window.tkt.rmOrder(${i})">Remove</button></td></tr>`).join('')}</table>` : '<div class="mut" style="margin-top:.6rem">No automatic orders.</div>'}</div>
+  <div class="card c12" style="margin-top:.6rem"><div class="k">Sell everything</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Swaps every token you hold into ${esc(ctx.native())}. You review it first.</div><button class="sm" onclick="window.tkt.sellAll()">Sell all tokens to ${esc(ctx.native())}</button></div>`;
+}
+
 // ---------- page ----------
 export function shell() { return `<div id="tk_root" style="width:100%"><div class="row" id="tk_tabs" style="gap:.4rem;margin-bottom:.7rem;flex-wrap:wrap"></div><div id="tk_body" class="grid" style="width:100%"></div></div>`; }
 function paint() {
   const t = document.getElementById('tk_tabs'), b = document.getElementById('tk_body'); if (!t || !b) return;
   t.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.tkt.view('${k}')">${l}</button>`).join('');
   const a = document.activeElement; if (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && b.contains(a)) return;
-  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : journalHtml();
+  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'orders' ? ordersHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : journalHtml();
 }
-async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'watch') await watchTick(); } finally { busy = false; paint(); } }
+async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'watch') await watchTick(); if (VIEW === 'orders') await ordersTick(); } finally { busy = false; paint(); } }
 export function view(v: VW) { VIEW = v; MSG = ''; paint(); void refresh(); }
 export function mount() { paint(); void refresh(); }
-export function start() { clearInterval(tmr); tmr = setInterval(() => void watchTick(), 60000); }
+export function start() { clearInterval(tmr); tmr = setInterval(() => { void watchTick(); void ordersTick(); }, 60000); }
 export const api = {
+  addOrder, sellAll, rmOrder(i: number) { const os = ORD(); os.splice(i, 1); saveOrd(os); paint(); },
   view, preview: bulkPreview, send: bulkSend, clean: cleanLines, csv: journalCsv,
   watch() { const k = $('tk_w')?.value; if (!k) return; const w = WL(); if (!w.includes(k)) w.push(k); wr(WK(), w); paint(); },
   unwatch(k: string) { wr(WK(), WL().filter(x => x !== k)); paint(); },
