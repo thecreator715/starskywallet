@@ -14,7 +14,7 @@ const favs = (): Set<string> => {
     return new Set();
   }
 };
-const PL: any = { q: '', tok: '', tab: 'all', favOnly: false, sel: '', inv: false, range: '1h', pools: [], mine: (_p: any) => ({ bal: 0, share: 0 }), rows: [], busy: false, last: '', cd: null, ck: '', cat: 0, trades: null, tat: 0, page: 0, size: 25, vis: [], cc: new Map(), cx: null, fb: false };
+const PL: any = { q: '', tok: '', tab: 'all', favOnly: false, sel: '', inv: false, range: '1h', pools: [], mine: (_p: any) => ({ bal: 0, share: 0 }), rows: [], busy: false, last: '', cd: null, ck: '', cat: 0, trades: null, tat: 0, page: 0, size: 100, vis: [], cc: new Map(), cx: null, fb: false };
 const WK = ['1h', '24h', '7d'];
 const chg = (a: number | null, b: number | null) => (a == null || b == null || !(b > 0) ? null : (a / b - 1) * 100);
 const dsg = (v: number | null, f: (n: number) => string) => (v == null ? '–' : (v >= 0 ? '+' : '−') + f(Math.abs(v)));
@@ -136,7 +136,7 @@ function listHtml(allRows: Row[], un: number | null) {
         <td class="r" onclick="event.stopPropagation()"><div class="row" style="justify-content:flex-end;gap:.3rem"><button class="sm pri" onclick="window.openDepositModal(${r.idx})">Deposit</button><button class="sm" onclick="window.openWithdrawModal(${r.idx})">Withdraw</button><button class="sm pri acc" onclick="window.pl.trade(${r.idx})">Trade</button></div></td></tr>`;
     })
     .join('');
-  const pg = rows.length > 10 ? `<div class="row" style="gap:.45rem;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin:.5rem 0"><span class="mut" style="font-size:.78rem">${rows.length ? PL.page * PL.size + 1 : 0}–${Math.min(rows.length, (PL.page + 1) * PL.size)} of ${rows.length}</span><button class="sm" ${PL.page <= 0 ? 'disabled' : ''} onclick="window.pl.page(${PL.page - 1})">‹ Prev</button><span class="mut" style="font-size:.78rem">Page ${PL.page + 1} / ${pages}</span><button class="sm" ${PL.page >= pages - 1 ? 'disabled' : ''} onclick="window.pl.page(${PL.page + 1})">Next ›</button><select onchange="window.pl.size(this.value)">${[10, 25, 50, 100].map(n => `<option value="${n}" ${n === PL.size ? 'selected' : ''}>${n} / page</option>`).join('')}</select></div>` : '';
+  const pg = rows.length > 100 ? `<div class="row" style="gap:.45rem;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin:.5rem 0"><span class="mut" style="font-size:.78rem">${rows.length ? PL.page * PL.size + 1 : 0}–${Math.min(rows.length, (PL.page + 1) * PL.size)} of ${rows.length}</span><button class="sm" ${PL.page <= 0 ? 'disabled' : ''} onclick="window.pl.page(${PL.page - 1})">‹ Prev</button><span class="mut" style="font-size:.78rem">Page ${PL.page + 1} / ${pages}</span><button class="sm" ${PL.page >= pages - 1 ? 'disabled' : ''} onclick="window.pl.page(${PL.page + 1})">Next ›</button><select onchange="window.pl.size(this.value)">${[10, 25, 50, 100].map(n => `<option value="${n}" ${n === PL.size ? 'selected' : ''}>${n} / page</option>`).join('')}</select></div>` : '';
   return `${tabsHtml}${ctl}<div class="row" style="gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem">
     ${tile('Total value in pools', un != null ? usd(tot * un) : fmt(tot, 2) + ' ' + esc(nat), fmt(tot, 2) + ' ' + esc(nat) + (tvl24 > 0 ? ' · 24h ' + pctTxt(chg(tot, tvl24)) : ''))}
     ${tile('Pools', rows.length === allRows.length ? String(rows.length) : rows.length + ' of ' + allRows.length, PL.tok ? 'with ' + esc(PL.tok) : 'on the ' + esc(nat) + ' network')}

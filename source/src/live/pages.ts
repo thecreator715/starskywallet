@@ -365,7 +365,7 @@ import * as CAT from './catalog.ts';
 import * as SP from './spam.ts';
 const spamTag = (v: any, k = '') => (v && v.spam ? `<span class="tag" style="margin-left:.4rem;color:#ff9d6b" title="${esc(v.reasons.join('; '))}">possible spam</span> <a style="cursor:pointer;font-size:.72rem" onclick="window.pa.hideTok('${esc(k)}')">hide</a>` : '');
 const spRow = (k: string): any => (PA.spm ? PA.spm.get(k) : null);
-const PA: any = { tab: 'all', data: null, sort: { c: '', d: -1 } };
+const PA: any = { tab: 'all', data: null, sort: { c: '', d: -1 }, page: 0, size: 25 };
 const FAVK = 'starsky.favs';
 const FAV: Set<string> = (() => {
   try {
@@ -528,20 +528,23 @@ function renderAssets() {
     const sh = mine && st && st.lp > 0 ? Math.min(1, Number(mine.l.balance) / st.lp) : 0;
     return { ref, st, vU, vN, price: st ? M.poolPrice(st, ref.a) : null, mine, sh, name: nmA(ref.a) + ' / ' + nmA(ref.b), k: 'p:' + ref.account };
   };
-  const poolTable = (list: any[]) => {
+  const poolTable = (list: any[], paged = false) => {
     const get = (x: any) => ({ pair: x.name, tvl: x.vU ?? x.vN, ra: x.st ? x.st.ra : null, rb: x.st ? x.st.rb : null, price: x.price, fee: x.ref.fee, lp: x.st ? x.st.lp : null, mine: x.sh }[PA.sort.c as string]);
-    const rows2 = srt(list, get, (x: any) => isFav(x.k));
+    const rows2all = srt(list, get, (x: any) => isFav(x.k));
+    const pgs = Math.max(1, Math.ceil(rows2all.length / PA.size));
+    if (PA.page >= pgs) PA.page = pgs - 1;
+    const rows2 = paged ? rows2all.slice(PA.page * PA.size, (PA.page + 1) * PA.size) : rows2all;
     const b = rows2
       .map(
         (x: any) =>
           `<tr ondblclick="window.pa.open('pools')" title="Double-click to open the pool"><td><div class="coin">${star(x.k)}<i>LP</i><div><b>${esc(x.name)}</b><div class="mut mono" style="font-size:.7rem">pool ${esc(short(ctx.show(x.ref.account), 8, 5))} · fee ${x.ref.fee}%</div></div></div></td><td class="r mono">${x.st ? fmt(x.st.ra, 4) : '–'} <small class="mut">${esc(nmA(x.ref.a))}</small><br>${x.st ? fmt(x.st.rb, 4) : '–'} <small class="mut">${esc(nmA(x.ref.b))}</small></td><td class="r mono">${x.price != null ? fmt(x.price, 6) : '–'}<div class="mut" style="font-size:.7rem">${esc(nmA(x.ref.b))} per ${esc(nmA(x.ref.a))}</div></td><td class="r">${x.vU != null ? usd(x.vU) : x.vN != null ? fmt(x.vN, 2) + ' ' + esc(nat) : '–'}</td><td class="r mono">${x.st && x.st.lp ? fmt(x.st.lp, 2) : '–'}</td><td class="r">${x.mine ? (x.sh * 100).toFixed(x.sh < 0.0001 ? 6 : 2) + '%<div class="mut" style="font-size:.7rem">' + fmt(Number(x.mine.l.balance), 4) + ' LP</div>' : '<span class="mut">–</span>'}</td><td class="r"><button class="sm" onclick="window.pa.open('pools')">Open</button></td></tr>`
       )
       .join('');
-    return `<table class="dxt"><thead><tr>${sth('Pool (pair)', 'pair', '')}${sth('Reserves', 'ra')}${sth('Price', 'price')}${sth('Pool value', 'tvl')}${sth('LP supply', 'lp')}${sth('Your share', 'mine')}<th></th></tr></thead><tbody>${b || '<tr><td colspan="7" class="mut" style="padding:1rem">No pools.</td></tr>'}</tbody></table>`;
+    return `<table class="dxt"><thead><tr>${sth('Pool (pair)', 'pair', '')}${sth('Reserves', 'ra')}${sth('Price', 'price')}${sth('Pool value', 'tvl')}${sth('LP supply', 'lp')}${sth('Your share', 'mine')}<th></th></tr></thead><tbody>${b || '<tr><td colspan="7" class="mut" style="padding:1rem">No pools.</td></tr>'}</tbody></table>` + (paged && rows2all.length > 10 ? `<div class="row" style="gap:.45rem;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin:.5rem 0"><span class="mut" style="font-size:.78rem">${PA.page * PA.size + 1}–${Math.min(rows2all.length, (PA.page + 1) * PA.size)} of ${rows2all.length}</span><button class="sm" ${PA.page <= 0 ? 'disabled' : ''} onclick="window.pa.page(${PA.page - 1})">‹ Prev</button><span class="mut" style="font-size:.78rem">Page ${PA.page + 1} / ${pgs}</span><button class="sm" ${PA.page >= pgs - 1 ? 'disabled' : ''} onclick="window.pa.page(${PA.page + 1})">Next ›</button><select onchange="window.pa.psize(this.value)">${[10, 25, 50, 100].map(n => `<option value="${n}" ${n === PA.size ? 'selected' : ''}>${n} / page</option>`).join('')}</select></div>` : '');
   };
   if (PA.tab === 'pools') {
     const list = (D.pools || []).map(poolRow);
-    setHtml('pa', poolTable(list) + `<div class="mut" style="font-size:.74rem;margin-top:.4rem">${list.length} AMM pools on the ${esc(nat)} network. Click a header to sort, the star to favorite, double-click a row to open it.</div>`);
+    setHtml('pa', poolTable(list, true) + `<div class="mut" style="font-size:.74rem;margin-top:.4rem">${list.length} AMM pools on the ${esc(nat)} network. Click a header to sort, the star to favorite, double-click a row to open it.</div>`);
     keep.pa = ($('pa') as HTMLElement).innerHTML;
     return;
   }
@@ -616,7 +619,7 @@ export const paApi = {
     loadAssets();
   },
   tab(k: string) {
-    PA.tab = k;
+    PA.tab = k; PA.page = 0;
     document.querySelectorAll('#pa_tabs button').forEach((b, i) => b.classList.toggle('on', ['all', 'dollar', 'bridged', 'others', 'currencies', 'metals', 'lp', 'pools', 'fav'][i] === k));
     renderAssets();
   },
@@ -628,6 +631,8 @@ export const paApi = {
     renderAssets();
   },
   hideTok(k: string) { SP.hide(ctx.account() || '', k, !SP.hidden(ctx.account() || '').has(k)); renderAssets(); },
+  page(n: number) { PA.page = Math.max(0, n); renderAssets(); },
+  psize(v: string) { PA.size = Number(v) || 25; PA.page = 0; renderAssets(); },
   spamToggle() { PA.showSpam = !PA.showSpam; renderAssets(); },
   sort(c: string) {
     PA.sort = PA.sort.c === c ? (PA.sort.d < 0 ? { c, d: 1 } : { c: '', d: -1 }) : { c, d: c === 'name' || c === 'pair' ? 1 : -1 };
