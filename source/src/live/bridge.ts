@@ -101,10 +101,12 @@ const xrplWallets = () => ctx.wallets().filter(w => w.type === 'xrpl');
 const mineLuma = () => new Set(ctx.wallets().filter(w => w.type !== 'xrpl').map(w => w.address));
 const lAddr = (a: string) => { try { return ctx.showL(ctx.toClassic(a)); } catch { return a; } };
 
+const within = <T,>(p: Promise<T>, ms: number, fb: T): Promise<T> => Promise.race([p.catch(() => fb), new Promise<T>(res => setTimeout(() => res(fb), ms))]);   // a slow or silent source never freezes the page
+
 /* ---------------------------------- operator link ---------------------------------- */
 async function loadOperator(url: string): Promise<any> {
   const base = url.replace(/\/$/, '');
-  let r: Response; try { r = await fetch(base + '/api/public/bridge', { cache: 'no-store', headers: { 'ngrok-skip-browser-warning': '1' } }); } catch { throw new Error('Cannot reach ' + base + '. Is the control panel running, and is the address right? (From another computer use an SSH tunnel or Tailscale.)'); }
+  let r: Response; try { const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 7000); try { r = await fetch(base + '/api/public/bridge', { cache: 'no-store', signal: ac.signal, headers: { 'ngrok-skip-browser-warning': '1' } }); } finally { clearTimeout(tm); } } catch { throw new Error('Cannot reach ' + base + '. Is the control panel running, and is the address right? (From another computer use an SSH tunnel or Tailscale.)'); }
   if (!r.ok) throw new Error('The operator answered ' + r.status);
   const txt = await r.text(); let j: any; try { j = JSON.parse(txt); } catch { throw new Error('That address answered with a web page, not the bridge feed. Use the control panel address (for example http://127.0.0.1:8090), and make sure the control panel is the latest version: update it and restart it, then try again.'); }
   if (!j.ok) throw new Error(j.error || 'The operator sent an error');
@@ -116,9 +118,12 @@ async function tryOperator() {
   const t = ctx.netKey() === 'test' ? 'test' : 'main';
   const tun = String((sc[t] || sc.main || {}).url || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
   const cands = [c.opUrl, tun && /^https:/.test(tun) ? tun + '/panel/' + t : '', location.protocol.startsWith('http') ? location.origin : ''].filter(Boolean);
-  for (const u of [...new Set(cands)]) {
-    try { const j = await loadOperator(u); OP.snap = j; OP.err = ''; OP.at = Date.now(); OP.url = u; return; } catch (e: any) { OP.err = String(e?.message || e); }
-  }
+  // every candidate at once, first good answer wins (they used to be tried one after the other)
+  await new Promise<void>(done => {
+    const list = [...new Set(cands)]; let left = list.length, won = false;
+    if (!left) return done();
+    for (const u of list) loadOperator(u).then(j => { if (won) return; won = true; OP.snap = j; OP.err = ''; OP.at = Date.now(); OP.url = u; done(); }, (e: any) => { OP.err = String(e?.message || e); if (--left === 0 && !won) done(); });
+  });
 }
 function applyOperator(): string {
   const j = OP.snap;
@@ -133,20 +138,28 @@ function applyOperator(): string {
 async function loadBalances() {
   const acc = lumaAcc();
   const L: any = { native: 0, lines: [], ok: false };
-  if (acc) {
-    const ai = await tryReq('account_info', { account: acc, ledger_index: 'validated' });
-    const al = await tryReq('account_lines', { account: acc, ledger_index: 'validated', limit: 300 });
-    L.ok = !!ai; L.native = ai ? Number(ai.account_data.Balance) / 1e6 : 0; L.lines = (al && al.lines) || [];
-  }
+  const c = bcfg();
+  const lumaOf = async (a: string) => { const [ai, al] = await Promise.all([tryReq('account_info', { account: a, ledger_index: 'validated' }), tryReq('account_lines', { account: a, ledger_index: 'validated', limit: 300 })]); return { ai, al }; };
+  const xOf = async (a: string) => { const [ai, al] = await Promise.all([xtry('account_info', { account: a, ledger_index: 'validated' }), xtry('account_lines', { account: a, ledger_index: 'validated', limit: 300 })]); return { ai, al }; };
+  const xw = xrplWallets();
+  // the LUMA wallet, each XRPL wallet and both vaults are read at the same time
+  const [lm, xs, vl, vx] = await Promise.all([
+    acc ? lumaOf(acc).catch(() => null) : Promise.resolve(null),
+    Promise.all(xw.map(w => xOf(w.address).catch(() => ({ ai: null, al: null })))),
+    c.lumaVault ? lumaOf(ctx.toClassic(c.lumaVault)).catch(() => null) : Promise.resolve(null),
+    c.xrplVault ? xOf(c.xrplVault).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (lm) { L.ok = !!lm.ai; L.native = lm.ai ? Number(lm.ai.account_data.Balance) / 1e6 : 0; L.lines = (lm.al && lm.al.lines) || []; }
   ST.bal.L = L;
   const X: any = {};
-  for (const w of xrplWallets()) {
-    const ai = await xtry('account_info', { account: w.address, ledger_index: 'validated' });
-    const al = await xtry('account_lines', { account: w.address, ledger_index: 'validated', limit: 300 });
-    X[w.address] = { ok: !!(ai && ai.account_data), xrp: ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0, owners: ai && ai.account_data ? ai.account_data.OwnerCount || 0 : 0, lines: (al && al.lines) || [] };
-  }
+  xw.forEach((w, k) => { const { ai, al } = xs[k] as any; X[w.address] = { ok: !!(ai && ai.account_data), xrp: ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0, owners: ai && ai.account_data ? ai.account_data.OwnerCount || 0 : 0, lines: (al && al.lines) || [] }; });
   ST.bal.X = X;
-  try { const c = bcfg(), V: any = { L: null, X: null }; if (c.lumaVault) { const v = ctx.toClassic(c.lumaVault), ai = await tryReq('account_info', { account: v, ledger_index: 'validated' }), al = await tryReq('account_lines', { account: v, ledger_index: 'validated', limit: 300 }); V.L = { addr: v, ok: !!ai, native: ai ? Number(ai.account_data.Balance) / 1e6 : 0, lines: (al && al.lines) || [] }; } if (c.xrplVault) { const ai = await xtry('account_info', { account: c.xrplVault, ledger_index: 'validated' }), al = await xtry('account_lines', { account: c.xrplVault, ledger_index: 'validated', limit: 300 }); V.X = { addr: c.xrplVault, ok: !!(ai && ai.account_data), xrp: ai && ai.account_data ? Number(ai.account_data.Balance) / 1e6 : 0, owners: ai && ai.account_data ? ai.account_data.OwnerCount || 0 : 0, lines: (al && al.lines) || [] }; } ST.bal.V = V; } catch {}
+  try {
+    const V: any = { L: null, X: null };
+    if (c.lumaVault && vl) V.L = { addr: ctx.toClassic(c.lumaVault), ok: !!vl.ai, native: vl.ai ? Number(vl.ai.account_data.Balance) / 1e6 : 0, lines: (vl.al && vl.al.lines) || [] };
+    if (c.xrplVault && vx) V.X = { addr: c.xrplVault, ok: !!(vx.ai && vx.ai.account_data), xrp: vx.ai && vx.ai.account_data ? Number(vx.ai.account_data.Balance) / 1e6 : 0, owners: vx.ai && vx.ai.account_data ? vx.ai.account_data.OwnerCount || 0 : 0, lines: (vx.al && vx.al.lines) || [] };
+    ST.bal.V = V;
+  } catch {}
 }
 const lumaBal = (cur: string) => { const L = ST.bal.L; if (!L) return 0; if (cur === ctx.native()) return L.native; const l = (L.lines || []).find((x: any) => hexName(x.currency) === cur); return l ? Number(l.balance) : 0; };
 const xrplBal = (addr: string, cur: string) => { const x = ST.bal.X[addr]; if (!x) return 0; if (cur === 'XRP') return x.xrp; const l = (x.lines || []).find((z: any) => sameCur(z.currency, cur)); return l ? Number(l.balance) : 0; };
@@ -675,20 +688,20 @@ export async function bridgeLoad() {
   const g = ++gen;
   paintHead(); paintSetup(); paintXfer(); paintClaim();
   try {
-    await tryOperator();
+    await within(tryOperator(), 9000, undefined as any);
     if (g !== gen || !$('br')) return;
     { const c0 = bcfg(); if (OP.snap && OP.snap.set && (!c0.lumaVault || !c0.xrplVault)) { try { applyOperator(); ctx.toast('Bridge linked to the operator automatically'); } catch {} } }   // easy setup: nothing to type when the operator is reachable
     { const c1 = bcfg(), w = OP.snap && OP.snap.xrplWs; const isT = (u: string) => /altnet|testnet|devnet/.test(u || ''); const isPub = (u: string) => /xrplcluster|ripple\.com|rippletest|altnet|testnet\.xrpl|xrpl-labs/.test(u || ''); if (w && c1.opUrl && isPub(c1.xrplUrl) && isT(w) !== isT(c1.xrplUrl)) { saveCfg({ ...c1, xrplUrl: w }); ctx.toast('XRPL node switched to ' + (isT(w) ? 'testnet' : 'mainnet') + ' to match the operator'); } }   // never look for a mainnet wallet on testnet
     paintHead(); paintClaim();
-    await loadBalances();
+    await within(loadBalances(), 25000, undefined as any);
     if (g !== gen || !$('br')) return;
-    ST.chk = await runChecks();
+    ST.chk = await within(runChecks(), 25000, [] as Chk[]);
     if (g !== gen || !$('br')) return;
     paintSetup(); paintChecks(); paintXfer(); paintBW(); paintStats(); paintTabs();
-    await reserves();
+    await within(reserves(), 25000, undefined as any);
     if (g !== gen || !$('br')) return;
     paintRep(); paintBW(); paintStats(); paintTabs(); estimate();
-    await history(g);
+    await within(history(g), 40000, undefined as any);
   } catch (e: any) {
     setHtml('br_chk', `<div class="k">Bridge checklist</div><div class="dn" style="padding:.6rem">${esc(e?.message || e)}</div>`);
   }
