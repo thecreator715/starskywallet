@@ -157,8 +157,11 @@ function connectHtml(): string {
   <b>Developer API (curl)</b>${code(`curl -H "x-luma-key: ${kk}" ${ap}/price\ncurl -H "x-luma-key: ${kk}" ${ap}/account/<address>`)}
   <b>Python</b>${code(`import requests\nr = requests.get("${ap}/price", headers={"x-luma-key": "${kk}"})\nprint(r.json())`)}
   <b>Environment file (.env)</b>${code(`LUMA_NETWORK_ID=${chainId()}\nLUMA_WSS=${ws}\nLUMA_RPC=${httpUrl()}\nLUMA_API=${ap}\nLUMA_KEY=${kk}`)}<div class="row" style="gap:.4rem">${cp(`LUMA_NETWORK_ID=${chainId()}\nLUMA_WSS=${ws}\nLUMA_RPC=${httpUrl()}\nLUMA_API=${ap}\nLUMA_KEY=${k}`)}<span class="mut" style="font-size:.78rem;align-self:center">Copies the .env with your real key.</span></div></div>`;
-  return creds + test + easy;
+  const sb = `<div class="card c12"><div class="k">Try a request</div><div class="mut" style="margin:.3rem 0">Runs a real call with your key so you can see exactly what your app would get. Each successful call costs the usual price.</div><div class="row" style="gap:.5rem;flex-wrap:wrap"><span class="mono mut" style="align-self:center">GET /api/public/v1</span><input id="dv_try" list="dv_paths" value="${esc(TRYP)}" size="30" placeholder="/price"><datalist id="dv_paths">${['/price', '/fee', '/ledger', ctx.account() ? '/account/' + ctx.show(ctx.account()!) : ''].filter(Boolean).map(x => `<option value="${esc(x)}">`).join('')}</datalist><button class="pri sm" onclick="window.dv.tryReq()">Send</button></div>${TRYR ? `<pre style="background:rgba(255,255,255,.06);padding:.7rem;border-radius:8px;overflow:auto;max-height:18rem;font-size:.8rem;margin:.6rem 0 0">${esc(TRYR)}</pre>` : ''}</div>`;
+  return creds + test + sb + easy;
 }
+let TRYP = '/price', TRYR = '';
+export async function tryReq() { const k = getKey(); const p = (($('dv_try') || { value: '' }).value || '').trim(); TRYP = p; if (!k) { TRYR = 'Add a key first (Start tab).'; return paint(); } if (!p.startsWith('/')) { TRYR = 'Start the path with /'; return paint(); } TRYR = 'Sending…'; paint(); try { const r = await http('GET', '/api/public/v1' + p, undefined, k); TRYR = `HTTP ${r.s} · ${MS(r.ms)}\n\n` + JSON.stringify(r.j, null, 2).slice(0, 4000); Lg.log('developer api', r.s < 400 ? 'ok' : 'warn', 'GET ' + p + ' → ' + r.s, r.ms); } catch (e: any) { TRYR = String(e?.message || e); } paint(); }
 
 // ---------- activity log ----------
 let AF = { src: 'all', lvl: 'all', q: '', range: 'all' };
@@ -186,8 +189,8 @@ function paint() {
   tabs.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.dv.view('${k}')">${l}</button>`).join('') + '<span class="grow"></span>' + statusChip() + '<button class="sm" onclick="window.dv.load(true)">Refresh</button>';
   if (VIEW === 'toolkit') { if (!tkOn || !document.getElementById('tk_root')) { body.innerHTML = Tk.shell(); tkOn = true; Tk.mount(); } return; }
   tkOn = false;
-  const a = document.activeElement as HTMLElement | null; if (a && ['dv_top', 'dv_amt', 'dv_label', 'dv_have', 'ac_q'].includes(a.id) && body.contains(a)) return;   // never wipe what is being typed
+  const a = document.activeElement as HTMLElement | null; if (a && ['dv_top', 'dv_amt', 'dv_label', 'dv_have', 'ac_q', 'dv_try'].includes(a.id) && body.contains(a)) return;   // never wipe what is being typed
   body.innerHTML = VIEW === 'start' ? startHtml() : VIEW === 'connect' ? connectHtml() : VIEW === 'usage' ? usageHtml() : VIEW === 'activity' ? activityHtml() : docsHtml();
 }
 export function mount() { clearInterval(timer); void load(true); timer = setInterval(() => { if (!document.getElementById('dv_root')) { clearInterval(timer); return; } if (!document.hidden) void load(); }, 10000); }
-export const api = { runTest, actf, actClear, actCsv, actJson, load, view, setOp, start, claim, topup, useKey, forget, newKey, revoke, copy, hours };
+export const api = { tryReq, runTest, actf, actClear, actCsv, actJson, load, view, setOp, start, claim, topup, useKey, forget, newKey, revoke, copy, hours };

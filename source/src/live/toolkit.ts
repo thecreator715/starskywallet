@@ -8,6 +8,7 @@ import * as PM from './procmodal.ts';
 import QRCode from 'qrcode';
 import { buildLink } from './safety.ts';
 import * as T2 from './toolkit2.ts';
+import * as T3 from './toolkit3.ts';
 
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement | null;
 const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
@@ -16,9 +17,9 @@ const wr = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify
 const GREEN = '#3ddc84', RED = '#ff5b5b', AMB = '#f5b84b';
 const chip = (t: string, c: string) => `<span style="display:inline-block;padding:.08rem .5rem;border-radius:99px;font-size:.78rem;background:${c}22;color:${c}">${esc(t)}</span>`;
 const tile = (k: string, v: string, sub = '') => `<div class="tile" style="min-width:9rem;flex:1"><div class="mut" style="font-size:.8rem">${esc(k)}</div><div style="font-size:1.2rem;font-weight:800;margin:.1rem 0">${v}</div><div class="mut" style="font-size:.78rem">${sub}</div></div>`;
-type VW = 'bulk' | 'orders' | 'protect' | 'pay' | 'clean' | 'watch' | 'journal' | 'contacts' | 'safety' | 'digest';
+type VW = 'bulk' | 'orders' | 'protect' | 'pay' | 'clean' | 'watch' | 'journal' | 'contacts' | 'safety' | 'digest' | 'earn' | 'badges';
 let VIEW = 'bulk' as VW;
-const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['orders', 'Auto orders'], ['protect', 'Protect & co-sign'], ['pay', 'Get paid & gifts'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal'], ...(T2.tabs as [VW, string][])];
+const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['orders', 'Auto orders'], ['protect', 'Protect & co-sign'], ['pay', 'Get paid & gifts'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal'], ...(T2.tabs as [VW, string][]), ...(T3.tabs as [VW, string][])];
 
 // ---------- pure helpers (tested) ----------
 export function parsePay(txt: string): { rows: { addr: string; amt?: number }[]; bad: string[] } {
@@ -338,13 +339,14 @@ function paint() {
   const t = document.getElementById('tk_tabs'), b = document.getElementById('tk_body'); if (!t || !b) return;
   t.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.tkt.view('${k}')">${l}</button>`).join('');
   const a = document.activeElement; if (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && b.contains(a)) return;
-  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'orders' ? ordersHtml() : VIEW === 'protect' ? protectHtml() : VIEW === 'pay' ? payHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : VIEW === 'journal' ? journalHtml() : T2.html(VIEW);
+  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'orders' ? ordersHtml() : VIEW === 'protect' ? protectHtml() : VIEW === 'pay' ? payHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : VIEW === 'journal' ? journalHtml() : VIEW === 'earn' || VIEW === 'badges' ? T3.html(VIEW) : T2.html(VIEW);
 }
-async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'watch') await watchTick(); if (VIEW === 'orders') await ordersTick(); if (VIEW === 'protect') { await readSigners(); await delayedTick(); } if (VIEW === 'pay') { await recurTick(); await scanInvoices(); } } finally { busy = false; paint(); } }
+async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'earn' || VIEW === 'badges') await T3.load(VIEW); if (VIEW === 'watch') await watchTick(); if (VIEW === 'orders') await ordersTick(); if (VIEW === 'protect') { await readSigners(); await delayedTick(); } if (VIEW === 'pay') { await recurTick(); await scanInvoices(); } } finally { busy = false; paint(); } }
 export function view(v: VW) { VIEW = v; MSG = ''; paint(); void refresh(); }
 export function mount() { paint(); void refresh(); }
-export function start() { clearInterval(tmr); tmr = setInterval(() => { void watchTick(); void ordersTick(); void delayedTick(); void recurTick(); void scanInvoices(); }, 30000); }
+export function start() { clearInterval(tmr); tmr = setInterval(() => { void watchTick(); void ordersTick(); void delayedTick(); void recurTick(); void scanInvoices(); void T3.tick(); }, 30000); }
 export const api = {
+  ...T3.makeApi(() => paint()),
   holders: fetchHolders, smart: applySmart, tweak: tweakAll,
   ...T2.makeApi(() => paint()),
   addOrder, sellAll, rmOrder(i: number) { const os = ORD(); os.splice(i, 1); saveOrd(os); paint(); },
