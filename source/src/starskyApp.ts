@@ -2455,7 +2455,16 @@ export function initWindowBindings() {
       const cl: any = await chainClient();
       if (!cl.isConnected()) { try { await cl.connect(); } catch {} }   // never send while the socket is still opening
       const t0 = performance.now();
-      try { const r: any = await cl.request({ command, ...params }); Lg.log('node', 'ok', command, performance.now() - t0); return r.result; }
+      const once = (ms: number) => Promise.race([cl.request({ command, ...params }), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+      try {
+        let r: any;
+        try { r = await once(15000); }
+        catch (e: any) {   // slow or dropped socket on a read: reconnect once and retry (never for writes, those go through submitTx)
+          if (/^submit/.test(command) || !/timeout|disconnect|not connected|websocket/i.test(String(e?.message || e))) throw e;
+          try { if (!cl.isConnected()) await cl.connect(); } catch {}
+          r = await once(20000);
+        }
+        Lg.log('node', 'ok', command, performance.now() - t0); return r.result; }
       catch (e: any) { Lg.log('node', 'error', `${command} failed: ${String(e?.message || e).slice(0, 120)}`, performance.now() - t0); throw e; }
     },
     lumaReq: async (command: string, params: any = {}) => {

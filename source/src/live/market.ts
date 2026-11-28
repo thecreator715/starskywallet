@@ -41,10 +41,10 @@ export async function discoverTokens(): Promise<Asset[]> {
       if (!marker) break;
     }
     return [...seen.values()];
-  });
+  }, { persist: true, swr: true });
 }
 export async function poolRefs(): Promise<PoolRef[]> {
-  return cached('poolrefs', 120000, async () => {
+  const out: PoolRef[] = await cached('poolrefs.raw', 120000, async () => {
     const out: PoolRef[] = [];
     let marker: any;
     for (let page = 0; page < 20; page++) {
@@ -55,10 +55,11 @@ export async function poolRefs(): Promise<PoolRef[]> {
       marker = r.marker;
       if (!marker) break;
     }
-    ALL_POOLS = out.slice();
-    pickMainUsd(out);
-    return out.filter(q => !isOldUsd(q.a) && !isOldUsd(q.b));   // pools on an OLD USD are not shown in Starsky
-  });
+    return out;
+  }, { persist: true, swr: true });
+  ALL_POOLS = out.slice();
+  pickMainUsd(out);
+  return out.filter(q => !isOldUsd(q.a) && !isOldUsd(q.b));   // pools on an OLD USD are not shown in Starsky
 }
 /** reserves of a pool now (seq undefined) or at a past validated ledger */
 export async function poolState(ref: PoolRef, seq?: number): Promise<PoolState | null> {

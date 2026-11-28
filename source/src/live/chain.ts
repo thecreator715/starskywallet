@@ -6,21 +6,34 @@ const inflight = new Map<string, Promise<any>>();
 export function clearCache(prefix?: string) {
   for (const k of [...cache.keys()]) if (!prefix || k.startsWith(prefix)) cache.delete(k);
 }
-/** cache by key for ttl ms (Infinity = immutable); identical in-flight calls share one request */
-export async function cached<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T> {
+const PK = 'starsky.cc.';
+const pget = (k: string): { t: number; v: any } | null => { try { const r = localStorage.getItem(PK + k); return r ? JSON.parse(r) : null; } catch { return null; } };
+const pset = (k: string, e: { t: number; v: any }) => {
+  try { localStorage.setItem(PK + k, JSON.stringify(e)); } catch {
+    try { for (let i = 0; i < localStorage.length; i++) { const kk = localStorage.key(i) || ''; if (kk.startsWith(PK)) localStorage.removeItem(kk); } localStorage.setItem(PK + k, JSON.stringify(e)); } catch {}
+  }
+};
+/** cache by key for ttl ms (Infinity = immutable); identical in-flight calls share one request.
+ *  persist: also keep a JSON copy in localStorage so the next page load starts warm; swr: when the copy is older than ttl, answer with it at once and refresh in the background */
+export async function cached<T>(key: string, ttl: number, fn: () => Promise<T>, o: { persist?: boolean; swr?: boolean } = {}): Promise<T> {
   const k = ctx.netKey() + (ctx.xrpl() ? 'X' : '') + '|' + key;
-  const hit = cache.get(k);
-  if (hit && (ttl === Infinity || Date.now() - hit.t < ttl)) return hit.v as T;
+  let hit = cache.get(k);
+  if (!hit && o.persist) { const pe = pget(k); if (pe) { hit = pe; cache.set(k, pe); } }
+  const fresh = hit && (ttl === Infinity || Date.now() - hit.t < ttl);
+  if (fresh) return hit!.v as T;
   const fl = inflight.get(k);
-  if (fl) return fl as Promise<T>;
+  if (fl) return hit && o.swr ? (hit.v as T) : (fl as Promise<T>);
   const p = fn()
     .then(v => {
-      cache.set(k, { t: Date.now(), v });
+      const e = { t: Date.now(), v };
+      cache.set(k, e);
+      if (o.persist) pset(k, e);
       if (cache.size > 4000) for (const kk of [...cache.keys()].slice(0, 1000)) cache.delete(kk);
       return v;
     })
     .finally(() => inflight.delete(k));
   inflight.set(k, p);
+  if (hit && o.swr) { p.catch(() => {}); return hit.v as T; }
   return p;
 }
 export const req = (command: string, params: any = {}, ttl = 0) =>
