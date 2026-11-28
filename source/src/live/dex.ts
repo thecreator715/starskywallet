@@ -280,7 +280,7 @@ export async function load(keepSelection = true) {
       else { DX.mid = (native[0] || DX.markets[0]).id; DX.inv = false; }
     }
     if (!DX.flipped) orient();
-    if (DX.loadedMid !== DX.mid + (DX.inv ? '~' : '')) DX.cd = DX.tr = DX.tok = DX.hold = DX.bookd = DX.pc = null;
+    if (DX.loadedMid !== DX.mid + (DX.inv ? '~' : '')) DX.cd = DX.tr = DX.tok = DX.hold = DX.bookd = DX.pc = DX.mini = null;
     DX.loadedMid = DX.mid + (DX.inv ? '~' : '');
     renderAll();
     const m = mkt() as M.Market;
@@ -293,6 +293,42 @@ export async function load(keepSelection = true) {
       if (stale(g)) return;
       const now = sPool ? M.poolPrice(sPool, m.base) : null;
       if (now != null && now > 0) { DX.pc = DX.pc && DX.pc.ch && Object.keys(DX.pc.ch).length ? { ...DX.pc, now } : { now, ch: {} }; try { localStorage.setItem(pxKey, JSON.stringify({ now })); } catch {} renderHead(); renderInfo(); }
+    })();
+    // right-hand panel on its own fast path: changes, supply (market cap), pool liquidity and holders, each shown from the last visit at once and refreshed
+    const sk = JSON.stringify([m.base, m.quote]);
+    const lsGet = (k: string): any => { try { return JSON.parse(localStorage.getItem('starsky.dex.' + k + '.' + sk) || 'null'); } catch { return null; } };
+    const lsSet = (k: string, v: any) => { try { localStorage.setItem('starsky.dex.' + k + '.' + sk, JSON.stringify(v)); } catch {} };
+    if (!DX.mini) { const j = lsGet('mini'); if (j) DX.mini = j; }
+    if (!DX.hold) { const j = lsGet('hold'); if (j && j.count != null) DX.hold = j; }
+    if (DX.pc && (!DX.pc.ch || !Object.keys(DX.pc.ch).length)) { const j = lsGet('chg'); if (j) DX.pc = { ...DX.pc, ch: j }; }
+    renderTok();
+    const statsJob = (async () => {
+      const dp = M.directPool(DX.refs, m.base, m.quote);
+      // changes (5m / 1h / 24h / 7d): four reads of this one pool, no all-pool snapshots
+      const chgP = dp ? (async () => {
+        await priceJob.catch(() => {}); const ws = await M.windowSeqs(); const nowP = DX.pc && DX.pc.now != null ? DX.pc.now : null;
+        const out: Record<string, { v: number | null; partial: boolean }> = {};
+        await Promise.all(ws.map(async w => {
+          let partial = false; let st = w.w.k === 'all' ? null : await M.poolState(dp, w.seq).catch(() => null);
+          if (!st) { st = await M.poolState(dp, await M.firstSeen(dp)).catch(() => null); partial = w.w.k !== 'all'; }
+          const then = st ? M.poolPrice(st, m.base) : null; const nw = nowP;
+          out[w.w.k] = { v: nw != null && then != null && then > 0 ? (nw / then - 1) * 100 : null, partial };
+        }));
+        if (stale(g)) return; if (!DX.pc || DX.pc.now == null) return;
+        DX.pc = { ...DX.pc, ch: out }; lsSet('chg', out); renderHead(); renderTok();
+      })().catch(() => {}) : Promise.resolve();
+      // supply (market cap) and this pool's liquidity
+      const miniP = (async () => {
+        const [sup, st] = await Promise.all([M.supplyOf(m.base).catch(() => null), dp ? M.poolState(dp).catch(() => null) : Promise.resolve(null)]);
+        if (stale(g)) return;
+        const tvlQ = st ? 2 * (akey(st.a) === akey(m.quote) ? st.ra : st.rb) : null;
+        DX.mini = { supply: sup, tvlQ }; lsSet('mini', DX.mini); renderTok();
+        // holders after supply
+        const pools = new Set<string>(DX.refs.map((q: M.PoolRef) => q.account));
+        const h = await M.holders(m.base, sup, pools).catch(() => null);
+        if (stale(g) || !h) return; DX.hold = h; DX.holdAt = Date.now(); try { lsSet('hold', h); } catch {} renderTok(); if (DX.tab === 'holders') renderTable();
+      })().catch(() => {});
+      await Promise.all([chgP, miniP]);
     })();
     const chartJob = safeCandles(m, c2 => { if (!stale(g) && DX.mid + (DX.inv ? '~' : '') === DX.loadedMid) { DX.cd = c2; renderChart(); renderHead(); } }).then(c => {
         if (stale(g)) return;
@@ -308,6 +344,7 @@ export async function load(keepSelection = true) {
         renderTok();
       });
     const jobs: Promise<any>[] = [
+      statsJob,
       loadBal().then(() => !stale(g) && (renderTrade(), renderTok())),
       priceJob,
       chartJob,
@@ -330,6 +367,7 @@ export async function load(keepSelection = true) {
         renderInfo();
         const row = t.rows.find(r => r.key === akey(m.base));
         const pools = new Set<string>(DX.refs.map((p: M.PoolRef) => p.account));
+        if (DX.holdAt && Date.now() - DX.holdAt < 120000) return;
         M.holders(m.base, row ? row.supply : null, pools).then(h => {
           if (stale(g)) return;
           DX.hold = h;
@@ -786,7 +824,7 @@ function renderTok() {
   const p = livePrice(),
     qu = usdOfQuote();
   const vol = DX.tr ? DX.tr.filter((x: M.Trade) => (x.kind === 'buy' || x.kind === 'sell') && Date.now() - x.ms < 86400e3).reduce((s: number, x: M.Trade) => s + x.quote, 0) : null;
-  const tvlQ = DX.tok && m.pool ? poolTvlInQuote(m) : null;
+  const tvlQ = (DX.tok && m.pool ? poolTvlInQuote(m) : null) ?? (DX.mini && DX.mini.tvlQ != null ? DX.mini.tvlQ : null);
   const c = DX.pc ? DX.pc.ch : {};
   const cf = (n: number | null | undefined, d = 2): string => (n == null || !isFinite(n) ? '–' : Math.abs(n) >= 1e12 ? (n / 1e12).toFixed(d) + 'T' : Math.abs(n) >= 1e9 ? (n / 1e9).toFixed(d) + 'B' : Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(d) + 'M' : Math.abs(n) >= 1e4 ? (n / 1e3).toFixed(1) + 'K' : fmt(n));
   const tile = (k: string, v: string, sub = '', full = '') => `<div class="dxt2" ${full ? `title="${esc(full)}"` : ''}><div class="k">${k}</div><div class="dxt2v">${v}</div><div class="dxt2s">${sub || '&nbsp;'}</div></div>`;
@@ -796,7 +834,8 @@ function renderTok() {
     hi = cl.length ? Math.max(...cl.map((x: M.Candle) => x.h)) : null;
   const pos = lo != null && hi != null && hi > lo && p != null ? Math.min(100, Math.max(0, ((p - lo) / (hi - lo)) * 100)) : 50;
   const issuer = isNative(m.base) ? 'Native coin' : short(ctx.show(m.base.i), 6, 5);
-  const mcap = row && row.mcapUsd != null ? row.mcapUsd : null, mcapN = row && row.mcapNative != null ? row.mcapNative : null;
+  let mcap = row && row.mcapUsd != null ? row.mcapUsd : null, mcapN = row && row.mcapNative != null ? row.mcapNative : null;
+  if (mcap == null && DX.mini && DX.mini.supply != null && p != null && qu != null) mcap = DX.mini.supply * p * qu;
   const volUsd = vol != null && qu != null ? vol * qu : null, tvlUsd = tvlQ != null && qu != null ? tvlQ * qu : null;
   const turn = vol != null && tvlQ ? (vol / tvlQ) * 100 : null;
   const ch24 = c['24h'] && c['24h'].v != null ? c['24h'].v : null, up = ch24 == null ? true : ch24 >= 0;

@@ -407,20 +407,19 @@ const Pool_all = (prefs: M.PoolRef[]) => poolMap(prefs, 8, async ref => ({ ref, 
 export function assetsMount() {
   loadAssets();
 }
+const paKey = () => 'starsky.pa.html.' + ctx.netKey() + '.' + ctx.account() + '.' + PA.tab;
+const setPa = (h: string) => { setHtml('pa', h); try { if (h.length < 900000) localStorage.setItem(paKey(), JSON.stringify({ t: Date.now(), h })); } catch { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i) || ''; if (k.startsWith('starsky.pa.html.')) localStorage.removeItem(k); } } catch {} } };
 export async function loadAssets() {
   if (paBusy || !$('pa')) return;
   paBusy = true;
   try {
     if (!ctx.online()) return;
     if (ctx.xrpl()) { await loadXAssets(setHtml); return; }
+    // the last table for this wallet, network and tab goes up at once; the live one replaces it as soon as it is read
+    if (!PA.data) { try { const j = JSON.parse(localStorage.getItem(paKey()) || 'null'); if (j && j.h) setHtml('pa', j.h); } catch {} }
     const regP = TK.registry().catch(() => [] as TK.TokenMeta[]);
     const blP: Promise<Asset[]> = import('./bridge.ts').then(m => m.laneAssets()).catch(() => [] as Asset[]);
     await loadLines();
-    // first paint: what this wallet holds, straight from its trust lines, before any market data is read
-    if (!PA.data && MK.bal) {
-      const ls = (MK.bal.lines as any[]).filter(l => +l.balance > 0).sort((x, y) => +y.balance - +x.balance);
-      if (ls.length && $('pa')) setHtml('pa', `<table class="dxt"><thead><tr><th>Asset</th><th class="r">Balance</th></tr></thead><tbody>${ls.map(l => `<tr><td>${esc(M.labelOf({ c: l.currency, i: l.account }))}</td><td class="r mono">${fmt(+l.balance, 4)}</td></tr>`).join('')}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.4rem">Your balances. Prices, values and the other tokens are loading…</div>`);
-    }
     const lineAssets: Asset[] = (MK.bal ? MK.bal.lines : []).map((l: any) => ({ c: l.currency, i: l.account }));
     const [regList, bl] = await Promise.all([regP, blP]);
     const allX = [...lineAssets, ...regList.map(x => x.a), ...bl];
@@ -544,7 +543,7 @@ function renderAssets() {
   };
   if (PA.tab === 'pools') {
     const list = (D.pools || []).map(poolRow);
-    setHtml('pa', poolTable(list, true) + `<div class="mut" style="font-size:.74rem;margin-top:.4rem">${list.length} AMM pools on the ${esc(nat)} network. Click a header to sort, the star to favorite, double-click a row to open it.</div>`);
+    setPa(poolTable(list, true) + `<div class="mut" style="font-size:.74rem;margin-top:.4rem">${list.length} AMM pools on the ${esc(nat)} network. Click a header to sort, the star to favorite, double-click a row to open it.</div>`);
     keep.pa = ($('pa') as HTMLElement).innerHTML;
     return;
   }
@@ -567,7 +566,7 @@ function renderAssets() {
         return `<tr ondblclick="window.pa.open('pools')" title="Double-click to open the pool"><td><div class="coin">${star('p:' + ref.account)}<i>LP</i><div><b>${esc(nm(ref.a))} / ${esc(nm(ref.b))}</b><div class="mut mono" style="font-size:.7rem">LP token · pool ${esc(short(ctx.show(ref.account), 8, 5))} · fee ${ref.fee}%</div></div></div></td><td class="r mono">${fmt(bal, 6)}</td><td class="r">${(share * 100).toFixed(share < 0.0001 ? 6 : share < 0.01 ? 4 : 2)}%</td><td class="r mono">${fmt(qa, 4)} <small class="mut">${esc(nm(ref.a))}</small><br>${fmt(qb, 4)} <small class="mut">${esc(nm(ref.b))}</small></td><td class="r">${vU != null ? usd(vU) : vN != null ? fmt(vN, 2) + ' ' + esc(ctx.native()) : '–'}</td><td class="r"><button class="sm" onclick="window.goTab('pools')">Manage</button></td></tr>`;
       })
       .join('');
-    setHtml('pa', `<table class="dxt"><thead><tr>${sth('Pool (pair)', 'pair', '')}${sth('LP balance', 'bal')}${sth('Pool share', 'sh')}<th class="r">Your amounts in the pool</th>${sth('Value', 'val')}<th></th></tr></thead><tbody>${body || '<tr><td colspan="6" class="mut" style="padding:1rem">This wallet holds no LP tokens.</td></tr>'}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.4rem">LP tokens are your share of a liquidity pool. Amounts are what you would get back by withdrawing everything now. Total LP value: <b>${usd(tot)}</b>.</div>`);
+    setPa(`<table class="dxt"><thead><tr>${sth('Pool (pair)', 'pair', '')}${sth('LP balance', 'bal')}${sth('Pool share', 'sh')}<th class="r">Your amounts in the pool</th>${sth('Value', 'val')}<th></th></tr></thead><tbody>${body || '<tr><td colspan="6" class="mut" style="padding:1rem">This wallet holds no LP tokens.</td></tr>'}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.4rem">LP tokens are your share of a liquidity pool. Amounts are what you would get back by withdrawing everything now. Total LP value: <b>${usd(tot)}</b>.</div>`);
     keep.pa = ($('pa') as HTMLElement).innerHTML;
     return;
   }
@@ -606,7 +605,7 @@ function renderAssets() {
       return `${head}<tr ondblclick="window.pa.open('trade','${esc(r.key)}')" title="Double-click to open"><td><div class="coin">${star('t:' + r.key)}${coinIcon(r.key, r.name)}<div><b>${esc(r.name)}</b>${spamTag(spRow(r.key), r.key)}${CAT.labelOf(r.name) ? `<span class="tag" style="margin-left:.4rem">${esc(CAT.labelOf(r.name))}</span>` : ''}<div class="mut mono" style="font-size:.7rem">${sub}</div>${others && meta && (meta.desc || meta.site) ? `<div class="mut" style="font-size:.72rem;max-width:18rem;white-space:normal">${esc(meta.desc)} ${meta.site ? `<a href="${esc(meta.site)}" target="_blank" rel="noopener noreferrer">site</a>` : ''}</div>` : ''}</div></div></td><td class="r">${r.usdPx != null ? usd(r.usdPx) : r.nativePx != null ? fmt(r.nativePx) + ' ' + esc(nat) : '<span class="mut">no pool</span>'}</td><td class="r">${pctHtml(r.chg['24h'])}${r.partial['24h'] ? '<small class="mut" title="Since listing">*</small>' : ''}</td><td class="r">${l || isNative(r.a) ? fmt(bal) : '<span class="mut">–</span>'}</td><td class="r">${val != null && (l || isNative(r.a)) ? (px != null ? usd(val * px) : fmt(val) + ' ' + esc(nat)) : '<span class="mut">–</span>'}</td><td class="r">${r.supply != null ? fmt(r.supply) : '–'}</td><td class="r">${r.mcapUsd != null ? usd(r.mcapUsd) : r.mcapNative != null ? fmt(r.mcapNative) + ' ' + esc(nat) : '–'}</td><td class="r">${r.tvlUsd != null ? usd(r.tvlUsd) : r.tvlNative ? fmt(r.tvlNative) : '–'}<div class="mut" style="font-size:.7rem">${r.pools} pool${r.pools === 1 ? '' : 's'}</div></td><td class="r" style="white-space:nowrap">${act}</td></tr>`;
     })
     .join('');
-  setHtml('pa', `${spamN ? `<div class="mut" style="font-size:.8rem;margin-bottom:.4rem">${PA.showSpam ? 'Showing' : 'Hiding'} ${spamN} spam or hidden token${spamN === 1 ? '' : 's'}. <a style="cursor:pointer" onclick="window.pa.spamToggle()">${PA.showSpam ? 'Hide them' : 'Show them'}</a></div>` : ''}<table class="dxt tok9"><thead><tr>${sth('Asset', 'name', '')}${sth('Price', 'price')}${sth('24h', 'chg')}${sth('Balance', 'bal')}${sth('Value', 'value')}${sth('Supply', 'supply')}${sth('Market cap', 'mcap')}${sth('Liquidity', 'liq')}<th></th></tr></thead><tbody>${body || `<tr><td colspan="9" class="mut" style="padding:1rem">${others ? 'No tokens have been created on this network yet. Use “Create token” to make the first one.' : 'Nothing here yet.'}</td></tr>`}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.5rem">Every token with a pool on this network, every token created here, and every trust line this wallet has. Categories go by symbol; created tokens are under Others. Wallet total: <b>${px != null ? usd(total * px) : fmt(total) + ' ' + esc(nat)}</b>. * = since the token first appeared in a pool.${TK.genesisAddr() ? '' : ' Created tokens are found through the genesis wallet: set it once in the token creator.'}</div>`);
+  setPa(`${spamN ? `<div class="mut" style="font-size:.8rem;margin-bottom:.4rem">${PA.showSpam ? 'Showing' : 'Hiding'} ${spamN} spam or hidden token${spamN === 1 ? '' : 's'}. <a style="cursor:pointer" onclick="window.pa.spamToggle()">${PA.showSpam ? 'Hide them' : 'Show them'}</a></div>` : ''}<table class="dxt tok9"><thead><tr>${sth('Asset', 'name', '')}${sth('Price', 'price')}${sth('24h', 'chg')}${sth('Balance', 'bal')}${sth('Value', 'value')}${sth('Supply', 'supply')}${sth('Market cap', 'mcap')}${sth('Liquidity', 'liq')}<th></th></tr></thead><tbody>${body || `<tr><td colspan="9" class="mut" style="padding:1rem">${others ? 'No tokens have been created on this network yet. Use “Create token” to make the first one.' : 'Nothing here yet.'}</td></tr>`}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.5rem">Every token with a pool on this network, every token created here, and every trust line this wallet has. Categories go by symbol; created tokens are under Others. Wallet total: <b>${px != null ? usd(total * px) : fmt(total) + ' ' + esc(nat)}</b>. * = since the token first appeared in a pool.${TK.genesisAddr() ? '' : ' Created tokens are found through the genesis wallet: set it once in the token creator.'}</div>`);
   if (PA.tab === 'fav') {
     const fp = (D.pools || []).map(poolRow).filter((x: any) => isFav(x.k));
     const el = $('pa') as HTMLElement;

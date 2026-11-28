@@ -208,6 +208,10 @@ export async function windowSnaps(): Promise<WinSnap[]> {
     }));
   });
 }
+/** the same windows without the all-pools snapshots: just which ledger each window starts at (enough for one pool's change) */
+export async function windowSeqs(): Promise<WinSnap[]> {
+  return cached('winseqs', 20000, async () => Promise.all(WINDOWS.map(async w => { const at = await ledgerAgo(w.sec); return { w, seq: at.seq, ageSec: at.ageSec, clamped: at.clamped, snap: null as any } as WinSnap; })));
+}
 const chg = (now: number | null, then: number | null) => (now == null || then == null || !(then > 0) ? null : (now / then - 1) * 100);
 /** price of `base` in `quote` units (quote per base) */
 export function ratio(s: Snap, base: Asset, quote: Asset): number | null {
@@ -245,7 +249,7 @@ export async function supplyOf(a: Asset): Promise<number | null> {
 }
 /** every asset on the network that has a pool, plus any extra assets (the wallet's lines, watch list) */
 export async function tokenTable(extra: Asset[] = [], fast = false): Promise<{ rows: TokenRow[]; now: Snap; ws: WinSnap[] }> {
-  const [ws, now] = await Promise.all([windowSnaps(), snapshot()]);
+  const [ws, now] = await Promise.all([fast ? Promise.resolve([] as WinSnap[]) : windowSnaps(), snapshot()]);   // fast pass: no history snapshots, they come with the full pass
   const keys = new Set<string>(['native']);
   for (const p of now.pools) {
     keys.add(akey(p.a));
