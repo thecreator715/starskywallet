@@ -403,6 +403,7 @@ export function assetsShell() {
     <div id="pa" style="overflow:auto">${keep.pa || wait('Reading tokens…')}</div></div>`;
 }
 let paBusy = false;
+const Pool_all = (prefs: M.PoolRef[]) => poolMap(prefs, 8, async ref => ({ ref, st: await M.poolState(ref).catch(() => null) }));
 export function assetsMount() {
   loadAssets();
 }
@@ -412,20 +413,24 @@ export async function loadAssets() {
   try {
     if (!ctx.online()) return;
     if (ctx.xrpl()) { await loadXAssets(setHtml); return; }
+    const regP = TK.registry().catch(() => [] as TK.TokenMeta[]);
+    const blP: Promise<Asset[]> = import('./bridge.ts').then(m => m.laneAssets()).catch(() => [] as Asset[]);
     await loadLines();
+    // first paint: what this wallet holds, straight from its trust lines, before any market data is read
+    if (!PA.data && MK.bal) {
+      const ls = (MK.bal.lines as any[]).filter(l => +l.balance > 0).sort((x, y) => +y.balance - +x.balance);
+      if (ls.length && $('pa')) setHtml('pa', `<table class="dxt"><thead><tr><th>Asset</th><th class="r">Balance</th></tr></thead><tbody>${ls.map(l => `<tr><td>${esc(M.labelOf({ c: l.currency, i: l.account }))}</td><td class="r mono">${fmt(+l.balance, 4)}</td></tr>`).join('')}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.4rem">Your balances. Prices, values and the other tokens are loading…</div>`);
+    }
     const lineAssets: Asset[] = (MK.bal ? MK.bal.lines : []).map((l: any) => ({ c: l.currency, i: l.account }));
-    const regList = await TK.registry().catch(() => [] as TK.TokenMeta[]);
-    const bl: Asset[] = await import('./bridge.ts').then(m => m.laneAssets()).catch(() => [] as Asset[]);
-    const t = await M.tokenTable([...lineAssets, ...regList.map(x => x.a), ...bl]);
+    const [regList, bl] = await Promise.all([regP, blP]);
+    const [t] = await Promise.all([M.tokenTable([...lineAssets, ...regList.map(x => x.a), ...bl]), M.poolRefs().catch(() => [])]);
     if (!$('pa')) return;
-    await M.poolRefs().catch(() => []);
     const lpLines = (MK.bal ? MK.bal.lines : []).filter((l: any) => +l.balance > 0 && M.lpPoolOf({ c: l.currency, i: l.account }));
     const lps = await Promise.all(
       lpLines.map(async (l: any) => {
         const ref = M.lpPoolOf({ c: l.currency, i: l.account })!;
         let st: any = await M.poolState(ref).catch(() => null);
         if (st && !(st.lp > 0)) {
-          // the pool reader gave no LP supply: the LP token is issued by the pool account, so its obligations are the supply
           const sup = await M.supplyOf({ c: l.currency, i: l.account }).catch(() => null);
           if (sup && sup > 0) st = { ...st, lp: sup };
         }
@@ -433,8 +438,11 @@ export async function loadAssets() {
       })
     );
     const prefs = await M.poolRefs().catch(() => [] as M.PoolRef[]);
-    const pools = await Promise.all(prefs.map(async ref => ({ ref, st: await M.poolState(ref).catch(() => null) })));
-    PA.data = { t, reg: new Map(regList.map(x => [x.key, x])), lps, pools };
+    // show the token table now; every pool's reserves load after, for the pool tabs
+    PA.data = { t, reg: new Map(regList.map(x => [x.key, x])), lps, pools: PA.data ? PA.data.pools : [] };
+    renderAssets();
+    const pools = await Pool_all(prefs);
+    PA.data = { ...PA.data, pools };
     renderAssets();
   } catch (e: any) {
     setHtml('pa', wait('Could not read the node: ' + esc(e?.message || e)));
