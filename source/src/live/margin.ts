@@ -305,6 +305,7 @@ function tvlOfAsset(sn: M.Snap, key: string): number {
   }
   return t;
 }
+let retryN = 0;
 export async function refresh(force = false) {
   if (MG.loading || (!force && Date.now() - MG.at < 4000)) return;
   MG.loading = true;
@@ -329,11 +330,17 @@ export async function refresh(force = false) {
     }
     else MG.mine = [];
     MG.err = g ? '' : 'The genesis wallet was not found on this network, so leverage is not available.';
-    MG.at = Date.now();
+    MG.at = Date.now(); retryN = 0;
     alerts();
   } catch (e: any) {
-    MG.err = 'Node API error: ' + String(e?.message || e) + '. Showing the last saved data.';
+    const msg = String(e?.message || e);
+    if (/not connected|timeout|disconnect|websocket|offline/i.test(msg) && retryN < 10) {
+      // a dropped or still-opening link is not an error worth showing: keep the saved data and try again until it is back
+      retryN++; MG.err = retryN > 3 ? 'Reconnecting to the node… showing the last saved data.' : '';
+      setTimeout(() => { MG.loading = false; MG.at = 0; refresh(true).catch(() => {}); }, 2500);
+    } else MG.err = 'Node API error: ' + msg + '. Showing the last saved data.';
   }
+  if (!MG.err || !/Reconnecting/.test(MG.err)) { /* keep */ }
   MG.loading = false;
   paintAll();
 }

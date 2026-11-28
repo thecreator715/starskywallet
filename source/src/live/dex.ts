@@ -329,7 +329,7 @@ export async function load(keepSelection = true) {
         const [sup, st] = await Promise.all([M.supplyOf(m.base).catch(() => null), dp ? M.poolState(dp).catch(() => null) : Promise.resolve(null)]);
         if (stale(g)) return;
         const tvlQ = st ? 2 * (akey(st.a) === akey(m.quote) ? st.ra : st.rb) : null;
-        DX.mini = { supply: sup, tvlQ }; lsSet('mini', DX.mini); renderTok();
+        DX.mini = { supply: sup ?? (DX.mini ? DX.mini.supply : null), tvlQ: tvlQ ?? (DX.mini ? DX.mini.tvlQ : null) }; lsSet('mini', DX.mini); renderTok();
         // holders after supply
         const pools = new Set<string>(DX.refs.map((q: M.PoolRef) => q.account));
         const h = await M.holders(m.base, sup, pools, n => { if (!stale(g) && !DX.hold) { DX.hold = { count: n, top: [], truncated: true } as any; renderTok(); DX.hold = null; } }).catch(() => null);

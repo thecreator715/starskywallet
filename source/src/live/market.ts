@@ -238,8 +238,12 @@ export interface TokenRow {
 }
 export async function supplyOf(a: Asset): Promise<number | null> {
   if (isNative(a)) {
-    const h = await header('validated');
-    return h ? h.total : null;
+    const sk = 'starsky.natsup.' + ctx.netKey() + (ctx.xrpl() ? 'x' : '');
+    let h = await header('validated');
+    if (!h || !(h.total > 0)) { await new Promise(r => setTimeout(r, 600)); h = await header('validated'); }
+    if (!h || !(h.total > 0)) { try { const v = Number(localStorage.getItem(sk)); return v > 0 ? v : null; } catch { return null; } }
+    try { localStorage.setItem(sk, String(h.total)); } catch {}
+    return h.total;
   }
   const g: any = await tryReq('gateway_balances', { account: a.i, ledger_index: 'validated' }, 30000);
   if (!g || g.error) return null;
