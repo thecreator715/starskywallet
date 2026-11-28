@@ -14,7 +14,7 @@ const favs = (): Set<string> => {
     return new Set();
   }
 };
-const PL: any = { q: '', tok: '', tab: 'all', favOnly: false, sel: '', inv: false, range: '1h', pools: [], mine: (_p: any) => ({ bal: 0, share: 0 }), rows: [], busy: false, last: '', cd: null, ck: '', cat: 0, trades: null, tat: 0 };
+const PL: any = { q: '', tok: '', tab: 'all', favOnly: false, sel: '', inv: false, range: '1h', pools: [], mine: (_p: any) => ({ bal: 0, share: 0 }), rows: [], busy: false, last: '', cd: null, ck: '', cat: 0, trades: null, tat: 0, page: 0, size: 25, vis: [], cc: new Map(), cx: null, fb: false };
 const WK = ['1h', '24h', '7d'];
 const chg = (a: number | null, b: number | null) => (a == null || b == null || !(b > 0) ? null : (a / b - 1) * 100);
 const dsg = (v: number | null, f: (n: number) => string) => (v == null ? '–' : (v >= 0 ? '+' : '−') + f(Math.abs(v)));
@@ -40,22 +40,15 @@ interface Row {
   bal: number;
   share: number;
   lp: number;
+  chAt?: number;
 }
-async function compute() {
-  const [sn, ws, refs] = await Promise.all([M.snapshot(), M.windowSnaps().catch(() => [] as M.WinSnap[]), M.poolRefs().catch(() => [] as M.PoolRef[])]);
-  const un = sn.usdPerNative;
-  const rows: Row[] = [];
-  for (let idx = 0; idx < PL.pools.length; idx++) {
-    const p = PL.pools[idx];
-    const ka = akey(p.a1), kb = akey(p.a2);
-    const na = ka === 'native' ? 1 : sn.px.get(ka) ?? null, nb = kb === 'native' ? 1 : sn.px.get(kb) ?? null;
-    const valN = na != null && nb != null ? p.r1 * na + p.r2 * nb : na != null ? p.r1 * na * 2 : nb != null ? p.r2 * nb * 2 : null;
-    const ref = refs.find(r => r.account === p.m.account);
-    const m = PL.mine(p);
-    const ch: Row['ch'] = {};
-    for (const k of WK) {
+/** the 1h/24h/7d changes of one pool: one historic read per window, so this is the slow part and runs after the first paint, page by page */
+async function fillCh(r: Row, ws: M.WinSnap[], un: number | null, refs: M.PoolRef[]) {
+  const p = r.p, ka = r.ka, kb = r.kb, na = r.na, nb = r.nb, valN = r.valN, ch = r.ch;
+  const ref = refs.find(x => x.account === p.m.account);
+  await Promise.all(WK.map(async k => {
       const w = ws.find(z => z.w.k === k);
-      if (!w) continue;
+      if (!w) return;
       const s0 = w.snap, a0 = ka === 'native' ? 1 : s0.px.get(ka) ?? null, b0 = kb === 'native' ? 1 : s0.px.get(kb) ?? null;
       const st0 = ref ? await M.poolState(ref, w.seq).catch(() => null) : null;
       let f0: number | null = null, v0: number | null = null;
@@ -72,9 +65,26 @@ async function compute() {
         ch[k].a = chg(na != null ? na * un : null, a0 != null ? a0 * s0.usdPerNative : null);
         ch[k].b = chg(nb != null ? nb * un : null, b0 != null ? b0 * s0.usdPerNative : null);
       }
-    }
+      }));
+  r.chAt = Date.now();
+  PL.cc.set(p.m.account, { ch, at: r.chAt });
+}
+async function compute() {
+  const [sn, ws, refs] = await Promise.all([M.snapshot(), M.windowSnaps().catch(() => [] as M.WinSnap[]), M.poolRefs().catch(() => [] as M.PoolRef[])]);
+  const un = sn.usdPerNative;
+  const rows: Row[] = [];
+  for (let idx = 0; idx < PL.pools.length; idx++) {
+    const p = PL.pools[idx];
+    const ka = akey(p.a1), kb = akey(p.a2);
+    const na = ka === 'native' ? 1 : sn.px.get(ka) ?? null, nb = kb === 'native' ? 1 : sn.px.get(kb) ?? null;
+    const valN = na != null && nb != null ? p.r1 * na + p.r2 * nb : na != null ? p.r1 * na * 2 : nb != null ? p.r2 * nb * 2 : null;
+    const ref = refs.find(r => r.account === p.m.account);
+    const m = PL.mine(p);
+    const cached = PL.cc.get(p.m.account);
+    const ch: Row['ch'] = cached ? cached.ch : {};
     rows.push({ p, idx, ka, kb, ua: na != null && un != null ? na * un : null, ub: nb != null && un != null ? nb * un : null, na, nb, valN, valU: valN != null && un != null ? valN * un : null, fwd: p.price, rev: p.price > 0 ? 1 / p.price : 0, ch, bal: m.bal, share: m.share, lp: Number(p.m.lp_token?.value || 0) });
   }
+  PL.cx = { ws, refs, un };
   return { rows, un };
 }
 const dual = (u: number | null, n: number | null, nat: string) => (u != null ? `${usd(u)}<div class="mut" style="font-size:.7rem">${n != null ? fmt(n, 2) + ' ' + esc(nat) : ''}</div>` : n != null ? fmt(n, 2) + ' ' + esc(nat) : '–');
@@ -102,7 +112,11 @@ function listHtml(allRows: Row[], un: number | null) {
   const mineN = rows.reduce((s, r) => s + (r.valN != null ? r.valN * r.share : 0), 0);
   const tile = (k: string, v: string, s = '') => `<div class="tile kvt" style="flex:1;min-width:11rem"><div class="k">${k}</div><div class="big2">${v}</div><div class="mut" style="font-size:.72rem">${s}</div></div>`;
   const tvl24 = rows.reduce((s, r) => s + (r.ch['24h'] && r.ch['24h'].valN0 != null ? r.ch['24h'].valN0! : r.valN ?? 0), 0);
-  const body = rows
+  const pages = Math.max(1, Math.ceil(rows.length / PL.size));
+  if (PL.page >= pages) PL.page = pages - 1;
+  const pageRows = rows.slice(PL.page * PL.size, (PL.page + 1) * PL.size);
+  PL.vis = pageRows;
+  const body = pageRows
     .map(r => {
       const c = r.ch['24h'] || ({} as any);
       const side = (amt: number, a: Asset, u: number | null, pc: number | null) => `${fmt(amt, 4)} <small class="mut">${esc(nm(a))}</small><div class="mut" style="font-size:.7rem">${u != null ? usd(amt * u) : ''} ${pctHtml(pc)}</div>`;
@@ -118,11 +132,12 @@ function listHtml(allRows: Row[], un: number | null) {
         <td class="r" onclick="event.stopPropagation()"><div class="row" style="justify-content:flex-end;gap:.3rem"><button class="sm pri" onclick="window.openDepositModal(${r.idx})">Deposit</button><button class="sm" onclick="window.openWithdrawModal(${r.idx})">Withdraw</button><button class="sm pri acc" onclick="window.pl.trade(${r.idx})">Trade</button></div></td></tr>`;
     })
     .join('');
+  const pg = rows.length > 10 ? `<div class="row" style="gap:.45rem;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin:.5rem 0"><span class="mut" style="font-size:.78rem">${rows.length ? PL.page * PL.size + 1 : 0}–${Math.min(rows.length, (PL.page + 1) * PL.size)} of ${rows.length}</span><button class="sm" ${PL.page <= 0 ? 'disabled' : ''} onclick="window.pl.page(${PL.page - 1})">‹ Prev</button><span class="mut" style="font-size:.78rem">Page ${PL.page + 1} / ${pages}</span><button class="sm" ${PL.page >= pages - 1 ? 'disabled' : ''} onclick="window.pl.page(${PL.page + 1})">Next ›</button><select onchange="window.pl.size(this.value)">${[10, 25, 50, 100].map(n => `<option value="${n}" ${n === PL.size ? 'selected' : ''}>${n} / page</option>`).join('')}</select></div>` : '';
   return `${tabsHtml}${ctl}<div class="row" style="gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem">
     ${tile('Total value in pools', un != null ? usd(tot * un) : fmt(tot, 2) + ' ' + esc(nat), fmt(tot, 2) + ' ' + esc(nat) + (tvl24 > 0 ? ' · 24h ' + pctTxt(chg(tot, tvl24)) : ''))}
     ${tile('Pools', rows.length === allRows.length ? String(rows.length) : rows.length + ' of ' + allRows.length, PL.tok ? 'with ' + esc(PL.tok) : 'on the ' + esc(nat) + ' network')}
     ${tile('Your pool value', un != null ? usd(mineN * un) : fmt(mineN, 2) + ' ' + esc(nat), fmt(mineN, 2) + ' ' + esc(nat))}</div>
-  <div class="tile c12"><div style="overflow-x:auto"><table class="dxt"><thead><tr><th>Pool</th><th class="r">Reserve 1</th><th class="r">Reserve 2</th><th class="r">Price</th><th class="r">Reverse price</th><th class="r">Value (24h)</th><th class="r">Fee</th><th class="r">Your share</th><th class="r">Actions</th></tr></thead><tbody>${body || '<tr><td colspan="9" class="mut" style="padding:1rem">No pools match.</td></tr>'}</tbody></table></div><div class="mut" style="font-size:.74rem;margin-top:.4rem">Percentages are changes over the last 24 hours. Click a pool for everything about it.</div></div>`;
+  <div class="tile c12"><div style="overflow-x:auto"><table class="dxt"><thead><tr><th>Pool</th><th class="r">Reserve 1</th><th class="r">Reserve 2</th><th class="r">Price</th><th class="r">Reverse price</th><th class="r">Value (24h)</th><th class="r">Fee</th><th class="r">Your share</th><th class="r">Actions</th></tr></thead><tbody>${body || '<tr><td colspan="9" class="mut" style="padding:1rem">No pools match.</td></tr>'}</tbody></table></div><div class="mut" style="font-size:.74rem;margin-top:.4rem">Percentages are changes over the last 24 hours. Click a pool for everything about it.</div>${pg}</div>`;
 }
 const ilOf = (fwdPct: number | null) => { if (fwdPct == null) return null; const k = 1 + fwdPct / 100; return k > 0 ? (2 * Math.sqrt(k)) / (1 + k) - 1 : null; };
 const ilTxt = (c: { fwd: number | null } | undefined) => { const v = ilOf(c ? c.fwd : null); return v == null ? '–' : `<span class="${v < -0.0005 ? 'dn' : ''}">${(v * 100).toFixed(2)}%</span>`; };
@@ -202,6 +217,22 @@ async function paint() {
   }
   if (sel) paintExtras(sel);
 }
+/** fetch the historic changes for the rows on screen only (a few at a time), then repaint */
+async function fillVisible() {
+  if (PL.fb || !PL.cx || !PL.data) return;
+  const rows: Row[] = PL.sel ? PL.data.rows.filter((x: Row) => x.p.m.account === PL.sel) : PL.vis;
+  const todo = rows.filter(r => !r.chAt && !(PL.cc.get(r.p.m.account)?.at > Date.now() - 300000));
+  if (!todo.length) return;
+  PL.fb = true;
+  try {
+    for (let i = 0; i < todo.length; i += 6) {
+      await Promise.all(todo.slice(i, i + 6).map(r => fillCh(r, PL.cx.ws, PL.cx.un, PL.cx.refs).catch(() => {})));
+      if ($('pl_body')) repaintKeep();
+    }
+  } finally {
+    PL.fb = false;
+  }
+}
 export async function mount(pools: any[], mine: (p: any) => { bal: number; share: number }) {
   PL.pools = pools;
   PL.mine = mine;
@@ -211,6 +242,7 @@ export async function mount(pools: any[], mine: (p: any) => { bal: number; share
   try {
     PL.data = await compute();
     paint();
+    fillVisible();
   } catch (e: any) {
     const el = $('pl_body');
     if (el && !PL.data) el.innerHTML = `<div class="mut" style="padding:1rem">Could not read pool data: ${esc(e?.message || e)}</div>`;
@@ -227,19 +259,24 @@ const repaintKeep = () => {
   }
 };
 export const plApi = {
-  tab(k: string) { PL.tab = k; PL.focusQ = false; repaintKeep(); },
+  page(n: number) { PL.page = Math.max(0, n); PL.focusQ = false; repaintKeep(); fillVisible(); },
+  size(v: string) { PL.size = Number(v) || 25; PL.page = 0; PL.focusQ = false; repaintKeep(); fillVisible(); },
+  tab(k: string) { PL.tab = k; PL.page = 0; PL.focusQ = false; repaintKeep(); },
   search(v: string) {
     PL.q = v;
+    PL.page = 0;
     PL.focusQ = true;
     repaintKeep();
   },
   token(t: string) {
     PL.tok = t;
+    PL.page = 0;
     PL.focusQ = false;
     repaintKeep();
   },
   favOnly() {
     PL.favOnly = !PL.favOnly;
+    PL.page = 0;
     PL.focusQ = false;
     repaintKeep();
   },

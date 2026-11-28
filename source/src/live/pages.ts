@@ -567,11 +567,20 @@ function renderAssets() {
     mcap: x => x.r.mcapUsd ?? x.r.mcapNative,
     liq: x => x.r.tvlUsd ?? x.r.tvlNative,
   };
-  const showS = PA.sort.c || PA.tab !== 'all' ? srt(show, acc[PA.sort.c] || (() => null), (x: any) => isFav('t:' + x.r.key)) : show;
+  const heldFirst = (l: any[]) => {
+    const h = l.filter(x => x.bal > 0).sort((p, q) => (acc.value(q) ?? 0) - (acc.value(p) ?? 0) || q.bal - p.bal);
+    return [...h, ...l.filter(x => !(x.bal > 0))];
+  };
+  const showS = PA.sort.c ? srt(show, acc[PA.sort.c] || (() => null), (x: any) => isFav('t:' + x.r.key)) : heldFirst(PA.tab !== 'all' ? srt(show, () => null, (x: any) => isFav('t:' + x.r.key)) : show);
+  let heldHead = true, restHead = true;
   const body = showS
     .map(({ r, l, bal, cat }) => {
-      const head = PA.tab === 'all' && !PA.sort.c && cat !== last ? `<tr class="cathead"><td colspan="9">${esc(cat.slice(2))}</td></tr>` : '';
-      last = cat;
+      let head = '';
+      if (!PA.sort.c) {
+        if (bal > 0) { if (heldHead) { heldHead = false; head = `<tr class="cathead"><td colspan="9">Your balances</td></tr>`; } }
+        else if (PA.tab === 'all' && (cat !== last || restHead)) { head = `<tr class="cathead"><td colspan="9">${esc(cat.slice(2))}${restHead && !heldHead ? ' · no balance' : ''}</td></tr>`; restHead = false; }
+        if (!(bal > 0)) last = cat;
+      }
       const meta = reg.get(r.key);
       const val = r.nativePx != null ? bal * r.nativePx : null;
       const act = isNative(r.a)
