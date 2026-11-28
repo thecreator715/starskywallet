@@ -1,5 +1,6 @@
 // Toolkit: bulk pay and split a bill, wallet cleanup and health, watchlist with price alerts, and a journal with CSV export.
 // Everything signs in this browser; alerts run while Starsky is open.
+import * as xrpl from 'xrpl';
 import { ctx } from './ctx.ts';
 import { esc, fmt, short, akey, fromKey, NATIVE, isNative, amtTx, type Asset } from './util.ts';
 import * as M from './market.ts';
@@ -12,9 +13,9 @@ const wr = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify
 const GREEN = '#3ddc84', RED = '#ff5b5b', AMB = '#f5b84b';
 const chip = (t: string, c: string) => `<span style="display:inline-block;padding:.08rem .5rem;border-radius:99px;font-size:.78rem;background:${c}22;color:${c}">${esc(t)}</span>`;
 const tile = (k: string, v: string, sub = '') => `<div class="tile" style="min-width:9rem;flex:1"><div class="mut" style="font-size:.8rem">${esc(k)}</div><div style="font-size:1.2rem;font-weight:800;margin:.1rem 0">${v}</div><div class="mut" style="font-size:.78rem">${sub}</div></div>`;
-type VW = 'bulk' | 'orders' | 'clean' | 'watch' | 'journal';
+type VW = 'bulk' | 'orders' | 'protect' | 'clean' | 'watch' | 'journal';
 let VIEW = 'bulk' as VW;
-const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['orders', 'Auto orders'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal']];
+const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['orders', 'Auto orders'], ['protect', 'Protect & co-sign'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal']];
 
 // ---------- pure helpers (tested) ----------
 export function parsePay(txt: string): { rows: { addr: string; amt?: number }[]; bad: string[] } {
@@ -174,20 +175,73 @@ function ordersHtml(): string {
   <div class="card c12" style="margin-top:.6rem"><div class="k">Sell everything</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Swaps every token you hold into ${esc(ctx.native())}. You review it first.</div><button class="sm" onclick="window.tkt.sellAll()">Sell all tokens to ${esc(ctx.native())}</button></div>`;
 }
 
+
+// ---------- protect: delayed sends and co-signers ----------
+export function validSigners(txt: string, quorum: number, self?: string): { entries: { a: string; w: number }[]; err: string } {
+  const entries: { a: string; w: number }[] = [], seen = new Set<string>();
+  for (const ln of txt.split(/\n+/)) { const p = ln.trim().split(/[\s,;]+/).filter(Boolean); if (!p.length) continue; const w = p[1] != null ? Number(p[1]) : 1; if (!/^r[1-9A-HJ-NP-Za-km-z]{20,}$/.test(p[0])) return { entries: [], err: `${p[0]} is not a valid address` }; if (self && p[0] === self) return { entries: [], err: 'Do not list this wallet as its own co-signer' }; if (seen.has(p[0])) return { entries: [], err: p[0] + ' is listed twice' }; if (!(Number.isInteger(w) && w >= 1 && w <= 65535)) return { entries: [], err: 'Weights are whole numbers from 1 up' }; seen.add(p[0]); entries.push({ a: p[0], w }); }
+  if (entries.length < 1) return { entries, err: 'Add at least one co-signer' }; if (entries.length > 32) return { entries, err: 'At most 32 co-signers' };
+  const tot = entries.reduce((x, e) => x + e.w, 0); if (!(Number.isInteger(quorum) && quorum >= 1)) return { entries, err: 'Quorum must be a whole number from 1 up' }; if (quorum > tot) return { entries, err: `Quorum ${quorum} is more than the total weight ${tot}: nobody could ever sign` };
+  return { entries, err: '' };
+}
+export function combineSigned(blobs: string[]): string { const b = blobs.map(x => x.trim()).filter(Boolean); if (b.length < 1) throw new Error('Paste at least one signed copy'); return xrpl.multisign(b); }
+const DK = () => `starsky.toolkit.delayed.${net()}`; interface Delayed { id: string; to: string; key: string; label: string; amt: number; at: number; state: 'waiting' | 'sent' | 'failed' | 'cancelled'; msg: string }
+const DL = (): Delayed[] => rd(DK(), []); const saveDl = (d: Delayed[]) => wr(DK(), d);
+export function dueDelayed(d: Delayed[], now: number): Delayed[] { return d.filter(x => x.state === 'waiting' && x.at <= now); }
+async function delayedTick() { const d = DL(), due = dueDelayed(d, Date.now()); if (!due.length || !ctx.account() || !ctx.online()) return; await readWallet(); for (const x of due) { x.state = 'sent'; saveDl(d); const a: Asset = fromKey(x.key); try { const r = await ctx.submit({ TransactionType: 'Payment', Account: ctx.account()!, Destination: ctx.toClassic(x.to), Amount: amtTx(a, x.amt) }); x.state = r.ok ? 'sent' : 'failed'; x.msg = r.ok ? 'Sent ' + new Date().toLocaleString() : r.msg || 'Rejected'; } catch (e: any) { x.state = 'failed'; x.msg = String(e?.message || e); } ctx.toast(`Delayed payment to ${short(x.to)}: ${x.msg}`, x.state === 'failed'); saveDl(d); } if (document.getElementById('tk_root') && VIEW === 'protect') paint(); }
+async function addDelayed() {
+  const g = (id: string) => $(id)?.value || '', to = g('dl_to').trim(), amt = Number(g('dl_amt')), mins = Number(g('dl_min')), key = g('dl_tok') || 'native';
+  if (!/^(r|X|L|T|M)[1-9A-HJ-NP-Za-km-z]{20,}$/.test(to)) return ctx.toast('Paste the full wallet address.', true); if (!(amt > 0)) return ctx.toast('Enter an amount.', true); if (!(mins >= 1 && mins <= 10080)) return ctx.toast('Delay must be 1 minute to 7 days.', true);
+  const label = key === 'native' ? ctx.native() : M.labelOf(fromKey(key)), ok = await PM.review({ title: 'Schedule a delayed payment', tone: 'tip', hero: `<div style="font-size:1.3rem;font-weight:800">${fmt(amt)} ${esc(label)}</div><div class="mut">to ${esc(short(to))} in ${mins} min</div>`, rows: [{ k: 'You can cancel until', v: new Date(Date.now() + mins * 60000).toLocaleString() }], warns: ['The payment is sent only while Starsky is open and unlocked at that time. If it is closed, it goes out the next time you open it.'], confirm: 'Schedule' }); if (!ok) return;
+  const d = DL(); d.push({ id: Math.random().toString(36).slice(2, 9), to, key, label, amt, at: Date.now() + mins * 60000, state: 'waiting', msg: '' }); saveDl(d); paint();
+}
+let SIG: { list: { a: string; w: number }[]; q: number } | null = null, PMSG = '', OUTB = '';
+async function readSigners() { const acc = ctx.account(); if (!acc) return; const r: any = await ctx.req('account_objects', { account: acc, type: 'signer_list', ledger_index: 'validated' }).catch(() => null); const s = r?.account_objects?.[0]; SIG = s ? { list: (s.SignerEntries || []).map((e: any) => ({ a: (e.SignerEntry || e).Account, w: (e.SignerEntry || e).SignerWeight })), q: s.SignerQuorum } : null; }
+async function setSigners() {
+  const acc = ctx.account()!, q = Number($('sg_q')?.value), v = validSigners($('sg_list')?.value || '', q, acc); if (v.err) return ctx.toast(v.err, true);
+  const ok = await PM.review({ title: 'Set co-signers', tone: 'lev', hero: `<div style="font-weight:700">${v.entries.length} co-signers, quorum ${q}</div>`, rows: v.entries.map(e => ({ k: short(e.a), v: 'weight ' + e.w })), warns: ['After this, payments from this wallet can ALSO be approved by enough co-signers together. Your own key still works unless you disable it separately. Test with a small payment first.'], confirm: 'Save co-signers' }); if (!ok) return;
+  const r = await ctx.submit({ TransactionType: 'SignerListSet', Account: acc, SignerQuorum: q, SignerEntries: v.entries.map(e => ({ SignerEntry: { Account: e.a, SignerWeight: e.w } })) }); ctx.toast(r.ok ? 'Co-signers saved' : r.msg || 'Rejected', !r.ok); await readSigners(); paint();
+}
+async function clearSigners() { if (!confirm('Remove all co-signers from this wallet?')) return; const r = await ctx.submit({ TransactionType: 'SignerListSet', Account: ctx.account()!, SignerQuorum: 0 }); ctx.toast(r.ok ? 'Co-signers removed' : r.msg || 'Rejected', !r.ok); await readSigners(); paint(); }
+async function coSign() {
+  const g = (id: string) => $(id)?.value || '', from = g('ms_from').trim(), to = g('ms_to').trim(), amt = Number(g('ms_amt')), me = g('ms_me'), raw = g('ms_tx').trim(); PMSG = '';
+  try {
+    const w = ctx.wallets().find((x: any) => x.address === me); if (!w) throw new Error('Pick one of your wallets to sign with');
+    const sw = xrpl.Wallet.fromSeed(w.seed); let tx: any;
+    if (raw) { tx = JSON.parse(raw); } else {
+      if (!/^r[1-9A-HJ-NP-Za-km-z]{20,}$/.test(from) || !/^(r|X|L|T|M)[1-9A-HJ-NP-Za-km-z]{20,}$/.test(to) || !(amt > 0)) throw new Error('Enter the wallet to pay from, the recipient and an amount.');
+      const [ai, si, fe] = await Promise.all([ctx.req('account_info', { account: from, ledger_index: 'current' }), ctx.req('server_info', {}), ctx.req('fee', {})]); const info = si.info, nid = info.network_id;
+      tx = { TransactionType: 'Payment', Account: from, Destination: ctx.toClassic(to), Amount: String(Math.round(amt * 1e6)), Sequence: ai.account_data.Sequence, Fee: String(Math.ceil(Number(fe.drops?.base_fee || 10) * 4 * 2)), LastLedgerSequence: info.validated_ledger.seq + 500, SigningPubKey: '' }; if (nid && nid > 1024) tx.NetworkID = nid;
+    }
+    const s = sw.sign(tx, true); OUTB = s.tx_blob; PMSG = `<div style="color:${GREEN}">Signed with ${esc(short(sw.classicAddress))}.</div><div class="mut" style="margin-top:.3rem">Send this signed copy to the other co-signers. Each one adds their own signature to the same payment details, then you combine them below.</div><textarea readonly rows="4" style="width:100%;margin-top:.3rem" onclick="this.select()">${esc(s.tx_blob)}</textarea><div class="mut" style="margin-top:.3rem">Payment details (paste this into "Payment details" for the next co-signer):</div><textarea readonly rows="4" style="width:100%" onclick="this.select()">${esc(JSON.stringify(tx))}</textarea>`;
+  } catch (e: any) { PMSG = `<div style="color:${RED}">${esc(String(e?.message || e))}</div>`; } paint();
+}
+async function combineSend() { try { const blob = combineSigned(($('ms_blobs')?.value || '').split(/\s+/)); const r: any = await ctx.req('submit', { tx_blob: blob }); const ok = r.engine_result === 'tesSUCCESS' || r.engine_result === 'terQUEUED'; PMSG = `<div style="color:${ok ? GREEN : RED}">${ok ? 'Submitted. It should appear in History shortly.' : 'The network refused it: ' + esc(r.engine_result_message || r.engine_result || 'unknown')}</div>`; } catch (e: any) { PMSG = `<div style="color:${RED}">${esc(String(e?.message || e))}</div>`; } paint(); }
+function protectHtml(): string {
+  const d = DL(), mine = ctx.wallets();
+  return `<div class="card c12"><div class="k">Delayed payment with a cancel window</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Schedule a payment to go out later. Cancel it any time before it leaves.</div><div class="row" style="gap:.5rem;flex-wrap:wrap"><input id="dl_to" placeholder="recipient address" size="34"><input id="dl_amt" placeholder="amount" size="8"><select id="dl_tok"><option value="native">${esc(ctx.native())}</option>${LINES.filter((l: any) => Number(l.balance) > 0).map((l: any) => `<option value="${esc(l.currency + '|' + l.account)}">${esc(M.labelOf({ c: l.currency, i: l.account }))}</option>`).join('')}</select><input id="dl_min" placeholder="minutes from now" size="10" value="60"><button class="pri" onclick="window.tkt.addDelayed()">Schedule</button></div>
+  ${d.length ? `<table style="width:100%;margin-top:.6rem">${d.map((x, i) => `<tr><td>${fmt(x.amt)} ${esc(x.label)} to ${esc(short(x.to))}</td><td class="mut">${new Date(x.at).toLocaleString()}</td><td>${chip(x.state, x.state === 'sent' ? GREEN : x.state === 'failed' ? RED : AMB)}</td><td class="mut">${esc(x.msg)}</td><td style="text-align:right">${x.state === 'waiting' ? `<button class="sm" onclick="window.tkt.cancelDelayed(${i})">Cancel</button>` : ''}</td></tr>`).join('')}</table>` : ''}</div>
+  <div class="card c12" style="margin-top:.6rem"><div class="k">Co-signers and recovery</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Let other wallets approve payments from this wallet together (multi-signature). Trusted contacts can also act as a recovery group. ${SIG ? `<b>Now:</b> ${SIG.list.length} co-signers, quorum ${SIG.q}.` : 'No co-signers set.'}</div>
+  <textarea id="sg_list" rows="4" style="width:100%" placeholder="one co-signer per line: address, weight">${esc(SIG ? SIG.list.map(e => e.a + ', ' + e.w).join('\n') : '')}</textarea><div class="row" style="gap:.5rem;margin-top:.4rem;align-items:center"><input id="sg_q" placeholder="weight needed (quorum)" size="10" value="${SIG ? SIG.q : ''}"><button class="pri" onclick="window.tkt.setSigners()">Save co-signers</button>${SIG ? '<button class="sm" onclick="window.tkt.clearSigners()">Remove all</button>' : ''}</div></div>
+  <div class="card c12" style="margin-top:.6rem"><div class="k">Approve a payment together</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Step 1: each co-signer signs the same payment here. Step 2: paste all signed copies below and send.</div><div class="row" style="gap:.5rem;flex-wrap:wrap"><select id="ms_me">${mine.map((w: any) => `<option value="${esc(w.address)}">${esc(w.label)} (${esc(short(w.address))})</option>`).join('')}</select><input id="ms_from" placeholder="shared wallet to pay from" size="30"><input id="ms_to" placeholder="pay to" size="30"><input id="ms_amt" placeholder="LUMA" size="8"></div><textarea id="ms_tx" rows="2" style="width:100%;margin-top:.4rem" placeholder="Payment details from another co-signer (leave empty to start a new payment)"></textarea><button class="pri" style="margin-top:.4rem" onclick="window.tkt.coSign()">Sign</button>
+  <textarea id="ms_blobs" rows="3" style="width:100%;margin-top:.6rem" placeholder="Paste every co-signer's signed copy, one per line"></textarea><button class="pri" style="margin-top:.4rem" onclick="window.tkt.combine()">Combine and send</button><div style="margin-top:.6rem">${PMSG}</div></div>`;
+}
+
 // ---------- page ----------
 export function shell() { return `<div id="tk_root" style="width:100%"><div class="row" id="tk_tabs" style="gap:.4rem;margin-bottom:.7rem;flex-wrap:wrap"></div><div id="tk_body" class="grid" style="width:100%"></div></div>`; }
 function paint() {
   const t = document.getElementById('tk_tabs'), b = document.getElementById('tk_body'); if (!t || !b) return;
   t.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.tkt.view('${k}')">${l}</button>`).join('');
   const a = document.activeElement; if (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && b.contains(a)) return;
-  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'orders' ? ordersHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : journalHtml();
+  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'orders' ? ordersHtml() : VIEW === 'protect' ? protectHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : journalHtml();
 }
-async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'watch') await watchTick(); if (VIEW === 'orders') await ordersTick(); } finally { busy = false; paint(); } }
+async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'watch') await watchTick(); if (VIEW === 'orders') await ordersTick(); if (VIEW === 'protect') { await readSigners(); await delayedTick(); } } finally { busy = false; paint(); } }
 export function view(v: VW) { VIEW = v; MSG = ''; paint(); void refresh(); }
 export function mount() { paint(); void refresh(); }
-export function start() { clearInterval(tmr); tmr = setInterval(() => { void watchTick(); void ordersTick(); }, 60000); }
+export function start() { clearInterval(tmr); tmr = setInterval(() => { void watchTick(); void ordersTick(); void delayedTick(); }, 30000); }
 export const api = {
   addOrder, sellAll, rmOrder(i: number) { const os = ORD(); os.splice(i, 1); saveOrd(os); paint(); },
+  addDelayed, cancelDelayed(i: number) { const d = DL(); if (d[i] && d[i].state === 'waiting') d[i].state = 'cancelled'; saveDl(d); paint(); }, setSigners, clearSigners, coSign, combine: combineSend,
   view, preview: bulkPreview, send: bulkSend, clean: cleanLines, csv: journalCsv,
   watch() { const k = $('tk_w')?.value; if (!k) return; const w = WL(); if (!w.includes(k)) w.push(k); wr(WK(), w); paint(); },
   unwatch(k: string) { wr(WK(), WL().filter(x => x !== k)); paint(); },
