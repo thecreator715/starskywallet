@@ -2462,6 +2462,8 @@ export function initWindowBindings() {
   setCtx({
     book: () => CFG.book,
     req: async (command: string, params: any = {}) => {
+      // the link is briefly down while it reconnects or a network is switched: wait for it (up to 10s) instead of failing the page
+      for (let w = 0; !st.client && w < 50; w++) await new Promise(r => setTimeout(r, 200));
       if (!st.client) throw new Error('not connected');
       const lane = laneOf(command, params);
       await slot(lane);
