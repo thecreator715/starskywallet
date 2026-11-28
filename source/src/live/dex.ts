@@ -94,19 +94,24 @@ const nm = (a: Asset) => M.labelOf(a);
 // never leave the chart on "Reading price history…": give up after 30s or on any error and show why, with a retry
 async function safeCandles(m: M.Market, up?: (c: any) => void): Promise<any> {
   const r0 = RANGE();
-  const key = 'cd2|' + m.id + '|' + JSON.stringify([m.base, m.quote]) + '|' + r0.k;
+  const key = 'cd3|' + m.id + '|' + JSON.stringify([m.base, m.quote]) + '|' + r0.k;
   const slow = async (part?: (c: any) => void) => { const r = RANGE(); return M.candles(m, r, part); };
   const quick = async () => { const r = RANGE(); const q = await Promise.race([M.quickCandles(m, r).catch(() => null), new Promise<null>(res => setTimeout(() => res(null), 6000))]); return q && q.list.length > 1 ? q : null; };
   let to: any;
   try {
     // 1) last time's chart for this pair and range, shown at once and refreshed behind it
-    const hit = (() => { try { const j = JSON.parse(localStorage.getItem('starsky.cc.' + 'cdq|' + key) || 'null'); return j && j.v && j.v.list && j.v.list.length > 1 ? j.v : null; } catch { return null; } })();
+    let hitT = 0;
+    const hit = (() => { try { const j = JSON.parse(localStorage.getItem('starsky.cc.' + 'cdq|' + key) || 'null'); hitT = j && j.t ? j.t : 0; return j && j.v && j.v.list && j.v.list.length > 1 ? j.v : null; } catch { return null; } })();
     const refresh = async () => {
       const q = await quick();
       if (q) { try { localStorage.setItem('starsky.cc.cdq|' + key, JSON.stringify({ t: Date.now(), v: q })); } catch {} }
       return q;
     };
-    if (hit) { refresh().then(q => q && up && up(q)).catch(() => {}); return hit; }
+    if (hit) {
+      if (r0.sec > 3 * 86400) { if (Date.now() - hitT > 300000 && up) slow().then(c => { if (c && c.list && c.list.length > 1) { try { localStorage.setItem('starsky.cc.cdq|' + key, JSON.stringify({ t: Date.now(), v: c })); } catch {} up(c); } }).catch(() => {}); }   // long ranges: real history, refreshed behind the saved chart
+      else refresh().then(q => q && up && up(q)).catch(() => {});
+      return hit;
+    }
     // 2) trades-based chart from the pool's own history: one read, so the chart is up in a moment
     const q = await refresh();
     if (q) {
@@ -287,7 +292,7 @@ export async function load(keepSelection = true) {
       else { DX.mid = (native[0] || DX.markets[0]).id; DX.inv = false; }
     }
     if (!DX.flipped) orient();
-    if (DX.loadedMid !== DX.mid + (DX.inv ? '~' : '')) DX.cd = DX.tr = DX.tok = DX.hold = DX.bookd = DX.pc = DX.mini = null;
+    if (DX.loadedMid !== DX.mid + (DX.inv ? '~' : '')) DX.cd = DX.tr = DX.tok = DX.hold = DX.bookd = DX.pc = DX.mini = null; DX.holdPart = 0;
     DX.loadedMid = DX.mid + (DX.inv ? '~' : '');
     renderAll();
     const m = mkt() as M.Market;
@@ -316,12 +321,13 @@ export async function load(keepSelection = true) {
         await priceJob.catch(() => {}); const ws = await M.windowSeqs(); const nowP = DX.pc && DX.pc.now != null ? DX.pc.now : null;
         const out: Record<string, { v: number | null; partial: boolean }> = {};
         await Promise.all(ws.map(async w => {
-          let partial = false; let st = w.w.k === 'all' ? null : await M.poolState(dp, w.seq).catch(() => null);
+          let partial = false; let st = w.w.k === 'all' ? null : (await M.poolState(dp, w.seq).catch(() => null)) || (await M.poolState(dp, w.seq).catch(() => null));
           if (!st) { st = await M.poolState(dp, await M.firstSeen(dp)).catch(() => null); partial = w.w.k !== 'all'; }
           const then = st ? M.poolPrice(st, m.base) : null; const nw = nowP;
           out[w.w.k] = { v: nw != null && then != null && then > 0 ? (nw / then - 1) * 100 : null, partial };
         }));
         if (stale(g)) return; if (!DX.pc || DX.pc.now == null) return;
+        const old: any = DX.pc.ch || {}; for (const k of Object.keys(out)) if (out[k].v == null && old[k] && old[k].v != null) out[k] = old[k];   // a missed read never blanks a number already shown
         DX.pc = { ...DX.pc, ch: out }; lsSet('chg', out); renderHead(); renderTok();
       })().catch(() => {}) : Promise.resolve();
       // supply (market cap) and this pool's liquidity
@@ -332,7 +338,7 @@ export async function load(keepSelection = true) {
         DX.mini = { supply: sup ?? (DX.mini ? DX.mini.supply : null), tvlQ: tvlQ ?? (DX.mini ? DX.mini.tvlQ : null) }; lsSet('mini', DX.mini); renderTok();
         // holders after supply
         const pools = new Set<string>(DX.refs.map((q: M.PoolRef) => q.account));
-        const h = await M.holders(m.base, sup, pools, n => { if (!stale(g) && !DX.hold) { DX.hold = { count: n, top: [], truncated: true } as any; renderTok(); DX.hold = null; } }).catch(() => null);
+        const h = await M.holders(m.base, sup, pools, n => { if (!stale(g) && !DX.hold) { DX.holdPart = n; renderTok(); } }).catch(() => null);
         if (stale(g) || !h) return; DX.hold = h; DX.holdAt = Date.now(); try { lsSet('hold', h); } catch {} renderTok(); if (DX.tab === 'holders') renderTable();
       })().catch(() => {});
       await Promise.all([chgP, miniP]);
@@ -368,6 +374,7 @@ export async function load(keepSelection = true) {
         DX.tok = t;
         const pcNew = await pairChanges(m, t);
         if (stale(g)) return;   // a slower answer for the previous pair must not overwrite the new pair's price
+        { const old: any = DX.pc && DX.pc.ch ? DX.pc.ch : {}, nw: any = pcNew && pcNew.ch ? pcNew.ch : {}; for (const k of Object.keys(old)) if (old[k] && old[k].v != null && !(nw[k] && nw[k].v != null)) nw[k] = old[k]; }   // keep what is already on screen where the slower pass has nothing
         DX.pc = pcNew;
         renderHead();
         renderTok();
@@ -852,7 +859,7 @@ function renderTok() {
     `<div class="dxtokh"><div class="dxav2">${TKicon(akey(m.base)) ? `<img class="coinimg" src="${TKicon(akey(m.base))}" alt="">` : tkLetters(nm(m.base))}</div><div style="min-width:0"><div class="row" style="gap:.4rem;align-items:center;flex-wrap:nowrap"><b style="font-size:1.2rem;white-space:nowrap">${esc(nm(m.base))}</b>${rank ? `<span class="tag">#${rank}</span>` : ''}</div><div class="mut" style="font-size:.76rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(issuer)}</div></div>
       <div style="margin-left:auto;text-align:right;min-width:0"><div class="mono dxpx"><small class="mut">${esc(nm(m.quote))}</small> ${p == null ? '–' : fmt(p)}</div><div class="dxsub"><span class="dxpill ${up ? 'up' : 'dn'}">${ch24 == null ? '…' : (up ? '▲ ' : '▼ ') + Math.abs(ch24).toFixed(2) + '%'}</span> <span class="mut">${qu != null && p != null ? '≈ ' + usd(p * qu) : ''}</span></div></div></div>
      ${spark}
-     <div class="dxtiles">${tile('Market cap', mcap != null ? '$' + cf(mcap) : mcapN != null ? cf(mcapN) + ' <small class="mut">' + esc(ctx.native()) + '</small>' : '–', mcapN != null && mcap != null ? cf(mcapN) + ' ' + esc(ctx.native()) : '', mcap != null ? usd(mcap) : '')}${tile('Volume 24h', volUsd != null ? '$' + cf(volUsd) : vol != null ? cf(vol) : '…', vol != null ? cf(vol) + ' ' + esc(nm(m.quote)) : '', volUsd != null ? usd(volUsd) : '')}${tile('Liquidity (TVL)', tvlUsd != null ? '$' + cf(tvlUsd) : tvlQ != null ? cf(tvlQ) : '–', tvlQ != null ? cf(tvlQ) + ' ' + esc(nm(m.quote)) : '', tvlUsd != null ? usd(tvlUsd) : '')}${tile('Holders', DX.hold ? fmt(DX.hold.count, 0) : '…', turn != null ? 'Vol / TVL ' + turn.toFixed(turn < 10 ? 1 : 0) + '%' : '')}</div>
+     <div class="dxtiles">${tile('Market cap', mcap != null ? '$' + cf(mcap) : mcapN != null ? cf(mcapN) + ' <small class="mut">' + esc(ctx.native()) + '</small>' : '–', mcapN != null && mcap != null ? cf(mcapN) + ' ' + esc(ctx.native()) : '', mcap != null ? usd(mcap) : '')}${tile('Volume 24h', volUsd != null ? '$' + cf(volUsd) : vol != null ? cf(vol) : '…', vol != null ? cf(vol) + ' ' + esc(nm(m.quote)) : '', volUsd != null ? usd(volUsd) : '')}${tile('Liquidity (TVL)', tvlUsd != null ? '$' + cf(tvlUsd) : tvlQ != null ? cf(tvlQ) : '–', tvlQ != null ? cf(tvlQ) + ' ' + esc(nm(m.quote)) : '', tvlUsd != null ? usd(tvlUsd) : '')}${tile('Holders', DX.hold ? fmt(DX.hold.count, 0) : DX.holdPart ? fmt(DX.holdPart, 0) + '+' : '…', turn != null ? 'Vol / TVL ' + turn.toFixed(turn < 10 ? 1 : 0) + '%' : '')}</div>
      <div class="dxchgs">${chg('5m', '5M')}${chg('1h', '1H')}${chg('24h', '24H')}${chg('7d', '7D')}</div>
      <div class="dxrange"><span class="mono">${lo != null ? fmt(lo) : ''}</span><div class="dxrbar"><i style="left:${pos}%"></i></div><span class="mono">${hi != null ? fmt(hi) : ''}</span></div>
      <div class="mut" style="font-size:.72rem;text-align:center">${esc(RANGE().label)} range${c['all'] ? ' · all-time ' + (c['all'].v == null ? '–' : (c['all'].v >= 0 ? '+' : '') + c['all'].v.toFixed(1) + '%') : ''}</div>`
