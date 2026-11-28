@@ -290,8 +290,9 @@ export async function load(keepSelection = true) {
       M.tokenTable([m.base, m.quote]).then(async t => {
         if (stale(g)) return;
         DX.tok = t;
-        DX.pc = await pairChanges(m, t);
-        if (stale(g)) return;
+        const pcNew = await pairChanges(m, t);
+        if (stale(g)) return;   // a slower answer for the previous pair must not overwrite the new pair's price
+        DX.pc = pcNew;
         renderHead();
         renderTok();
         renderInfo();
@@ -319,7 +320,7 @@ export async function load(keepSelection = true) {
     DX.err = String(e?.message || e);
     renderAll();
   }
-  DX.loading = false;
+  if (g === DX.gen) DX.loading = false;
 }
 async function loadOrders() {
   const acc = ctx.account();
@@ -355,9 +356,11 @@ export async function tick() {
   const g = DX.gen;
   try {
     await loadBal();
+    if (stale(g)) return;
     const dp = M.directPool(DX.refs, m.base, m.quote);
     if (dp) {
       const s = await M.poolState(dp);
+      if (stale(g)) return;   // the pair was switched while this was in flight: never write the old pair's price onto the new one
       if (s && DX.pc) DX.pc.now = M.poolPrice(s, m.base);
     }
     if (Date.now() - DX.last > 12000) {
@@ -401,17 +404,24 @@ function renderHead() {
     setHtml('dx_head', `<span class="mut">${esc(DX.err || 'Loading markets…')}</span>`);
     return;
   }
-  { const cur = document.querySelector('#dx_head .dxsel'); if (cur && document.activeElement === cur) return; }   // never rebuild the pair list while it is open (price ticks used to close it)
-  const opts = DX.markets.map((x: M.Market) => `<option value="${esc(x.id)}" ${x.id === DX.mid ? 'selected' : ''}>${esc(x.id === DX.mid ? m.label : x.label)}${x.pool ? '' : ' (book)'}</option>`).join('');
   const p = livePrice();
   const d24 = DX.pc ? DX.pc.ch['24h'] : null;
   const qusd = usdOfQuote();
+  // price block: redrawn on every call, even while the pair list is focused (it used to be skipped, which left the old pair's price under the new pair's name)
+  const dyn = `<div class="dxprice"><span class="mono">${p == null ? '–' : fmt(p)}</span> <small>${esc(nm(m.quote))}</small>${qusd != null && p != null ? ` <small class="mut">≈ ${usd(p * qusd)}</small>` : ''}</div>
+     ${d24 ? `<div>${pctHtml(d24.v)}${d24.partial ? '<small class="mut" title="Longer than this market has existed: change since it listed"> *</small>' : ''}<small class="mut"> 24h</small></div>` : ''}`;
+  const cur = document.querySelector('#dx_head .dxsel') as HTMLSelectElement | null, dynEl = document.getElementById('dx_hdyn') as any;
+  if (cur && dynEl && document.activeElement === cur) {   // pair list is open: never rebuild it (price ticks used to close it), but still refresh the price and keep the choice shown
+    if (dynEl.__h !== dyn) { dynEl.innerHTML = dyn; dynEl.__h = dyn; const hh = document.getElementById('dx_head') as any; if (hh) hh.__h = ''; }
+    if (cur.value !== DX.mid) cur.value = DX.mid;
+    return;
+  }
+  const opts = DX.markets.map((x: M.Market) => `<option value="${esc(x.id)}" ${x.id === DX.mid ? 'selected' : ''}>${esc(x.id === DX.mid ? m.label : x.label)}${x.pool ? '' : ' (book)'}</option>`).join('');
   setHtml(
     'dx_head',
     `<select class="dxsel" onchange="window.dx.pick(this.value)">${opts}</select>
      <button class="sm ghost" title="Flip base and quote" onclick="window.dx.flip()">⇄</button>
-     <div class="dxprice"><span class="mono">${p == null ? '–' : fmt(p)}</span> <small>${esc(nm(m.quote))}</small>${qusd != null && p != null ? ` <small class="mut">≈ ${usd(p * qusd)}</small>` : ''}</div>
-     ${d24 ? `<div>${pctHtml(d24.v)}${d24.partial ? '<small class="mut" title="Longer than this market has existed: change since it listed"> *</small>' : ''}<small class="mut"> 24h</small></div>` : ''}
+     <span id="dx_hdyn" style="display:contents">${dyn}</span>
      <div style="flex:1"></div>
      <button class="sm ghost" title="Post this chart and the token data to Social" onclick="window.dx.share()">Share to Social</button>
      <span class="dxbrk"></span><span class="mut dxnote">${DX.cd && DX.cd.note ? esc(DX.cd.note) : ''}</span>`
@@ -979,6 +989,7 @@ export const api: any = {
     return m ? m.id : '';
   },
   pick(id: string) {
+    try { (document.activeElement as HTMLElement | null)?.blur?.(); } catch { /* ignore */ }
     (DX as any).picked = true; DX.mid = id;
     DX.inv = false;
     DX.flipped = false;
