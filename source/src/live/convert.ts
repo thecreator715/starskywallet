@@ -53,15 +53,25 @@ function html(): string {
   if (!CV.loaded) return `<div class="k" style="margin:0">Convert to ${esc(ctx.native())}</div><div class="mut" style="margin-top:.4rem">Reading your tokens and live prices…</div>`;
   if (!CV.holds.length) return `<div class="k" style="margin:0">Convert to ${esc(ctx.native())}</div><div class="mut" style="margin-top:.4rem">You hold no tokens, so there is nothing to convert. NFTs are never converted.</div>`;
   const p = plan(), n = ctx.native();
-  const rows = p.rows.map(r => `<tr style="${r.state === 'ok' ? '' : 'opacity:.55'}"><td><input type="checkbox" ${r.run ? 'checked' : ''} ${r.state === 'ok' || (r.state === 'impact') ? '' : 'disabled'} onchange="window.xcv.tog('${esc(r.key)}',this.checked)" aria-label="Convert ${esc(r.name)}"></td><td><b>${esc(r.name)}</b><div class="mut" style="font-size:.74rem">${esc(num(r.bal))} held</div></td><td class="mono" style="text-align:right">${r.out ? esc(num(r.out)) + ' ' + esc(n) : '–'}</td><td style="font-size:.78rem">${r.state === 'ok' ? `<span class="mut">impact ${r.impact.toFixed(2)}% · ${esc(r.src)}</span>` : `<span class="${r.state === 'impact' ? 'warnc' : 'dn'}">${esc(r.reason)}</span>${r.state === 'impact' ? ` <a href="#" onclick="window.xcv.over('${esc(r.key)}');return false">Convert anyway</a>` : ''}`}</td></tr>`).join('');
-  const fee = feeTotal(p.count, 0.00001, CV.clean ? p.count : 0);
-  return `<div class="row" style="justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap"><div><div class="k" style="margin:0">Convert to ${esc(n)}</div><div class="mut" style="font-size:.78rem">Swap tokens you pick into ${esc(n)}. Prices are live; each swap is its own transaction.</div></div><button class="sm ghost" onclick="window.xcv.load()">Refresh prices</button></div>
-  <div style="overflow:auto;margin-top:.5rem"><table class="hxt" style="width:100%;font-size:.82rem"><tbody>${rows}</tbody></table></div>
-  <div class="row" style="gap:.8rem;align-items:center;flex-wrap:wrap;margin-top:.6rem"><label style="font-size:.8rem">Price impact limit <input id="xcv_slip" type="number" min="0.1" max="50" step="0.1" value="${CV.slip}" style="width:4.5rem" onchange="window.xcv.slip(this.value)"> %</label><label style="font-size:.8rem"><input type="checkbox" ${CV.clean ? 'checked' : ''} onchange="window.xcv.clean(this.checked)"> Remove the emptied token lines afterwards (frees reserve)</label></div>
-  <div style="margin-top:.6rem;font-size:.9rem">You get about <b>${esc(num(p.total))} ${esc(n)}</b> from ${p.count} token${p.count === 1 ? '' : 's'} · network fees about ${esc(String(fee))} ${esc(n)}</div>
-  <button class="pri" style="margin-top:.5rem" id="xcv_go" ${p.count && !CV.busy ? '' : 'disabled'} onclick="window.xcv.go()">Review and convert</button>
-  <div id="xcv_log" class="mut" style="font-size:.8rem;margin-top:.5rem">${CV.log.map((l: string) => `<div>${esc(l)}</div>`).join('')}</div>
-  <div class="mut" style="font-size:.74rem;margin-top:.4rem">Swaps cannot be undone once validated. Token lines with no market, or that you tick off, are left alone.</div>`;
+  const canRun = (r: Row) => r.state === 'ok' || r.state === 'impact';
+  const conv = p.rows.filter(canRun), allOn = conv.length > 0 && conv.every(r => r.run), single = conv.filter(r => r.run).length === 1 && !allOn ? conv.find(r => r.run) : null;
+  const selVal = conv.length === 1 ? (conv[0].run ? conv[0].key : '') : allOn ? '*' : single ? single.key : conv.some(r => r.run) ? '*' : '';
+  const sum = conv.reduce((t, r) => t + r.out, 0);
+  const opts = (conv.length > 1 ? `<option value="*" ${selVal === '*' ? 'selected' : ''}>All convertible tokens (${conv.length}) · about ${esc(num(sum))} ${esc(n)}</option>` : '') + p.rows.map(r => canRun(r)
+    ? `<option value="${esc(r.key)}" ${selVal === r.key ? 'selected' : ''}>${esc(r.name)} · ${esc(num(r.bal))} → about ${esc(num(r.out))} ${esc(n)}${r.state === 'impact' ? ' (high impact)' : ''}</option>`
+    : `<option value="${esc(r.key)}" disabled>${esc(r.name)} · ${esc(r.reason.slice(0, 40))}</option>`).join('');
+  const sel = p.rows.filter(r => r.run), fee = feeTotal(p.count, 0.00001, CV.clean ? p.count : 0);
+  const rows = p.rows.map(r => `<tr style="${r.state === 'ok' ? '' : 'opacity:.55'}"><td><b>${esc(r.name)}</b></td><td class="mono" style="text-align:right">${esc(num(r.bal))}</td><td class="mono" style="text-align:right">${r.out ? esc(num(r.out)) + ' ' + esc(n) : '–'}</td><td style="font-size:.76rem">${r.state === 'ok' ? `<span class="mut">impact ${r.impact.toFixed(2)}% · ${esc(r.src)}</span>` : `<span class="${r.state === 'impact' ? 'warnc' : 'dn'}">${esc(r.reason)}</span>${r.state === 'impact' ? ` <a href="#" onclick="window.xcv.over('${esc(r.key)}');return false">Convert anyway</a>` : ''}`}</td></tr>`).join('');
+  return `<div class="row" style="gap:.5rem;align-items:center;flex-wrap:wrap"><div class="k" style="margin:0">Convert to ${esc(n)}</div>
+    <select id="xcv_pick" aria-label="Token to convert" onchange="window.xcv.pick(this.value)" style="flex:1 1 15rem;min-width:11rem;max-width:100%">${opts}</select>
+    <button class="pri" id="xcv_go" ${p.count && !CV.busy ? '' : 'disabled'} onclick="window.xcv.go()">${CV.busy ? 'Converting…' : p.count ? `Convert ${p.count === 1 ? sel[0].name : p.count + ' tokens'}` : 'Convert'}</button>
+    <button class="sm ghost" title="Refresh prices" onclick="window.xcv.load()">↻</button></div>
+  <div class="mut" style="font-size:.78rem;margin-top:.35rem">${p.count ? `You get about <b>${esc(num(p.total))} ${esc(n)}</b> · fees about ${esc(String(fee))} ${esc(n)}` : 'Nothing selected.'}</div>
+  <details ${CV.open ? 'open' : ''} ontoggle="window.xcv.tg(this.open)" style="margin-top:.35rem"><summary class="mut" style="font-size:.78rem;cursor:pointer">Details and options</summary>
+    <div style="overflow:auto;margin-top:.4rem"><table class="hxt" style="width:100%;font-size:.8rem"><thead><tr><th>Token</th><th style="text-align:right">Held</th><th style="text-align:right">You get</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="row" style="gap:.8rem;align-items:center;flex-wrap:wrap;margin-top:.5rem"><label style="font-size:.78rem">Price impact limit <input id="xcv_slip" type="number" min="0.1" max="50" step="0.1" value="${CV.slip}" style="width:4.2rem" onchange="window.xcv.slip(this.value)"> %</label><label style="font-size:.78rem"><input type="checkbox" ${CV.clean ? 'checked' : ''} onchange="window.xcv.clean(this.checked)"> Remove emptied token lines afterwards</label></div>
+    <div class="mut" style="font-size:.74rem;margin-top:.3rem">Swaps cannot be undone once validated. Tokens with no market are left alone.</div></details>
+  <div id="xcv_log" class="mut" style="font-size:.8rem;margin-top:.4rem">${CV.log.map((l: string) => `<div>${esc(l)}</div>`).join('')}</div>`;
 }
 const paint = () => { const e = $('xconv'); if (e) e.innerHTML = html(); };
 async function load() { CV.loaded = false; paint(); try { if (!ctx.account() || !ctx.online()) { CV.holds = []; CV.loaded = true; paint(); return; } CV.holds = await holdings(); await quoteAll(); } catch { CV.holds = []; } CV.loaded = true; paint(); }
@@ -69,6 +79,9 @@ const say = (m: string) => { CV.log.push(m); const e = $('xcv_log'); if (e) e.in
 
 export const xcv = {
   load, tog(k: string, on: boolean) { on ? CV.off.delete(k) : CV.off.add(k); paint(); },
+  tg(o: boolean) { CV.open = o; },
+  pick(v: string) { if (v !== '*') CV.over.add(v);   // choosing one token by name accepts its price impact (the option says so, and the confirmation lists it)
+    CV.off = new Set(v === '*' ? [] : CV.holds.map((h: Hold) => h.key).filter((k: string) => k !== v)); paint(); },
   over(k: string) { CV.over.add(k); paint(); }, slip(v: string) { const x = parseFloat(v); if (x > 0 && x <= 50) CV.slip = x; paint(); },
   clean(on: boolean) { CV.clean = on; paint(); },
   async go() {
