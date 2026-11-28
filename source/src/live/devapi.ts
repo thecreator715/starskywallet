@@ -2,6 +2,7 @@
 // paid from prepaid credits that you top up by sending LUMA to the API wallet. Keys are claimed with a commit-and-reveal so a key is never sent over the ledger:
 // the payment memo carries a hash of a secret that stays in this browser, and the secret is revealed once to receive the key.
 import { ctx } from './ctx.ts';
+import { opGet, opRoots } from './oproots.ts';
 import { esc, fmt, short, ago } from './util.ts';
 import * as PM from './procmodal.ts';
 
@@ -24,21 +25,8 @@ const getKey = () => { try { return localStorage.getItem(KK()) || ''; } catch { 
 const setKey = (k: string) => { try { k ? localStorage.setItem(KK(), k) : localStorage.removeItem(KK()); } catch { /* blocked */ } };
 const OK = 'starsky.lend.op.';
 
-function candidates(): string[] {
-  const sc = (window as any).STARSKY_CONFIG || {}, t = net();
-  const tun = String((sc[t] || sc.main || {}).url || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
-  let saved = '', bridge = ''; try { saved = localStorage.getItem(OK + t) || ''; bridge = (JSON.parse(localStorage.getItem('starsky.bridge.' + t) || '{}') || {}).opUrl || ''; } catch { /* storage blocked */ }
-  return [...new Set([base, saved, bridge, tun && /^https:/.test(tun) ? tun + '/panel/' + t : '', location.protocol.startsWith('http') ? location.origin : ''].filter(Boolean).map(u => u.replace(/\/$/, '')))];
-}
 async function http(method: string, path: string, body?: any, key?: string): Promise<{ s: number; j: any; ms: number }> {
-  let last = 'No control panel address is set.';
-  for (const b of candidates()) {
-    try {
-      const t0 = performance.now(); const r = await fetch(b + path, { method, cache: 'no-store', headers: { 'content-type': 'application/json', 'ngrok-skip-browser-warning': '1', ...(key ? { 'x-luma-key': key } : {}) }, body: body ? JSON.stringify(body) : undefined });
-      const txt = await r.text(); let j: any; try { j = JSON.parse(txt); } catch { last = 'That address answered with a web page, not the API.'; continue; } base = b; return { s: r.status, j, ms: performance.now() - t0 };
-    } catch { last = 'Cannot reach ' + b; }
-  }
-  throw new Error(last);
+  const r = await opGet(path, { method, headers: { 'content-type': 'application/json', ...(key ? { 'x-luma-key': key } : {}) }, body: body ? JSON.stringify(body) : undefined }, OK); base = r.base; return { s: r.s, j: r.j, ms: r.ms };
 }
 export async function publicGet(path: string): Promise<any | null> { try { const x = await http('GET', path); return x.s === 200 ? x.j : null; } catch { return null; } }
 export async function load(force = false) {
@@ -48,7 +36,7 @@ export async function load(force = false) {
     const k = getKey(); if (k) { const u = await http('GET', '/api/public/v1/usage?hours=' + HRS, undefined, k); if (u.s === 200) USE = u.j; else { USE = null; if (u.s === 401) { ERR = 'The saved key no longer works (revoked or removed).'; } } } else USE = null;
   } catch (e: any) { ERR = String(e?.message || e); INFO = null; } finally { busy = false; paint(); }
 }
-export function setOp() { const cur = base || candidates()[0] || ''; const u = prompt('Control panel address (for example http://127.0.0.1:8090)', cur); if (u == null) return; try { localStorage.setItem(OK + net(), u.trim().replace(/\/$/, '')); } catch { /* ignore */ } base = u.trim().replace(/\/$/, ''); void load(true); }
+export function setOp() { const cur = base || opRoots(OK)[0] || ''; const u = prompt('Control panel address (for example http://127.0.0.1:8090)', cur); if (u == null) return; try { localStorage.setItem(OK + net(), u.trim().replace(/\/$/, '')); } catch { /* ignore */ } base = u.trim().replace(/\/$/, ''); void load(true); }
 export function view(v: VW) { VIEW = v; paint(); }
 export function hours(h: number) { HRS = h; void load(true); }
 

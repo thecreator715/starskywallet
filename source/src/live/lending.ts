@@ -4,6 +4,7 @@
 // It is a custodial pool run by the operator of the panel, not a smart contract: this page says so, shows the vault's address, and shows
 // exactly what each action will do before you sign it. Everything on the page (rates, health, liquidation price, latency) comes from the operator's public feed.
 import { ctx } from './ctx.ts';
+import { opGet, opRoots } from './oproots.ts';
 import { esc, fmt, short, amtTx, amtNum, ago } from './util.ts';
 import * as PM from './procmodal.ts';
 
@@ -35,23 +36,9 @@ const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
 const OK = 'starsky.lend.op.';
 
 // ---------- operator link ----------
-function candidates(): string[] {
-  const sc = (window as any).STARSKY_CONFIG || {}, t = net();
-  const tun = String((sc[t] || sc.main || {}).url || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '').replace(/\/test$/, '');
-  let saved = '', bridge = ''; try { saved = localStorage.getItem(OK + t) || ''; bridge = (JSON.parse(localStorage.getItem('starsky.bridge.' + t) || '{}') || {}).opUrl || ''; } catch { /* storage blocked */ }
-  return [...new Set([saved, bridge, tun && /^https:/.test(tun) ? tun + '/panel/' + t : '', location.protocol.startsWith('http') ? location.origin : ''].filter(Boolean).map(u => u.replace(/\/$/, '')))];
-}
 async function get(path: string): Promise<any> {
-  const bases = OP.url ? [OP.url, ...candidates().filter(u => u !== OP.url)] : candidates(); let lastErr = 'No control panel address is set.';
-  for (const b of bases) {
-    try {
-      const t0 = performance.now(); const r = await fetch(b + path, { cache: 'no-store', headers: { 'ngrok-skip-browser-warning': '1' } }); const rtt = performance.now() - t0;
-      if (!r.ok) { lastErr = 'The operator answered ' + r.status; continue; }
-      const j = JSON.parse(await r.text()); if (!j || j.error) { lastErr = (j && j.error) || 'bad answer'; continue; }
-      OP.url = b; OP.rtt = rtt; RTT.push(rtt); if (RTT.length > 40) RTT.shift(); return j;
-    } catch (e: any) { lastErr = /JSON|Unexpected/.test(String(e?.message)) ? 'That address answered with a web page, not the lending feed.' : 'Cannot reach ' + b; }
-  }
-  throw new Error(lastErr);
+  const r = await opGet(path, undefined, OK); if (r.s >= 400 || !r.j || r.j.error) throw new Error((r.j && r.j.error) || 'The operator answered ' + r.s);
+  OP.url = r.base; OP.rtt = r.ms; RTT.push(r.ms); if (RTT.length > 40) RTT.shift(); return r.j;
 }
 
 // ---------- reading ----------
@@ -97,6 +84,7 @@ const KIND: Record<string, { title: string; verb: string; money: 'in' | 'out'; b
   withdrawcol: { title: 'Take back collateral', verb: 'Take back collateral', money: 'out', blurb: 'Unlocks collateral you do not need. Not allowed if it would push your loan past the borrow limit.' },
   borrow: { title: 'Borrow', verb: 'Borrow', money: 'out', blurb: 'You receive the money now and owe it back with interest. Your collateral is at risk if your health factor falls under 1.' },
   repay: { title: 'Repay', verb: 'Repay', money: 'in', blurb: 'Pays down your debt. If you send more than you owe, the extra is returned.' },
+  payin: { title: 'Choose reward token', verb: 'Save', money: 'out', blurb: 'Pick the token your hold interest is paid in. It is converted at the current price.' },
   claim: { title: 'Claim hold rewards', verb: 'Claim', money: 'out', blurb: 'Your hold interest, paid out of the rewards pool. What you do not claim keeps accruing.' },
 };
 function ready(): string {
@@ -185,12 +173,19 @@ export async function act(kind: string) {
 }
 export async function claim(a: string) {
   const bad = ready(); if (bad) return ctx.toast(bad, true); const acc = ctx.account()!, p: any = pos(), e = p && p.earnings && p.earnings.per.find((x: any) => x.asset === a); if (!e || !(e.accrued >= 0.000001)) return ctx.toast('Nothing to claim yet.', true);
-  if (e.poolLeft < e.accrued) return ctx.toast(`The rewards pool holds ${N(e.poolLeft, 4)} ${a === 'LUMA' ? ctx.native() : a}, less than your ${N(e.accrued, 4)}. Your earnings keep growing and can be claimed after the operator tops it up.`, true);
+  const PI = (p as any).earnings.payIn || 'SAME';
+  if (PI === 'SAME' && e.poolLeft < e.accrued) return ctx.toast(`The rewards pool holds ${N(e.poolLeft, 4)} ${a === 'LUMA' ? ctx.native() : a}, less than your ${N(e.accrued, 4)}. Your earnings keep growing and can be claimed after the operator tops it up.`, true);
   await readWallet(acc); const nmA = a === 'LUMA' ? ctx.native() : 'USD';
-  const ok = await PM.review({ title: 'Claim hold rewards', tone: 'buy', hero: `<div style="font-size:1.4rem;font-weight:800">≈ ${N(e.accrued, 6)} ${esc(nmA)}</div><div class="mut">${esc(KIND.claim.blurb)}</div>`, rows: [{ k: 'Asset', v: esc(nmA) }, { k: 'Paid from', v: 'The lending rewards pool' }, { k: 'Network fee', v: '~0.00001 ' + esc(ctx.native()) + ' (plus 1 drop to carry the request)' }], confirm: 'Claim' });
+  const ok = await PM.review({ title: 'Claim hold rewards', tone: 'buy', hero: `<div style="font-size:1.4rem;font-weight:800">≈ ${N(e.accrued, 6)} ${esc(nmA)}</div><div class="mut">${esc(KIND.claim.blurb)}</div>`, rows: [{ k: 'Earned in', v: esc(nmA) }, { k: 'Paid in', v: PI === 'SAME' ? esc(nmA) : esc(PI === 'LUMA' ? ctx.native() : 'USD') + ' (converted at today\'s price)' }, { k: 'Paid from', v: 'The lending rewards pool' }, { k: 'Network fee', v: '~0.00001 ' + esc(ctx.native()) + ' (plus 1 drop to carry the request)' }], confirm: 'Claim' });
   if (!ok) return; const asset = a as any as Asset;
   if (a === 'USD' && !(await ensureUsdLine(acc))) return; const r = await send('claim', asset, 0); if (!r.ok) return ctx.toast(r.msg || 'The network refused the request', true);
   ctx.toast('Claim sent. It arrives in a few seconds.'); setTimeout(() => void load(true), 6000); setTimeout(() => void load(true), 15000);
+}
+export async function payIn(w: string) {
+  const bad = ready(); if (bad) return ctx.toast(bad, true); const acc = ctx.account()!; if (!['SAME', 'LUMA', 'USD'].includes(w)) return;
+  if (w === 'USD' && !(await ensureUsdLine(acc))) return; await readWallet(acc);
+  const r = await send('payin', (w === 'SAME' ? 'LUMA' : w) as any as Asset, 0, {}); if (!r.ok) return ctx.toast(r.msg || 'The network refused the request', true);
+  ctx.toast('Saved. Your next payouts use this token.'); setTimeout(() => void load(true), 6000); setTimeout(() => void load(true), 15000);
 }
 export async function liquidate(target: string, debtAsset: Asset, col: Asset) {
   const bad = ready(); if (bad) return ctx.toast(bad, true); const acc = ctx.account()!; await readWallet(acc);
@@ -205,7 +200,7 @@ export async function liquidate(target: string, debtAsset: Asset, col: Asset) {
 }
 export const set = (k: 'asset' | 'amt' | 'liqAmt', v: string) => { (F as any)[k] = v; if (k === 'asset') paint(); else preview(); };
 export function view(v: V) { VIEW = v; paint(); if (v === 'analytics') void load(true); }
-export function setOp() { const cur = OP.url || candidates()[0] || ''; const u = prompt('Control panel address (for example http://127.0.0.1:8090)', cur); if (u == null) return; try { localStorage.setItem(OK + net(), u.trim().replace(/\/$/, '')); } catch { /* ignore */ } OP.url = u.trim().replace(/\/$/, ''); void load(true); }
+export function setOp() { const cur = OP.url || opRoots(OK)[0] || ''; const u = prompt('Control panel address (for example http://127.0.0.1:8090)', cur); if (u == null) return; try { localStorage.setItem(OK + net(), u.trim().replace(/\/$/, '')); } catch { /* ignore */ } OP.url = u.trim().replace(/\/$/, ''); void load(true); }
 function max(kind: string) {
   const a = F.asset; let v = 0;
   if (kind === 'supply' || kind === 'collateral') v = a === 'LUMA' ? Math.max(0, WAL.LUMA - 1.5) : WAL.USD; else if (kind === 'repay') v = Math.min(per(a).debt, a === 'LUMA' ? Math.max(0, WAL.LUMA - 1.5) : WAL.USD); else if (kind === 'withdraw') v = Math.min(per(a).supplied, (mkt(a) || { cash: 0 }).cash); else if (kind === 'withdrawcol') { const p = pos(); const free = p ? Math.max(0, (p.collateralUsd - (p.debtUsd > 0 ? p.debtUsd / P().ltvMax : 0)) / px(a)) : 0; v = Math.min(per(a).collateral, free * 0.999); } else if (kind === 'borrow') { const p = pos(); const room = p ? Math.max(0, p.maxBorrowUsd - p.debtUsd) / px(a) : 0; v = Math.min(room * 0.98, (mkt(a) || { cash: 0 }).cash); }
@@ -250,7 +245,7 @@ function actionsHtml(): string {
   const E = p && (p as any).earnings, ER = (OP.snap as any).rewards;
   const earn = E ? `<div class="card c12" style="margin-top:.6rem"><div class="row" style="align-items:center;gap:.6rem;flex-wrap:wrap"><div class="k">Hold earnings</div>${chip(PCT(E.apr, 1) + ' a year on what you keep supplied', GREEN)}<span class="grow"></span><span class="mut" style="font-size:.8rem">${ER ? 'Rewards pool: ' + E.per.map((x: any) => N(x.poolLeft, 2) + ' ' + esc(x.asset === 'LUMA' ? ctx.native() : 'USD')).join(' · ') : ''}</span></div>
   <div class="row" style="gap:.6rem;flex-wrap:wrap;width:100%;margin-top:.5rem">${tile('Ready to claim', USD(E.accruedUsd), E.per.map((x: any) => N(x.accrued, 6) + ' ' + esc(x.asset === 'LUMA' ? ctx.native() : 'USD')).join(' · '))}${tile('Claimed so far', USD(E.claimedUsd), E.per.map((x: any) => N(x.claimed, 6) + ' ' + esc(x.asset === 'LUMA' ? ctx.native() : 'USD')).join(' · '))}${tile('Total earned', USD(E.accruedUsd + E.claimedUsd), 'claimed plus waiting')}</div>
-  <div class="row" style="gap:.4rem;margin-top:.5rem;flex-wrap:wrap">${E.per.map((x: any) => `<button class="${x.accrued >= 0.000001 ? 'pri ' : ''}sm" ${x.accrued >= 0.000001 ? '' : 'disabled'} onclick="window.ld.claim('${x.asset}')">Claim ${esc(x.asset === 'LUMA' ? ctx.native() : 'USD')}</button>`).join('')}</div><div class="mut" style="font-size:.78rem;margin-top:.4rem">Earnings build every second on your supplied balance, on top of the normal interest. ${ER && ER.autoPayHours ? `They are also paid to you automatically every ${ER.autoPayHours} h${ER.nextAuto ? ' (next ' + new Date(ER.nextAuto).toLocaleString() + ')' : ''}, no claim needed. ` : ''}You can claim early any time. Claims are paid from a rewards pool the operator funds; if it is low, your earnings wait for the next top-up.</div></div>` : '';
+  <div class="row" style="gap:.4rem;margin-top:.5rem;flex-wrap:wrap">${E.per.map((x: any) => `<button class="${x.accrued >= 0.000001 ? 'pri ' : ''}sm" ${x.accrued >= 0.000001 ? '' : 'disabled'} onclick="window.ld.claim('${x.asset}')">Claim ${esc(x.asset === 'LUMA' ? ctx.native() : 'USD')}</button>`).join('')}</div><div class="row" style="gap:.4rem;margin-top:.6rem;align-items:center;flex-wrap:wrap"><span class="mut">Pay my interest in</span>${[['SAME', 'What I supplied'], ['LUMA', esc(ctx.native())], ['USD', 'USD']].map(([k, l]) => `<button class="${(E.payIn || 'SAME') === k ? 'pri ' : ''}sm" onclick="window.ld.payIn('${k}')">${l}</button>`).join('')}<span class="mut" style="font-size:.78rem">Converted at the current price when it is paid.</span></div><div class="mut" style="font-size:.78rem;margin-top:.4rem">Earnings build every second on your supplied balance, on top of the normal interest. ${ER && ER.autoPayHours ? `They are also paid to you automatically every ${ER.autoPayHours} h${ER.nextAuto ? ' (next ' + new Date(ER.nextAuto).toLocaleString() + ')' : ''}, no claim needed. ` : ''}You can claim early any time. Claims are paid from a rewards pool the operator funds; if it is low, your earnings wait for the next top-up.</div></div>` : '';
   const btn = (k: string, c = '') => `<button class="sm ${c}" onclick="window.ld.act('${k}')">${KIND[k].verb}</button>`;
   return `<div class="card c12"><div class="row" style="align-items:center;gap:.6rem"><div class="k">My position</div><span class="grow"></span><button class="sm" onclick="window.ld.load(true)">Refresh</button></div>${w}${summary}${earn}
   <div style="overflow:auto;margin-top:.6rem"><table style="width:100%;font-size:.88rem"><tr class="mut" style="text-align:left"><th>Asset</th><th>Supplied</th><th>Collateral</th><th>Debt</th><th>Supply / borrow APY</th></tr>${A2.map(row).join('')}</table></div></div>
@@ -313,4 +308,4 @@ function paint() {
   preview();
 }
 export function mount() { clearInterval(timer); void load(true); timer = setInterval(() => { if (!document.getElementById('ld_root')) { clearInterval(timer); return; } if (document.hidden) return; const a = document.activeElement as HTMLElement | null; if (a && a.id === 'ld_amt') return; void load(); }, 8000); }
-export const api = { load, act, claim, liq: liquidate, view, set, max, setOp };
+export const api = { load, act, claim, payIn, liq: liquidate, view, set, max, setOp };
