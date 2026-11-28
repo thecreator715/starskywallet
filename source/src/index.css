@@ -1503,3 +1503,5 @@ main:has(#tkpg){max-width:none}
 
 main:has(#ai_root){max-width:none;width:100%}
 main:has(#ld_root){max-width:none;width:100%}
+
+main:has(#sc_root){max-width:none;width:100%}

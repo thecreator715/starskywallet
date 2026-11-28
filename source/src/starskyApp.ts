@@ -24,6 +24,7 @@ import * as T2 from './live/toolkit2.ts';
 import * as Hd from './live/held.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
+import * as Scan from './live/scan.ts';
 import * as Social from './live/social.ts';
 import * as Bio from './live/bio.ts';
 import * as XDex from './live/xdex.ts';
@@ -314,7 +315,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'toolkit' | 'lending' | 'ai' | 'api' | 'airdrop' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'toolkit' | 'lending' | 'scan' | 'ai' | 'api' | 'airdrop' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -1124,7 +1125,6 @@ const ICON: Record<string, string> = {
   network: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
   pools: '<path d="M12 3s6.5 6.6 6.5 11.2a6.5 6.5 0 0 1-13 0C5.5 9.6 12 3 12 3z"/>',
   bridge: '<path d="M4 12h16M13 5l7 7-7 7"/>',
-  scan: '<circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/>',
   send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
   receive: '<path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/>',
   tokens: '<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.2 9.6c0-1 1-1.6 2.8-1.6s2.8.7 2.8 1.7-1 1.4-2.8 1.8-2.8.8-2.8 1.8 1 1.7 2.8 1.7 2.8-.6 2.8-1.6"/>',
@@ -1147,6 +1147,7 @@ const ICON: Record<string, string> = {
   api: '<path d="M8 8l-5 4 5 4M16 8l5 4-5 4M14 5l-4 14"/>',
   checks: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 14h4M15 10l1.5 1.5L19 9"/>',
   lending: '<path d="M3 10l9-6 9 6M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18"/>',
+  scan: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/>',
   toolkit: '<path d="M14.7 6.3a4 4 0 005 5L21 13l-8 8-3-3 8-8zM3 21l5-5M7 11L3 7l3-3 4 4"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/> y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
 };
@@ -1163,6 +1164,7 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['receive', 'Receive'],
   ['checks', 'Checks'],
   ['lending', 'Lending'],
+  ['scan', 'LUMA Scan'],
   ['ai', 'AI'],
   ['api', 'Developer API'],
   ['airdrop', 'Air Dropper'],
@@ -1642,6 +1644,10 @@ export function renderApp() {
       body = Rewards.shell();
       break;
 
+    case 'scan':
+      body = Scan.shell();
+      break;
+
     case 'social':
       body = Social.shell();
       break;
@@ -1868,6 +1874,7 @@ export function renderApp() {
         ${renderNavItem('receive', 'Receive')}
         ${renderNavItem('checks', 'Checks')}
         ${renderNavItem('lending', 'Lending')}
+        ${renderNavItem('scan', 'LUMA Scan')}
         ${renderNavItem('ai', 'AI')}
         ${renderNavItem('airdrop', 'Air Dropper')}
         ${renderNavItem('api', 'Developer API')}
@@ -1989,6 +1996,8 @@ export function renderApp() {
   else Pages.marketsUnmount();
   if (st.tab === 'bridge') Pages.bridgeMount();
   if (st.tab === 'claim') Claim.mount();
+  if (st.tab === 'scan') Scan.mount();
+  else Scan.unmount();
   if (st.tab === 'rewards') Rewards.mount();
   else Rewards.unmount();
   if (st.tab === 'social') void Social.mount();
