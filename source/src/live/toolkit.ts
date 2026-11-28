@@ -5,6 +5,9 @@ import { ctx } from './ctx.ts';
 import { esc, fmt, short, akey, fromKey, NATIVE, isNative, amtTx, type Asset } from './util.ts';
 import * as M from './market.ts';
 import * as PM from './procmodal.ts';
+import QRCode from 'qrcode';
+import { buildLink } from './safety.ts';
+import * as T2 from './toolkit2.ts';
 
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement | null;
 const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
@@ -13,9 +16,9 @@ const wr = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify
 const GREEN = '#3ddc84', RED = '#ff5b5b', AMB = '#f5b84b';
 const chip = (t: string, c: string) => `<span style="display:inline-block;padding:.08rem .5rem;border-radius:99px;font-size:.78rem;background:${c}22;color:${c}">${esc(t)}</span>`;
 const tile = (k: string, v: string, sub = '') => `<div class="tile" style="min-width:9rem;flex:1"><div class="mut" style="font-size:.8rem">${esc(k)}</div><div style="font-size:1.2rem;font-weight:800;margin:.1rem 0">${v}</div><div class="mut" style="font-size:.78rem">${sub}</div></div>`;
-type VW = 'bulk' | 'orders' | 'protect' | 'clean' | 'watch' | 'journal';
+type VW = 'bulk' | 'orders' | 'protect' | 'pay' | 'clean' | 'watch' | 'journal' | 'contacts' | 'safety' | 'digest';
 let VIEW = 'bulk' as VW;
-const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['orders', 'Auto orders'], ['protect', 'Protect & co-sign'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal']];
+const TABS: [VW, string][] = [['bulk', 'Bulk pay & split bill'], ['orders', 'Auto orders'], ['protect', 'Protect & co-sign'], ['pay', 'Get paid & gifts'], ['clean', 'Cleanup & health'], ['watch', 'Watchlist & alerts'], ['journal', 'Journal'], ...(T2.tabs as [VW, string][])];
 
 // ---------- pure helpers (tested) ----------
 export function parsePay(txt: string): { rows: { addr: string; amt?: number }[]; bad: string[] } {
@@ -47,13 +50,54 @@ async function readWallet() {
 const balOf = (a: Asset) => isNative(a) ? Math.max(0, NB - RES.base - RES.inc * (LINES.length + OFFERS)) : Number((LINES.find((l: any) => l.currency === a.c && l.account === a.i) || {}).balance || 0);
 
 // ---------- bulk pay ----------
+
+export type SmartMode = 'same' | 'total' | 'prop' | 'pct' | 'tier';
+export interface SmartOpts { mode: SmartMode; value: number; minBal?: number; minAmt?: number; maxAmt?: number; dp?: number }
+// Turns wallets (with optional balances) into amounts. 'same' = value each; 'total' = split value equally; 'prop' = share value in proportion to balance;
+// 'pct' = value% of each balance; 'tier' not used for money, reserved. Wallets under minBal are dropped; amounts are clamped to minAmt/maxAmt and rounded down.
+export function smartAmounts(rows: { addr: string; bal?: number; amt?: number }[], o: SmartOpts): { addr: string; amt: number; bal?: number }[] {
+  const dp = o.dp ?? 6, f = 10 ** dp, keep = rows.filter(r => (o.minBal ?? 0) <= 0 || (r.bal ?? 0) >= (o.minBal as number));
+  if (!keep.length || !(o.value > 0)) return [];
+  const sumBal = keep.reduce((a, r) => a + (r.bal || 0), 0); let raw: number[];
+  if (o.mode === 'same') raw = keep.map(() => o.value); else if (o.mode === 'total') raw = splitBill(o.value, keep.length, dp);
+  else if (o.mode === 'prop') raw = keep.map(r => (sumBal > 0 ? o.value * (r.bal || 0) / sumBal : 0)); else if (o.mode === 'pct') raw = keep.map(r => (r.bal || 0) * o.value / 100); else raw = keep.map(r => r.amt || 0);
+  return keep.map((r, i) => { let a = Math.floor(raw[i] * f + 1e-9) / f; if (o.maxAmt && a > o.maxAmt) a = o.maxAmt; if (o.minAmt && a > 0 && a < o.minAmt) a = o.minAmt; return { addr: r.addr, amt: a, bal: r.bal }; }).filter(r => r.amt > 0);
+}
+export const linesOf = (rows: { addr: string; amt: number }[]) => rows.map(r => `${r.addr}, ${r.amt}`).join('\n');
+const TA = () => document.getElementById('tk_list') as unknown as HTMLTextAreaElement | null;
+const bpaint = () => { const m = document.getElementById('tk_msg'); if (m && VIEW === 'bulk') m.innerHTML = MSG; else paint(); };
+let HB: Record<string, number> = {};
+async function fetchHolders() {
+  const sel = $('tk_hsel')?.value || '', cur = ($('tk_hcur')?.value || '').trim(), iss = ($('tk_hiss')?.value || '').trim(), max = Math.max(1, Math.min(20000, Number($('tk_hmax')?.value || 500))), minb = Number($('tk_hmin')?.value || 0), zero = !!($('tk_hzero') as any)?.checked;
+  const excl = new Set((($('tk_hex')?.value || '').split(/[\s,;]+/).filter(Boolean)).concat(ctx.account() || '')); let asset: Asset | null = null;
+  if (cur && iss) asset = { c: cur, i: iss }; else if (sel && sel !== 'native') { const [c, i] = sel.split('|'); asset = { c, i }; }
+  MSG = `<div class="mut">Reading holders…</div>`; bpaint(); const out: { addr: string; bal: number }[] = [];
+  try {
+    if (asset) { let marker: any; for (let pg = 0; pg < 60 && out.length < max; pg++) { const r: any = await ctx.req('account_lines', { account: asset.i, ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) }); for (const l of r.lines || []) if (l.currency === asset.c) { const b = -Number(l.balance); if ((b > 0 || zero) && b >= minb) out.push({ addr: l.account, bal: Math.max(0, b) }); } marker = r.marker; if (!marker) break; } }
+    else { let marker: any; for (let pg = 0; pg < 40 && out.length < max; pg++) { const r: any = await ctx.req('ledger_data', { ledger_index: 'validated', type: 'account', limit: 400, ...(marker ? { marker } : {}) }); for (const x of r.state || []) { const b = Number(x.Balance || 0) / 1e6; if (x.LedgerEntryType === 'AccountRoot' && b >= minb && (b > 0 || zero)) out.push({ addr: x.Account, bal: b }); } marker = r.marker; if (!marker) break; } }
+  } catch (e: any) { MSG = `<div style="color:${RED}">Could not read holders: ${esc(String(e?.message || e).slice(0, 140))}${asset ? '' : ' (reading every wallet of the native token needs a node that allows ledger_data)'}</div>`; return bpaint(); }
+  const rows = out.filter(r => !excl.has(r.addr)).slice(0, max); HB = {}; rows.forEach(r => (HB[r.addr] = r.bal)); const ta = TA();
+  if (ta) ta.value = rows.map(r => r.addr).join('\n'); MSG = rows.length ? `<div style="color:${GREEN}">${rows.length} wallet${rows.length === 1 ? '' : 's'} loaded (${fmt(rows.reduce((a, r) => a + r.bal, 0), 4)} held in total). Now choose how much each gets under Smart amounts.</div>` : `<div style="color:${AMB}">No wallets matched.</div>`; bpaint();
+}
+function applySmart() {
+  const ta = TA(); if (!ta) return; const { rows } = parsePay(ta.value); const mode = ($('tk_sm') as any)?.value as SmartMode, g = (id: string) => Number($(id)?.value || 0);
+  const res = smartAmounts(rows.map(r => ({ addr: r.addr, bal: HB[r.addr], amt: r.amt })), { mode, value: g('tk_sv'), minBal: g('tk_sminb'), minAmt: g('tk_smin') || undefined, maxAmt: g('tk_smax') || undefined, dp: Number($('tk_sdp')?.value || 6) });
+  if (!res.length) { MSG = `<div style="color:${AMB}">Nothing to fill: check the wallet list and the amount.</div>`; return bpaint(); }
+  if ((mode === 'prop' || mode === 'pct') && rows.some(r => HB[r.addr] == null)) { MSG = `<div style="color:${AMB}">Some wallets have no known balance. Load them with "Load holders" first, or use Same amount / Split a total.</div>`; return bpaint(); }
+  ta.value = linesOf(res); MSG = `<div style="color:${GREEN}">${res.length} wallet${res.length === 1 ? '' : 's'} filled${rows.length - res.length ? ` (${rows.length - res.length} left out)` : ''}, ${fmt(res.reduce((a, r) => a + r.amt, 0))} in total. Edit any line by hand, then Check list.</div>`; const m = $('tk_mode') as any; if (m) m.value = 'listed'; bpaint();
+}
+function tweakAll(kind: string) {
+  const ta = TA(); if (!ta) return; const { rows } = parsePay(ta.value), v = Number($('tk_tv')?.value || 0); if (!rows.length || !(v > 0 || kind === 'round')) return;
+  let out = rows.map(r => ({ addr: r.addr, amt: r.amt || 0 })); if (kind === 'mul') out = out.map(r => ({ ...r, amt: +(r.amt * v).toFixed(6) })); else if (kind === 'set') out = out.map(r => ({ ...r, amt: v })); else if (kind === 'below') out = out.filter(r => r.amt >= v); else if (kind === 'round') out = out.map(r => ({ ...r, amt: Math.floor(r.amt) }));
+  out = out.filter(r => r.amt > 0); const t = linesOf(out); ta.value = t; MSG = `<div class="mut">${out.length} wallet${out.length === 1 ? '' : 's'} now listed.</div>`; bpaint();
+}
 async function bulkPreview() {
   const txt = $('tk_list')?.value || '', tk = $('tk_tok')?.value || 'native', mode = $('tk_mode')?.value || 'listed', tot = Number($('tk_tot')?.value || 0);
   const { rows, bad } = parsePay(txt); await readWallet(); const a: Asset = tk === 'native' ? NATIVE : { c: tk.split('|')[0], i: tk.split('|')[1] };
   let amts: number[] = []; if (mode === 'equal') amts = splitBill(tot, rows.length); else amts = rows.map(r => r.amt || 0);
   const bal = balOf(a), sum = amts.reduce((x, y) => x + y, 0), errs = [...bad.map(b => 'Skipped: ' + b)];
   if (!rows.length) errs.push('Add at least one wallet address, one per line.'); if (amts.some(x => !(x > 0))) errs.push('Every wallet needs an amount (or choose "split a total").'); if (sum > bal + 1e-9) errs.push(`You need ${fmt(sum)} ${M.labelOf(a)} but have ${fmt(bal)} available.`);
-  ROWS = rows.map((r, i) => ({ addr: r.addr, amt: amts[i], a })); MSG = errs.length ? errs.map(e => `<div style="color:${AMB}">${esc(e)}</div>`).join('') : `<div style="color:${GREEN}">${rows.length} payments, ${fmt(sum)} ${esc(M.labelOf(a))} in total. Press Review and send.</div>`; paint();
+  ROWS = rows.map((r, i) => ({ addr: r.addr, amt: amts[i], a })); MSG = errs.length ? errs.map(e => `<div style="color:${AMB}">${esc(e)}</div>`).join('') : `<div style="color:${GREEN}">${rows.length} payments, ${fmt(sum)} ${esc(M.labelOf(a))} in total. Press Review and send.</div>`; bpaint();
 }
 async function bulkSend() {
   await bulkPreview(); if (!ROWS.length || /needs|need at least|Add at least/.test(MSG)) return ctx.toast('Fix the list first.', true);
@@ -61,13 +105,15 @@ async function bulkSend() {
   const ok = await PM.review({ title: 'Send to ' + ROWS.length + ' wallets', tone: 'buy', hero: `<div style="font-size:1.4rem;font-weight:800">${fmt(sum)} ${esc(M.labelOf(a))}</div><div class="mut">Each wallet gets its own payment. A wallet that cannot receive it is skipped and nothing is lost.</div>`, rows: [{ k: 'Wallets', v: String(ROWS.length) }, { k: 'Network fee', v: '~0.00001 ' + esc(ctx.native()) + ' each' }], confirm: 'Send all' });
   if (!ok) return; const acc = ctx.account()!, prog = PM.progress('Sending', ROWS.map(r => short(r.addr))); let good = 0; const out: any[] = [];
   for (let i = 0; i < ROWS.length; i++) { const r = ROWS[i]; prog.set(i, 'run'); try { const x = await ctx.submit({ TransactionType: 'Payment', Account: acc, Destination: ctx.toClassic(r.addr), Amount: amtTx(r.a, r.amt) }); if (x.ok) { good++; prog.set(i, 'ok', fmt(r.amt)); } else prog.set(i, 'bad', (x.msg || '').slice(0, 60)); out.push({ ...r, ok: !!x.ok, hash: x.hash, msg: x.msg }); } catch (e: any) { prog.set(i, 'bad', String(e?.message || e).slice(0, 60)); out.push({ ...r, ok: false, msg: String(e?.message || e) }); } }
-  prog.done(`${good} of ${ROWS.length} sent`); MSG = `<div style="color:${good === ROWS.length ? GREEN : AMB}">${good} of ${ROWS.length} sent.</div>${out.filter(o => !o.ok).map(o => `<div class="mut">${esc(short(o.addr))}: ${esc(o.msg || 'failed')}</div>`).join('')}`; await readWallet(); paint();
+  prog.done(`${good} of ${ROWS.length} sent`); MSG = `<div style="color:${good === ROWS.length ? GREEN : AMB}">${good} of ${ROWS.length} sent.</div>${out.filter(o => !o.ok).map(o => `<div class="mut">${esc(short(o.addr))}: ${esc(o.msg || 'failed')}</div>`).join('')}`; await readWallet(); bpaint();
 }
 function bulkHtml(): string {
   const toks = [['native', ctx.native()], ...LINES.filter((l: any) => Number(l.balance) > 0).map((l: any) => [l.currency + '|' + l.account, M.labelOf({ c: l.currency, i: l.account })])];
   return `<div class="card c12"><div class="k">Pay many wallets, or split a bill</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">One line per wallet: <i>address, amount</i>. Or choose "split a total equally" and list only addresses.</div>
+  <div class="card" style="margin:.4rem 0;padding:.6rem"><div class="k">Load wallets from a token</div><div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Fetches every wallet that holds (or has a trust line for) a token, straight from the chain.</div><div class="row" style="gap:.4rem;flex-wrap:wrap;align-items:center"><select id="tk_hsel"><option value="">Pick a token you hold…</option>${toks.filter(t => t[0] !== 'native').map(t => `<option value="${esc(t[0])}">${esc(t[1])}</option>`).join('')}<option value="native">${esc(ctx.native())} (every funded wallet)</option></select><input id="tk_hcur" placeholder="or currency code" size="12"><input id="tk_hiss" placeholder="issuer address" size="22"><input id="tk_hmax" value="500" size="6" title="most wallets"><input id="tk_hmin" placeholder="min balance" size="9"><input id="tk_hex" placeholder="leave out (addresses)" size="16"><label class="mut"><input type="checkbox" id="tk_hzero"> include empty trust lines</label><button class="sm pri" onclick="window.tkt.holders()">Load holders</button></div></div>
+  <div class="card" style="margin:.4rem 0;padding:.6rem"><div class="k">Smart amounts</div><div class="mut" style="font-size:.78rem;margin:.2rem 0 .4rem">Fills the amount for every wallet below. You can still edit any line by hand afterwards.</div><div class="row" style="gap:.4rem;flex-wrap:wrap;align-items:center"><select id="tk_sm"><option value="same">Same amount to each</option><option value="total">Split a total equally</option><option value="prop">Share a total by how much they hold</option><option value="pct">A percent of what they hold</option></select><input id="tk_sv" placeholder="amount / total / %" size="14"><input id="tk_sminb" placeholder="skip holders under" size="12"><input id="tk_smin" placeholder="at least" size="8"><input id="tk_smax" placeholder="at most" size="8"><select id="tk_sdp"><option value="6">6 decimals</option><option value="2">2 decimals</option><option value="0">whole numbers</option></select><button class="sm pri" onclick="window.tkt.smart()">Fill amounts</button></div><div class="row" style="gap:.4rem;flex-wrap:wrap;align-items:center;margin-top:.4rem"><span class="mut">Edit all:</span><input id="tk_tv" placeholder="number" size="8"><button class="sm" onclick="window.tkt.tweak('set')">Set all to</button><button class="sm" onclick="window.tkt.tweak('mul')">Multiply by</button><button class="sm" onclick="window.tkt.tweak('below')">Drop under</button><button class="sm" onclick="window.tkt.tweak('round')">Round down</button></div></div>
   <textarea id="tk_list" rows="7" style="width:100%" placeholder="rExample..., 5&#10;rAnother..., 2.5"></textarea>
-  <div class="row" style="gap:.5rem;margin-top:.5rem;flex-wrap:wrap;align-items:center"><select id="tk_tok">${toks.map(t => `<option value="${esc(t[0])}">${esc(t[1])}</option>`).join('')}</select><select id="tk_mode"><option value="listed">Amounts as listed</option><option value="equal">Split a total equally</option></select><input id="tk_tot" placeholder="total to split" size="12"><button class="sm" onclick="window.tkt.preview()">Check list</button><button class="pri" onclick="window.tkt.send()">Review and send</button></div><div style="margin-top:.6rem">${MSG}</div></div>`;
+  <div class="row" style="gap:.5rem;margin-top:.5rem;flex-wrap:wrap;align-items:center"><select id="tk_tok">${toks.map(t => `<option value="${esc(t[0])}">${esc(t[1])}</option>`).join('')}</select><select id="tk_mode"><option value="listed">Amounts as listed</option><option value="equal">Split a total equally</option></select><input id="tk_tot" placeholder="total to split" size="12"><button class="sm" onclick="window.tkt.preview()">Check list</button><button class="pri" onclick="window.tkt.send()">Review and send</button></div><div style="margin-top:.6rem" id="tk_msg">${MSG}</div></div>`;
 }
 
 // ---------- cleanup & health ----------
@@ -112,7 +158,7 @@ async function journalLoad() {
 function journalCsv() { const lines = [csvRow(['time', 'type', 'direction', 'counterparty', 'amount', 'success', 'hash']), ...JR.map(j => csvRow([j.when ? new Date(j.when).toISOString() : '', j.type, j.dir, j.who, j.amt, j.ok ? 'yes' : 'no', j.hash]))]; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); a.download = 'starsky-journal.csv'; a.click(); }
 function journalHtml(): string {
   const pay = JR.filter(j => j.type === 'Payment'), sent = pay.filter(j => j.dir === 'sent').length, rec = pay.length - sent;
-  return `<div class="row" style="gap:.6rem;flex-wrap:wrap;width:100%">${tile('Transactions', String(JR.length), 'latest 400')}${tile('Sent', String(sent), 'payments')}${tile('Received', String(rec), 'payments')}</div><div class="card c12" style="margin-top:.6rem"><div class="row" style="align-items:center"><div class="k">Journal</div><span class="grow"></span><button class="sm" onclick="window.tkt.csv()">Download CSV</button></div><div style="max-height:26rem;overflow:auto;margin-top:.4rem"><table style="width:100%">${JR.slice(0, 200).map(j => `<tr><td class="mut">${j.when ? new Date(j.when).toLocaleString() : ''}</td><td>${esc(j.type)} ${esc(j.dir)}</td><td>${esc(j.who ? short(j.who) : '')}</td><td>${esc(j.amt)}</td><td>${j.ok ? '' : chip('failed', RED)}</td></tr>`).join('') || '<tr><td class="mut">No transactions yet.</td></tr>'}</table></div></div>`;
+  return `<div class="row" style="gap:.6rem;flex-wrap:wrap;width:100%">${tile('Transactions', String(JR.length), 'latest 400')}${tile('Sent', String(sent), 'payments')}${tile('Received', String(rec), 'payments')}</div><div class="card c12" style="margin-top:.6rem"><div class="row" style="align-items:center"><div class="k">Journal</div><span class="grow"></span><button class="sm" onclick="window.tkt.csv()">Download CSV</button></div><div style="max-height:26rem;overflow:auto;margin-top:.4rem"><table style="width:100%">${JR.slice(0, 200).map(j => `<tr><td class="mut">${j.when ? new Date(j.when).toLocaleString() : ''}</td><td>${esc(j.type)} ${esc(j.dir)}</td><td>${esc(j.who ? short(j.who) : '')}</td><td>${esc(j.amt)}</td><td>${j.ok ? '' : chip('failed', RED)}</td><td><button class="sm" onclick="window.tkt.receipt(${JR.indexOf(j)})">Receipt</button></td></tr>`).join('') || '<tr><td class="mut">No transactions yet.</td></tr>'}</table></div></div>`;
 }
 
 
@@ -227,21 +273,84 @@ function protectHtml(): string {
   <textarea id="ms_blobs" rows="3" style="width:100%;margin-top:.6rem" placeholder="Paste every co-signer's signed copy, one per line"></textarea><button class="pri" style="margin-top:.4rem" onclick="window.tkt.combine()">Combine and send</button><div style="margin-top:.6rem">${PMSG}</div></div>`;
 }
 
+
+// ---------- get paid: invoices, point of sale, recurring payments, gift cards, receipts ----------
+export interface Invoice { id: string; tag: number; key: string; label: string; amt: number; note: string; created: number; due: number; paid: number; paidBy: string; hash: string }
+export interface Recur { id: string; to: string; key: string; label: string; amt: number; everyH: number; left: number; next: number; state: 'active' | 'done' | 'failed' | 'stopped'; msg: string; sent: number }
+const IK = () => `starsky.toolkit.invoices.${net()}`, RK = () => `starsky.toolkit.recur.${net()}`;
+const INV = (): Invoice[] => rd(IK(), []), saveInv = (v: Invoice[]) => wr(IK(), v), REC = (): Recur[] => rd(RK(), []), saveRec = (v: Recur[]) => wr(RK(), v);
+/** does this incoming payment settle the invoice? tag must match and the amount must cover it */
+export function invoiceMatch(inv: { tag: number; key: string; amt: number; paid: number }, p: { dest: string; me: string; tag: number | undefined; cur: string; issuer: string; value: number; ok: boolean }): boolean {
+  if (inv.paid || !p.ok || p.dest !== p.me || p.tag !== inv.tag) return false; const want = inv.key === 'native' ? 'native' : inv.key; const got = p.cur === 'native' ? 'native' : p.cur + '|' + p.issuer; return want === got && p.value + 1e-9 >= inv.amt;
+}
+export function dueRecurring(r: Recur[], now: number): Recur[] { return r.filter(x => x.state === 'active' && x.next <= now && x.left !== 0); }
+export function receiptHtml(r: { when: number; type: string; dir: string; who: string; amt: string; hash: string; ok: boolean }, me: string): string {
+  const e = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+  return `<!doctype html><meta charset="utf-8"><title>Receipt</title><body style="font-family:system-ui;max-width:28rem;margin:2rem auto;padding:1rem;border:1px solid #ccc;border-radius:12px"><h2 style="margin:0 0 .3rem">Payment receipt</h2><div style="color:#666;margin-bottom:1rem">${e(r.ok ? 'Confirmed on the network' : 'Not completed')}</div><table style="width:100%;border-collapse:collapse">${[['Date', r.when ? new Date(r.when).toLocaleString() : ''], ['Type', r.type + (r.dir ? ' (' + r.dir + ')' : '')], ['Amount', r.amt], [r.dir === 'received' ? 'From' : 'To', r.who], ['Your wallet', me], ['Transaction', r.hash]].map(([k, v]) => `<tr><td style="padding:.35rem 0;color:#666">${e(k)}</td><td style="padding:.35rem 0;text-align:right;word-break:break-all">${e(v)}</td></tr>`).join('')}</table><p style="color:#888;font-size:.8rem;margin-top:1.2rem">Anyone can verify this transaction by its ID in the network explorer.</p></body>`;
+}
+function invLink(i: Invoice, me: string): string { return buildLink({ to: me, amount: String(i.amt), cur: i.key === 'native' ? 'native' : i.key.split('|')[0], issuer: i.key === 'native' ? undefined : i.key.split('|')[1], tag: i.tag, memo: i.note || ('Invoice ' + i.tag) }, location.origin + location.pathname); }
+async function scanInvoices() {
+  const acc = ctx.account(), inv = INV(); if (!acc || !inv.some(i => !i.paid) || !ctx.online()) return false; const r: any = await ctx.req('account_tx', { account: acc, ledger_index_min: -1, ledger_index_max: -1, limit: 100 }).catch(() => null); if (!r) return false; let ch = false;
+  for (const x of r.transactions || []) { const t = x.tx_json || x.tx || {}, m = x.meta || x.metadata || {}; if (t.TransactionType !== 'Payment') continue; const d = m.delivered_amount ?? t.Amount; const p = { dest: t.Destination, me: acc, tag: t.DestinationTag, cur: typeof d === 'string' ? 'native' : d?.currency || '', issuer: typeof d === 'string' ? '' : d?.issuer || '', value: typeof d === 'string' ? Number(d) / 1e6 : Number(d?.value || 0), ok: (m.TransactionResult) === 'tesSUCCESS' };
+    for (const i of inv) if (invoiceMatch(i, p)) { i.paid = Date.now(); i.paidBy = t.Account; i.hash = t.hash || x.hash || ''; ch = true; ctx.toast(`Invoice ${i.tag} paid: ${fmt(p.value)} ${i.label}`); } }
+  if (ch) saveInv(inv); return ch;
+}
+async function recurTick() {
+  const r = REC(), due = dueRecurring(r, Date.now()); if (!due.length || !ctx.account() || !ctx.online()) return; await readWallet();
+  for (const x of due) { x.next = Date.now() + x.everyH * 3600000; const a: Asset = fromKey(x.key); try { const res = await ctx.submit({ TransactionType: 'Payment', Account: ctx.account()!, Destination: ctx.toClassic(x.to), Amount: amtTx(a, x.amt) }); if (res.ok) { x.sent++; if (x.left > 0) x.left--; x.msg = 'Last sent ' + new Date().toLocaleString(); if (x.left === 0) x.state = 'done'; } else { x.msg = 'Skipped: ' + (res.msg || 'rejected'); } } catch (e: any) { x.msg = 'Skipped: ' + String(e?.message || e); } ctx.toast(`Recurring payment to ${short(x.to)}: ${x.msg}`, /Skipped/.test(x.msg)); saveRec(r); }
+  if (document.getElementById('tk_root') && VIEW === 'pay') paint();
+}
+async function addInvoice() {
+  const g = (id: string) => $(id)?.value || '', amt = Number(g('iv_amt')), key = g('iv_tok') || 'native', acc = ctx.account(); if (!acc) return ctx.toast('Unlock a wallet first.', true); if (!(amt > 0)) return ctx.toast('Enter an amount.', true);
+  const inv = INV(), tag = Math.max(100000, ...inv.map(i => i.tag)) + 1 + Math.floor(Math.random() * 5), sel = $('iv_tok') as any;
+  inv.push({ id: Math.random().toString(36).slice(2, 9), tag, key, label: sel?.selectedOptions[0]?.text || ctx.native(), amt, note: g('iv_note').slice(0, 60), created: Date.now(), due: 0, paid: 0, paidBy: '', hash: '' }); saveInv(inv); paint();
+}
+async function showQr(idx: number, pos = false) {
+  const i = INV()[idx], acc = ctx.account(); if (!i || !acc) return; const link = invLink(i, acc), url: string = await new Promise(res => QRCode.toDataURL(link, { width: pos ? 360 : 240, margin: 1 }, (e: any, u: string) => res(e ? '' : u)));
+  ctx.modal(`<div style="text-align:center;padding:1rem"><div style="font-size:${pos ? '2rem' : '1.3rem'};font-weight:800">${fmt(i.amt)} ${esc(i.label)}</div><div class="mut">Invoice ${i.tag}${i.note ? ' · ' + esc(i.note) : ''}</div>${url ? `<img src="${url}" style="background:#fff;padding:.5rem;border-radius:10px;margin:.8rem auto;display:block;max-width:100%">` : ''}<input readonly style="width:100%" value="${esc(link)}" onclick="this.select()"><div id="iv_stat" class="mut" style="margin-top:.6rem">${i.paid ? '' : 'Waiting for payment…'}</div></div>`);
+  if (pos) { const iv = setInterval(async () => { const el = document.getElementById('iv_stat'); if (!el) return clearInterval(iv); await scanInvoices(); const cur = INV()[idx]; if (cur && cur.paid) { el.innerHTML = `<div style="font-size:1.6rem;font-weight:800;color:${GREEN}">Paid ✓</div>`; clearInterval(iv); } }, 4000); }
+}
+async function addRecurring() {
+  const g = (id: string) => $(id)?.value || '', to = g('rc_to').trim(), amt = Number(g('rc_amt')), every = Number(g('rc_every')), n = Number(g('rc_n')) || -1, key = g('rc_tok') || 'native';
+  if (!/^(r|X|L|T|M)[1-9A-HJ-NP-Za-km-z]{20,}$/.test(to)) return ctx.toast('Paste the full wallet address.', true); if (!(amt > 0)) return ctx.toast('Enter an amount.', true); if (!(every >= 1 && every <= 8760)) return ctx.toast('Repeat every 1 to 8760 hours.', true);
+  const label = key === 'native' ? ctx.native() : M.labelOf(fromKey(key)), ok = await PM.review({ title: 'Create recurring payment', tone: 'tip', hero: `<div style="font-weight:700">${fmt(amt)} ${esc(label)} to ${esc(short(to))} every ${every} h${n > 0 ? ', ' + n + ' times' : ''}</div>`, rows: [{ k: 'First payment', v: 'in ' + every + ' h' }], warns: ['Payments go out only while Starsky is open and unlocked. Missed ones are sent when you next open it. Stop it here any time.'], confirm: 'Create' }); if (!ok) return;
+  const r = REC(); r.push({ id: Math.random().toString(36).slice(2, 9), to, key, label, amt, everyH: every, left: n, next: Date.now() + every * 3600000, state: 'active', msg: '', sent: 0 }); saveRec(r); paint();
+}
+async function makeGift() {
+  const amt = Number($('gf_amt')?.value); if (!(amt > 0)) return ctx.toast('Enter an amount in ' + ctx.native() + '.', true); await readWallet(); const need = amt + 0.001; if (need > balOf(NATIVE)) return ctx.toast('Not enough ' + ctx.native() + ' available.', true);
+  const w = xrpl.Wallet.generate(), fund = Math.max(amt, RES.base);
+  const ok = await PM.review({ title: 'Create a gift card', tone: 'buy', hero: `<div style="font-size:1.4rem;font-weight:800">${fmt(fund)} ${esc(ctx.native())}</div><div class="mut">A new wallet is created and funded. You get its recovery key to hand over.</div>`, rows: [{ k: 'New wallet', v: short(w.classicAddress) }], warns: ['Whoever has the key owns the money. Share it only with the person you are gifting, and do not keep screenshots of it.'], confirm: 'Create and fund' }); if (!ok) return;
+  const r = await ctx.submit({ TransactionType: 'Payment', Account: ctx.account()!, Destination: w.classicAddress, Amount: String(Math.round(fund * 1e6)) }); if (!r.ok) return ctx.toast(r.msg || 'Could not fund the gift', true);
+  ctx.modal(`<div style="padding:1rem"><div style="font-size:1.2rem;font-weight:800">Gift ready: ${fmt(fund)} ${esc(ctx.native())}</div><div class="mut" style="margin:.4rem 0">Give the recipient this recovery key. They open Starsky, choose Import wallet and paste it. This is the only time it is shown.</div><input readonly style="width:100%" value="${esc(w.seed || '')}" onclick="this.select()"><div class="mut" style="margin-top:.5rem">Wallet address: ${esc(w.classicAddress)}</div></div>`);
+}
+function payHtml(): string {
+  const inv = INV(), rec = REC(), toks = [['native', ctx.native()], ...LINES.map((l: any) => [l.currency + '|' + l.account, M.labelOf({ c: l.currency, i: l.account })])], opt = toks.map(x => `<option value="${esc(x[0])}">${esc(x[1])}</option>`).join('');
+  return `<div class="card c12"><div class="k">Invoices and point of sale</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Create a payment request with a link and QR code. It is marked paid automatically when the matching payment arrives (checked while Starsky is open).</div><div class="row" style="gap:.5rem;flex-wrap:wrap"><input id="iv_amt" placeholder="amount" size="8"><select id="iv_tok">${opt}</select><input id="iv_note" placeholder="note (optional)" size="22"><button class="pri" onclick="window.tkt.addInvoice()">Create invoice</button></div>
+  ${inv.length ? `<table style="width:100%;margin-top:.6rem">${inv.slice().reverse().map((i, k) => { const idx = inv.length - 1 - k; return `<tr><td>#${i.tag}</td><td>${fmt(i.amt)} ${esc(i.label)}</td><td class="mut">${esc(i.note)}</td><td>${i.paid ? chip('paid ' + new Date(i.paid).toLocaleDateString(), GREEN) : chip('unpaid', AMB)}</td><td style="text-align:right;white-space:nowrap"><button class="sm" onclick="window.tkt.qr(${idx})">Link & QR</button> <button class="sm" onclick="window.tkt.pos(${idx})">Point of sale</button> <button class="sm" onclick="window.tkt.rmInvoice(${idx})">Delete</button></td></tr>`; }).join('')}</table>` : ''}</div>
+  <div class="card c12" style="margin-top:.6rem"><div class="k">Recurring payments</div><div class="row" style="gap:.5rem;flex-wrap:wrap;margin-top:.4rem"><input id="rc_to" placeholder="recipient address" size="34"><input id="rc_amt" placeholder="amount" size="8"><select id="rc_tok">${opt}</select><input id="rc_every" placeholder="every (hours)" size="9" value="168"><input id="rc_n" placeholder="times (0 = forever)" size="10"><button class="pri" onclick="window.tkt.addRecurring()">Create</button></div>
+  ${rec.length ? `<table style="width:100%;margin-top:.6rem">${rec.map((x, i) => `<tr><td>${fmt(x.amt)} ${esc(x.label)} to ${esc(short(x.to))} every ${x.everyH} h</td><td>${chip(x.state, x.state === 'active' ? AMB : x.state === 'done' ? GREEN : RED)} <span class="mut">${x.sent} sent${x.state === 'active' ? ', next ' + new Date(x.next).toLocaleString() : ''}</span></td><td class="mut">${esc(x.msg)}</td><td style="text-align:right"><button class="sm" onclick="window.tkt.stopRecurring(${i})">${x.state === 'active' ? 'Stop' : 'Remove'}</button></td></tr>`).join('')}</table>` : ''}</div>
+  <div class="card c12" style="margin-top:.6rem"><div class="k">Gift card</div><div class="mut" style="font-size:.82rem;margin:.2rem 0 .5rem">Creates a new wallet funded with ${esc(ctx.native())} and gives you its recovery key to hand over.</div><div class="row" style="gap:.5rem"><input id="gf_amt" placeholder="amount in ${esc(ctx.native())}" size="14"><button class="pri" onclick="window.tkt.gift()">Create gift card</button></div></div>`;
+}
+
 // ---------- page ----------
 export function shell() { return `<div id="tk_root" style="width:100%"><div class="row" id="tk_tabs" style="gap:.4rem;margin-bottom:.7rem;flex-wrap:wrap"></div><div id="tk_body" class="grid" style="width:100%"></div></div>`; }
 function paint() {
   const t = document.getElementById('tk_tabs'), b = document.getElementById('tk_body'); if (!t || !b) return;
   t.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.tkt.view('${k}')">${l}</button>`).join('');
   const a = document.activeElement; if (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && b.contains(a)) return;
-  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'orders' ? ordersHtml() : VIEW === 'protect' ? protectHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : journalHtml();
+  b.innerHTML = VIEW === 'bulk' ? bulkHtml() : VIEW === 'orders' ? ordersHtml() : VIEW === 'protect' ? protectHtml() : VIEW === 'pay' ? payHtml() : VIEW === 'clean' ? cleanHtml() : VIEW === 'watch' ? watchHtml() : VIEW === 'journal' ? journalHtml() : T2.html(VIEW);
 }
-async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'watch') await watchTick(); if (VIEW === 'orders') await ordersTick(); if (VIEW === 'protect') { await readSigners(); await delayedTick(); } } finally { busy = false; paint(); } }
+async function refresh() { if (busy) return; busy = true; try { await readWallet(); if (VIEW === 'journal') await journalLoad(); if (VIEW === 'watch') await watchTick(); if (VIEW === 'orders') await ordersTick(); if (VIEW === 'protect') { await readSigners(); await delayedTick(); } if (VIEW === 'pay') { await recurTick(); await scanInvoices(); } } finally { busy = false; paint(); } }
 export function view(v: VW) { VIEW = v; MSG = ''; paint(); void refresh(); }
 export function mount() { paint(); void refresh(); }
-export function start() { clearInterval(tmr); tmr = setInterval(() => { void watchTick(); void ordersTick(); void delayedTick(); }, 30000); }
+export function start() { clearInterval(tmr); tmr = setInterval(() => { void watchTick(); void ordersTick(); void delayedTick(); void recurTick(); void scanInvoices(); }, 30000); }
 export const api = {
+  holders: fetchHolders, smart: applySmart, tweak: tweakAll,
+  ...T2.makeApi(() => paint()),
   addOrder, sellAll, rmOrder(i: number) { const os = ORD(); os.splice(i, 1); saveOrd(os); paint(); },
   addDelayed, cancelDelayed(i: number) { const d = DL(); if (d[i] && d[i].state === 'waiting') d[i].state = 'cancelled'; saveDl(d); paint(); }, setSigners, clearSigners, coSign, combine: combineSend,
+  addInvoice, qr: (i: number) => void showQr(i), pos: (i: number) => void showQr(i, true), rmInvoice(i: number) { const v = INV(); v.splice(i, 1); saveInv(v); paint(); }, addRecurring, stopRecurring(i: number) { const r = REC(); if (r[i].state === 'active') r[i].state = 'stopped'; else r.splice(i, 1); saveRec(r); paint(); }, gift: makeGift,
+  receipt(i: number) { const j = JR[i]; if (!j) return; const w = window.open('', '_blank'); if (w) { w.document.write(receiptHtml(j, ctx.account() || '')); w.document.close(); } },
   view, preview: bulkPreview, send: bulkSend, clean: cleanLines, csv: journalCsv,
   watch() { const k = $('tk_w')?.value; if (!k) return; const w = WL(); if (!w.includes(k)) w.push(k); wr(WK(), w); paint(); },
   unwatch(k: string) { wr(WK(), WL().filter(x => x !== k)); paint(); },

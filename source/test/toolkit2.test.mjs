@@ -1,0 +1,11 @@
+import assert from 'node:assert';
+const T = await import('/tmp/toolkit2.mjs'); let n = 0; const t = (name, f) => { f(); n++; };
+const L = [{ name: 'Mom', addr: 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh' }];
+t('findContact by name/address', () => { assert(T.findContact(L, ' mom ')); assert(T.findContact(L, L[0].addr)); assert.equal(T.findContact(L, 'x'), null); });
+t('validAddr', () => { assert(T.validAddr(L[0].addr)); assert(!T.validAddr('nope')); });
+t('limitCheck', () => { assert.equal(T.limitCheck(0, 99, 99), ''); assert.equal(T.limitCheck(10, 4, 6), ''); assert(/limit/i.test(T.limitCheck(10, 5, 6))); });
+t('spentIn window', () => assert.equal(T.spentIn([{ t: 0, amt: 5 }, { t: 90000e3, amt: 2 }], 100000e3), 2));
+t('digest sums sent/received', () => { const now = Date.parse('2026-11-27T00:00:00Z'), d = Math.floor(now / 1000) - 946684800 - 3600;
+  const r = T.digest([{ tx_json: { TransactionType: 'Payment', Account: 'me', Destination: 'bob', Amount: '3000000', Fee: '10', date: d } }, { tx_json: { TransactionType: 'Payment', Account: 'bob', Destination: 'me', Amount: '1000000', date: d } }, { tx_json: { TransactionType: 'Payment', Account: 'me', Destination: 'old', Amount: '9000000', date: 1 } }], 'me', now);
+  assert.equal(r.n, 2); assert.equal(r.sent, 3); assert.equal(r.recv, 1); assert.equal(r.top[0], 'bob'); });
+console.log(n + ' passed');

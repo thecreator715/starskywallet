@@ -5,6 +5,8 @@ import { ctx } from './ctx.ts';
 import { opGet, opRoots } from './oproots.ts';
 import { esc, fmt, short, ago } from './util.ts';
 import * as PM from './procmodal.ts';
+import * as Lg from './connlog.ts';
+import * as Tk from './toolkit.ts';
 
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement | null;
 const N = (v: any, d = 2) => (v == null || !isFinite(+v) ? '–' : (+v).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 }));
@@ -16,7 +18,7 @@ const hexOf = (s: string) => Array.from(new TextEncoder().encode(s)).map(b => b.
 const rand = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n))).map(b => b.toString(16).padStart(2, '0')).join('');
 const sha256 = async (s: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))).map(b => b.toString(16).padStart(2, '0')).join('');
 
-type VW = 'start' | 'usage' | 'docs';
+type VW = 'start' | 'connect' | 'usage' | 'activity' | 'toolkit' | 'docs';
 let VIEW = 'start' as VW;
 let INFO: any = null, USE: any = null, ERR = '', base = '', busy = false, timer: any = 0, HRS = 24;
 const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
@@ -37,7 +39,7 @@ export async function load(force = false) {
   } catch (e: any) { ERR = String(e?.message || e); INFO = null; } finally { busy = false; paint(); }
 }
 export function setOp() { const cur = base || opRoots(OK)[0] || ''; const u = prompt('Control panel address (for example http://127.0.0.1:8090)', cur); if (u == null) return; try { localStorage.setItem(OK + net(), u.trim().replace(/\/$/, '')); } catch { /* ignore */ } base = u.trim().replace(/\/$/, ''); void load(true); }
-export function view(v: VW) { VIEW = v; paint(); }
+export function view(v: VW) { VIEW = v; paint(); if (v === 'connect' && !TEST.length) void runTest(); }
 export function hours(h: number) { HRS = h; void load(true); }
 
 // ---------- actions ----------
@@ -116,13 +118,76 @@ function docsHtml(): string {
   return `<div class="card c12"><div class="k">Quick start</div><div class="mut" style="margin:.4rem 0">Send your key in the <b>x-luma-key</b> header.</div>${code(`curl -H "x-luma-key: ${k}" ${b}/price\ncurl -H "x-luma-key: ${k}" ${b}/account/<address>\ncurl -X POST -H "x-luma-key: ${k}" -H "content-type: application/json" \\\n  -d '{"method":"fee"}' ${b}/rpc`)}${code(`const r = await fetch("${b}/price", { headers: { "x-luma-key": process.env.LUMA_KEY } });\nconst { result, billed_LUMA, credits_LUMA } = await r.json();`)}<div class="mut" style="font-size:.84rem">Command line: download <b>luma.mjs</b> from the control panel (Developer API → Settings & docs), then <span class="mono">node luma.mjs login ${esc(base || location.origin)} lk_...</span> and <span class="mono">node luma.mjs ask "what is the price"</span>.</div></div>
   <div class="card c12"><div class="k">Endpoints</div><table style="width:100%;font-size:.86rem;margin-top:.4rem">${list}</table><div class="mut" style="font-size:.82rem;margin-top:.5rem;line-height:1.5">Responses carry <span class="mono">x-luma-cost</span> and <span class="mono">x-luma-credits</span>. Status 402 means you are out of credits, 429 means slow down (the response says how fast your key may go), 401 means the key is missing or revoked. Never send a seed or secret to any API: sign transactions yourself and send the signed blob to <span class="mono">/submit</span>.</div></div>`;
 }
-const TABS: [VW, string][] = [['start', 'Start'], ['usage', 'Usage & analytics'], ['docs', 'Docs']];
+
+// ---------- connect & test ----------
+interface Chk { name: string; ok: boolean | null; ms?: number; note: string }
+let TEST: Chk[] = [], TESTING = false, TESTAT = 0;
+const wssUrl = () => String(ctx.nodeUrl() || '');
+const httpUrl = () => wssUrl().replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+const chainId = () => (net() === 'test' ? '4243' : '4242');
+function statusChip() { if (TESTING) return chip('testing…', BLUE); if (!TEST.length) return ''; const bad = TEST.filter(t => t.ok === false).length; return bad ? chip(bad + ' problem' + (bad > 1 ? 's' : ''), RED) : chip('all connected', GREEN); }
+export async function runTest() {
+  if (TESTING) return; TESTING = true; TEST = []; paint(); const add = (c: Chk) => { TEST.push(c); Lg.log('connection test', c.ok ? 'ok' : 'error', `${c.name}: ${c.note}`, c.ms); if (VIEW === 'connect') paint(); };
+  try {
+    const t0 = performance.now();
+    try { const r: any = await ctx.req('server_info', {}); const i = r.info || {}; add({ name: 'Node (WebSocket)', ok: true, ms: performance.now() - t0, note: `${i.server_state || 'connected'}, build ${i.build_version || '?'}, network ${i.network_id ?? chainId()}` }); const lg = i.validated_ledger; if (lg) { const age = Number(lg.age); add({ name: 'Ledger freshness', ok: age < 30, note: `ledger #${lg.seq} closed ${isFinite(age) ? age + ' s ago' : 'recently'}` }); } }
+    catch (e: any) { add({ name: 'Node (WebSocket)', ok: false, ms: performance.now() - t0, note: String(e?.message || e).slice(0, 140) }); }
+    const t1 = performance.now();
+    try { const r = await fetch(httpUrl(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'server_info', params: [{}] }) }); const j = await r.json(); add({ name: 'Node (HTTPS JSON-RPC)', ok: r.ok && !!j.result, ms: performance.now() - t1, note: r.ok ? 'answers' : 'status ' + r.status }); }
+    catch { add({ name: 'Node (HTTPS JSON-RPC)', ok: false, ms: performance.now() - t1, note: 'Could not reach ' + (httpUrl() || 'the node') + '. Some nodes only serve WebSocket; that is fine for Starsky.' }); }
+    const t2 = performance.now();
+    try { const i = await http('GET', '/api/public/devapi'); add({ name: 'Control panel', ok: i.s === 200 && !!i.j, ms: performance.now() - t2, note: i.s === 200 ? `${base} answers; API ${i.j?.enabled ? 'on' : 'off'}` : `${base} replied ${i.s}` }); }
+    catch (e: any) { add({ name: 'Control panel', ok: false, ms: performance.now() - t2, note: String(e?.message || e).slice(0, 160) }); }
+    const k = getKey();
+    if (k) { const t3 = performance.now(); try { const u = await http('GET', '/api/public/v1/usage?hours=1', undefined, k); add({ name: 'Your API key', ok: u.s === 200, ms: performance.now() - t3, note: u.s === 200 ? 'accepted' : u.s === 401 ? 'rejected (revoked or wrong)' : 'status ' + u.s }); } catch (e: any) { add({ name: 'Your API key', ok: false, note: String(e?.message || e).slice(0, 120) }); } }
+    else add({ name: 'Your API key', ok: null, note: 'No key saved yet (Start tab).' });
+  } finally { TESTING = false; TESTAT = Date.now(); paint(); }
+}
+function connectHtml(): string {
+  const code = (t: string) => `<pre style="background:rgba(255,255,255,.06);padding:.7rem;border-radius:8px;overflow:auto;font-size:.8rem;margin:.4rem 0">${esc(t)}</pre>`;
+  const cp = (t: string) => `<button class="sm" onclick="window.dv.copy(${esc(JSON.stringify(t))})">Copy</button>`;
+  const k = getKey(), kd = k ? k.slice(0, 9) + '…' + k.slice(-4) : 'not set', b = base || opRoots(OK)[0] || '(not found yet)', ws = wssUrl() || '(not connected)';
+  const row = (l: string, v: string, copyV?: string) => `<tr><td class="mut" style="padding:.25rem .8rem .25rem 0;white-space:nowrap">${esc(l)}</td><td class="mono" style="word-break:break-all">${esc(v)}</td><td style="text-align:right">${copyV ? cp(copyV) : ''}</td></tr>`;
+  const creds = `<div class="card c6"><div class="k">Your connection details</div><table style="width:100%;font-size:.86rem;margin-top:.4rem">${row('Network', net() === 'test' ? 'LUMA Testnet' : 'LUMA Mainnet')}${row('Network ID', chainId(), chainId())}${row('WebSocket (WSS)', ws, ws)}${row('HTTPS JSON-RPC', httpUrl() || '–', httpUrl())}${row('Developer API', b + '/api/public/v1', b + '/api/public/v1')}${row('Key header', 'x-luma-key', 'x-luma-key')}${row('API key', kd, k || '')}${row('Your address', ctx.account() ? ctx.show(ctx.account()!) : 'unlock a wallet', ctx.account() ? ctx.show(ctx.account()!) : '')}${row('Native token', ctx.native())}</table><div class="row" style="gap:.4rem;margin-top:.5rem"><button class="sm" onclick="window.dv.setOp()">Change control panel address</button></div><div class="mut" style="font-size:.78rem;margin-top:.4rem">Only your public address and the API key are shown. Never put a wallet seed in any app or script that talks to the API.</div></div>`;
+  const rows = TEST.map(t => `<tr><td>${t.ok == null ? chip('skipped', '#9aa0aa') : t.ok ? chip('ok', GREEN) : chip('failed', RED)}</td><td>${esc(t.name)}</td><td>${t.ms != null ? MS(t.ms) : ''}</td><td class="mut" style="font-size:.8rem">${esc(t.note)}</td></tr>`).join('');
+  const test = `<div class="card c6"><div class="row" style="align-items:center"><div class="k">Test connection</div><span class="grow"></span>${TESTING ? chip('testing…', BLUE) : ''}<button class="pri sm" onclick="window.dv.runTest()" ${TESTING ? 'disabled' : ''}>Run test</button></div><table style="width:100%;font-size:.86rem;margin-top:.5rem">${rows || '<tr><td class="mut">Press Run test.</td></tr>'}</table>${TESTAT ? `<div class="mut" style="font-size:.78rem;margin-top:.4rem">Last run ${new Date(TESTAT).toLocaleTimeString()}</div>` : ''}</div>`;
+  const kk = k || 'lk_YOUR_KEY', ap = b + '/api/public/v1';
+  const easy = `<div class="card c12"><div class="k">Easy setup</div><div class="mut" style="margin:.3rem 0">Copy one of these, run it, and the Test connection above turns green.</div>
+  <b>Node.js (xrpl.js, direct to the chain)</b>${code(`npm i xrpl\nimport { Client } from "xrpl";\nconst c = new Client("${ws}");\nawait c.connect();\nconsole.log(await c.request({ command: "server_info" }));\nawait c.disconnect();`)}
+  <b>Developer API (curl)</b>${code(`curl -H "x-luma-key: ${kk}" ${ap}/price\ncurl -H "x-luma-key: ${kk}" ${ap}/account/<address>`)}
+  <b>Python</b>${code(`import requests\nr = requests.get("${ap}/price", headers={"x-luma-key": "${kk}"})\nprint(r.json())`)}
+  <b>Environment file (.env)</b>${code(`LUMA_NETWORK_ID=${chainId()}\nLUMA_WSS=${ws}\nLUMA_RPC=${httpUrl()}\nLUMA_API=${ap}\nLUMA_KEY=${kk}`)}<div class="row" style="gap:.4rem">${cp(`LUMA_NETWORK_ID=${chainId()}\nLUMA_WSS=${ws}\nLUMA_RPC=${httpUrl()}\nLUMA_API=${ap}\nLUMA_KEY=${k}`)}<span class="mut" style="font-size:.78rem;align-self:center">Copies the .env with your real key.</span></div></div>`;
+  return creds + test + easy;
+}
+
+// ---------- activity log ----------
+let AF = { src: 'all', lvl: 'all', q: '', range: 'all' };
+export function actf(k: string, v: string) { (AF as any)[k] = v; paint(); }
+export function actClear() { if (confirm('Clear the activity log in this browser?')) Lg.clear(); }
+const dl = (name: string, text: string, type: string) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); };
+const cur = () => Lg.filter(Lg.all(), { src: AF.src, lvl: AF.lvl, q: AF.q, since: AF.range === 'all' ? 0 : Date.now() - Number(AF.range) * 60000 });
+export function actCsv() { dl('starsky-activity.csv', Lg.toCsv(cur()), 'text/csv'); }
+export function actJson() { dl('starsky-activity.json', JSON.stringify(cur(), null, 2), 'application/json'); }
+function activityHtml(): string {
+  const all = Lg.all(), list = cur(), st = Lg.stats(list), shown = list.slice().reverse().slice(0, 300);
+  const sel = (id: string, v: string, opts: [string, string][]) => `<select onchange="window.dv.actf('${id}',this.value)">${opts.map(o => `<option value="${o[0]}" ${v === o[0] ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select>`;
+  const tiles = `<div class="card c12"><div class="row" style="gap:.6rem;flex-wrap:wrap;width:100%">${tile('Events', N(st.total, 0), 'of ' + N(all.length, 0) + ' kept')}${tile('Problems', N(st.errors, 0), N(st.warns, 0) + ' warnings', st.errors ? RED : '')}${tile('Average time', st.avgMs == null ? '–' : MS(st.avgMs), 'timed calls only')}${tile('Slowest 5%', st.p95Ms == null ? '–' : MS(st.p95Ms), '95th percentile')}</div>
+  <div class="row" style="gap:.5rem;margin-top:.7rem;flex-wrap:wrap;align-items:center"><input id="ac_q" placeholder="Search" value="${esc(AF.q)}" oninput="window.dv.actf('q',this.value)" style="width:11rem">${sel('src', AF.src, [['all', 'All sources'], ...st.sources.concat(AF.src !== 'all' && !st.sources.includes(AF.src) ? [AF.src] : []).map(x => [x, x] as [string, string])])}${sel('lvl', AF.lvl, [['all', 'All levels'], ['ok', 'Success'], ['info', 'Info'], ['warn', 'Warnings'], ['error', 'Problems']])}${sel('range', AF.range, [['all', 'All time'], ['5', 'Last 5 min'], ['60', 'Last hour'], ['1440', 'Last 24 h']])}<span class="grow"></span><button class="sm" onclick="window.dv.actCsv()">Export CSV</button><button class="sm" onclick="window.dv.actJson()">Export JSON</button><button class="sm" onclick="window.dv.actClear()">Clear</button></div></div>`;
+  const col = (l: string) => (l === 'error' ? RED : l === 'warn' ? AMB : l === 'ok' ? GREEN : '#9aa0aa');
+  const tbl = `<div class="card c12"><div style="overflow:auto;max-height:32rem"><table style="width:100%;font-size:.82rem"><tr class="mut" style="text-align:left"><th>Time</th><th>Source</th><th>Status</th><th>What happened</th><th>Took</th></tr>${shown.map(e => `<tr title="${esc(e.detail || '')}"><td style="white-space:nowrap">${new Date(e.t).toLocaleTimeString()}</td><td class="mut">${esc(e.src)}</td><td>${chip(e.lvl === 'ok' ? 'ok' : e.lvl === 'error' ? 'problem' : e.lvl, col(e.lvl))}</td><td>${esc(e.msg)}${e.detail ? ` <span class="mut mono">${esc(e.detail.slice(0, 18))}</span>` : ''}</td><td>${e.ms != null ? MS(e.ms) : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="mut">Nothing logged yet. Node calls, transactions, control-panel calls and connection changes appear here live.</td></tr>'}</table></div></div>`;
+  return tiles + tbl;
+}
+Lg.onChange(() => { if (VIEW === 'activity' && document.getElementById('dv_root')) paint(); });
+const TABS: [VW, string][] = [['start', 'Start'], ['connect', 'Connect & test'], ['usage', 'Usage & analytics'], ['activity', 'Activity log'], ['toolkit', 'Toolkit'], ['docs', 'Docs']];
 export function shell() { return `<div id="dv_root" style="width:100%"><div class="row" style="gap:.4rem;margin-bottom:.7rem;flex-wrap:wrap" id="dv_tabs"></div><div id="dv_body" class="grid" style="width:100%"><div class="card c12 mut">Loading…</div></div></div>`; }
+let tkOn = false;
 function paint() {
   const tabs = document.getElementById('dv_tabs'), body = document.getElementById('dv_body'); if (!tabs || !body) return;
-  tabs.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.dv.view('${k}')">${l}</button>`).join('') + '<span class="grow"></span><button class="sm" onclick="window.dv.load(true)">Refresh</button>';
-  const a = document.activeElement as HTMLElement | null; if (a && ['dv_top', 'dv_amt', 'dv_label', 'dv_have'].includes(a.id) && body.contains(a)) return;   // never wipe what is being typed
-  body.innerHTML = VIEW === 'start' ? startHtml() : VIEW === 'usage' ? usageHtml() : docsHtml();
+  tabs.innerHTML = TABS.map(([k, l]) => `<button class="sm ${VIEW === k ? 'pri' : ''}" onclick="window.dv.view('${k}')">${l}</button>`).join('') + '<span class="grow"></span>' + statusChip() + '<button class="sm" onclick="window.dv.load(true)">Refresh</button>';
+  if (VIEW === 'toolkit') { if (!tkOn || !document.getElementById('tk_root')) { body.innerHTML = Tk.shell(); tkOn = true; Tk.mount(); } return; }
+  tkOn = false;
+  const a = document.activeElement as HTMLElement | null; if (a && ['dv_top', 'dv_amt', 'dv_label', 'dv_have', 'ac_q'].includes(a.id) && body.contains(a)) return;   // never wipe what is being typed
+  body.innerHTML = VIEW === 'start' ? startHtml() : VIEW === 'connect' ? connectHtml() : VIEW === 'usage' ? usageHtml() : VIEW === 'activity' ? activityHtml() : docsHtml();
 }
 export function mount() { clearInterval(timer); void load(true); timer = setInterval(() => { if (!document.getElementById('dv_root')) { clearInterval(timer); return; } if (!document.hidden) void load(); }, 10000); }
-export const api = { load, view, setOp, start, claim, topup, useKey, forget, newKey, revoke, copy, hours };
+export const api = { runTest, actf, actClear, actCsv, actJson, load, view, setOp, start, claim, topup, useKey, forget, newKey, revoke, copy, hours };

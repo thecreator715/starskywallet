@@ -19,6 +19,8 @@ import * as Ai from './live/ai.ts';
 import * as Dv from './live/devapi.ts';
 import * as Ad from './live/airdrop.ts';
 import * as Tk from './live/toolkit.ts';
+import * as Lg from './live/connlog.ts';
+import * as T2 from './live/toolkit2.ts';
 import * as Hd from './live/held.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
@@ -753,7 +755,7 @@ export async function connectNodes() {
     } catch {}
   }
   st.client = null;
-  st.status = 'connecting';
+  st.status = 'connecting'; Lg.log('network', 'info', 'Connecting to the node');
   if (!(st as any).offSince) (st as any).offSince = Date.now();
   st.tried = [];
   renderTop();
@@ -793,7 +795,7 @@ export async function connectNodes() {
     st.client = won.client;
     st.url = won.url;
     st.info = won.info;
-    st.status = 'online'; retryN = 0;
+    st.status = 'online'; retryN = 0; Lg.log('network', 'ok', 'Connected to ' + String(won.url));
     (st as any).offSince = 0;
     (st as any).lastLedgerAt = Date.now();
     st.err = '';
@@ -813,7 +815,7 @@ export async function connectNodes() {
     return;
   }
 
-  st.status = 'offline';
+  st.status = 'offline'; Lg.log('network', 'error', 'Could not connect to any node');
   st.err = `Could not connect to any ${getNet().name} WSS nodes.`;
   renderTop();
   renderBanner();
@@ -1135,6 +1137,12 @@ const ICON: Record<string, string> = {
   claim: '<rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8c-2-4-6-4-6-1.5S10 8 12 8zm0 0c2-4 6-4 6-1.5S14 8 12 8z"/>',
   mktoken: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
   mgtoken: '<path d="M4 7h10M4 12h16M4 17h10"/><circle cx="17" cy="7" r="2"/><circle cx="8" cy="17" r="0.1"/><path d="M17 17h3"/>',
+  ai: '<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+  airdrop: '<path d="M12 3a8 8 0 00-8 8h16a8 8 0 00-8-8z"/><path d="M4 11l8 9 8-9M9 11l3 9 3-9"/>',
+  api: '<path d="M8 8l-5 4 5 4M16 8l5 4-5 4M14 5l-4 14"/>',
+  checks: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 14h4M15 10l1.5 1.5L19 9"/>',
+  lending: '<path d="M3 10l9-6 9 6M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18"/>',
+  toolkit: '<path d="M14.7 6.3a4 4 0 005 5L21 13l-8 8-3-3 8-8zM3 21l5-5M7 11L3 7l3-3 4 4"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/> y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
 };
 
@@ -1857,7 +1865,6 @@ export function renderApp() {
         ${renderNavItem('lending', 'Lending')}
         ${renderNavItem('ai', 'AI')}
         ${renderNavItem('airdrop', 'Air Dropper')}
-        ${renderNavItem('toolkit', 'Toolkit')}
         ${renderNavItem('api', 'Developer API')}
         ${renderNavItem('markets', 'Markets & Tokens')}
         ${renderNavItem('mktoken', 'Create token')}
@@ -2421,8 +2428,9 @@ export function initWindowBindings() {
       if (!st.client) throw new Error('not connected');
       const cl: any = await chainClient();
       if (!cl.isConnected()) { try { await cl.connect(); } catch {} }   // never send while the socket is still opening
-      const r: any = await cl.request({ command, ...params });
-      return r.result;
+      const t0 = performance.now();
+      try { const r: any = await cl.request({ command, ...params }); Lg.log('node', 'ok', command, performance.now() - t0); return r.result; }
+      catch (e: any) { Lg.log('node', 'error', `${command} failed: ${String(e?.message || e).slice(0, 120)}`, performance.now() - t0); throw e; }
     },
     lumaReq: async (command: string, params: any = {}) => {
       if (!st.client) throw new Error('not connected');
@@ -2446,10 +2454,14 @@ export function initWindowBindings() {
     toClassic: (a: string) => { try { return LumaAddr.toR(a); } catch { return a; } },
     usdName: () => 'USD',
     submit: async (tx: any) => {
+      const t0 = performance.now(), what = `${tx?.TransactionType || 'tx'}${tx?.Destination ? ' to ' + String(tx.Destination).slice(0, 8) + '…' : ''}`;
+      const lim = T2.guard(tx); if (lim) { Lg.log('transaction', 'warn', `${what} blocked by your daily send limit`); return { ok: false, msg: lim }; }
       try {
         const r: any = await submitTx(tx);
+        if (r.ok) T2.noteSent(tx);
+        Lg.log('transaction', r.ok ? 'ok' : 'error', r.ok ? `${what} confirmed` : `${what} refused: ${String(r.msg || '').slice(0, 140)}`, performance.now() - t0, r.hash);
         return r.ok ? { ok: true, hash: r.hash } : { ok: false, msg: r.msg };
-      } catch (e: any) { return { ok: false, msg: String(e?.message || e) }; }
+      } catch (e: any) { Lg.log('transaction', 'error', `${what} failed: ${String(e?.message || e).slice(0, 140)}`, performance.now() - t0); return { ok: false, msg: String(e?.message || e) }; }
     },
     toast: (m: string, bad?: boolean) => toast(m, !!bad),
     rerender: () => renderApp(),

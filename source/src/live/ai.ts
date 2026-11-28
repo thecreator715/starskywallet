@@ -5,9 +5,10 @@ import { esc, fmt, short, akey, NATIVE, isNative, amtTx, type Asset } from './ut
 import * as M from './market.ts';
 import { publicGet } from './devapi.ts';
 import { parse, LEGEND, type Intent } from './aiParse.ts';
+import * as Lg from './connlog.ts';
 
 interface Msg { who: 'me' | 'ai'; html: string; id: number }
-interface Card { id: number; kind: 'swap' | 'send'; state: 'ready' | 'busy' | 'done' | 'cancelled' | 'failed'; data: any; msg?: string }
+interface Card { id: number; kind: 'swap' | 'send'; state: 'ready' | 'busy' | 'done' | 'cancelled' | 'failed'; data: any; msg?: string; t0?: number; t1?: number }
 const CH: Msg[] = []; const CARDS: Card[] = []; let seq = 1, prev: Intent | null = null, universe: Asset[] = [], uniAt = 0, BAL: { native: number; lines: any[] } | null = null, lastCard = 0;
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement | null;
 const nm = (a: Asset) => M.labelOf(a);
@@ -60,7 +61,7 @@ async function swapCard(it: Intent) {
   const warns: string[] = []; if (P0.maxImpactPct && q.impact * 100 > P0.maxImpactPct) return say(`That would move the price by ${(q.impact * 100).toFixed(1)}%, above the ${P0.maxImpactPct}% limit set for trades here. Try a smaller amount.`);
   if (q.impact > 0.05) warns.push(`High price impact: ${(q.impact * 100).toFixed(1)}%.`); else if (q.impact > 0.02) warns.push(`Price impact ${(q.impact * 100).toFixed(1)}%.`);
   if (isNative(from) && bal - x < 0.5) warns.push('This leaves almost nothing for fees.'); if (!hasLine(to)) warns.push(`${nm(to)} needs a trust line. Accept adds it first (a small reserve is held).`);
-  const c: Card = { id: seq++, kind: 'swap', state: 'ready', data: { from, to, m, side, x, q, min, slip, warns } }; CARDS.push(c); lastCard = c.id;
+  const c: Card = { id: seq++, kind: 'swap', state: 'ready', t0: Date.now(), data: { from, to, m, side, x, q, min, slip, warns } }; CARDS.push(c); lastCard = c.id;
   say(`Here is what that would do. Nothing is sent until you press Accept.<div data-card="${c.id}"></div>`);
 }
 async function sendCard(it: Intent) {
@@ -70,7 +71,7 @@ async function sendCard(it: Intent) {
   const list = await assets(); await loadBal(); const a = it.asset ? resolve(it.asset, list) : NATIVE; if (!a) return say(`I don't know <b>${esc(it.asset)}</b>.`);
   const bal = balOf(a), x = it.amount === 'all' ? bal : it.amount === 'half' ? bal / 2 : Number(it.amount);
   if (!(x > 0)) return say('Tell me an amount, for example <i>send 10 LUMA to r…</i>.'); if (x > bal + 1e-9) return say(`You have ${fmt(bal)} ${esc(nm(a))}, which is less than ${fmt(x)}.`);
-  const c: Card = { id: seq++, kind: 'send', state: 'ready', data: { a, x, dest, warns: [] } }; CARDS.push(c); lastCard = c.id;
+  const c: Card = { id: seq++, kind: 'send', state: 'ready', t0: Date.now(), data: { a, x, dest, warns: [] } }; CARDS.push(c); lastCard = c.id;
   say(`Check the details. Nothing is sent until you press Accept.<div data-card="${c.id}"></div>`);
 }
 async function balanceReply(it: Intent) {
@@ -147,9 +148,27 @@ function cardHtml(c: Card): string {
 }
 const legendHtml = () => LEGEND.map(g => `<div style="margin:.4rem 0"><b>${esc(g.group)}</b>${g.items.map(i => `<div class="ailg"><button class="sm" onclick="window.ai.say(${esc(JSON.stringify(i[0]))})">${esc(i[0])}</button><span class="mut">${esc(i[1])}</span></div>`).join('')}</div>`).join('');
 export function shell() {
-  return `<style>.aiwrap{display:grid;grid-template-columns:minmax(0,1fr) 20rem;gap:1rem}@media(max-width:900px){.aiwrap{grid-template-columns:1fr}}.aichat{display:flex;flex-direction:column;height:min(70vh,40rem)}#ai_log{flex:1;overflow:auto;display:flex;flex-direction:column;gap:.5rem;padding:.2rem}.aim{max-width:92%;padding:.5rem .7rem;border-radius:12px;line-height:1.45;font-size:.92rem}.aim.me{align-self:flex-end;background:var(--acc,#5aa9ff);color:#fff}.aim.ai{align-self:flex-start;background:rgba(255,255,255,.07)}.aic{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center;margin-top:.35rem}.aicard{margin-top:.5rem;padding:.6rem;border:1px solid rgba(255,255,255,.18);border-radius:10px}.aikv{display:flex;justify-content:space-between;gap:.6rem;font-size:.86rem;padding:.12rem 0}.aiw{margin-top:.3rem;color:#f5b84b;font-size:.82rem}.aitb td{padding:.1rem .6rem .1rem 0;font-size:.86rem}.ailg{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.2rem 0}.ailg .mut{font-size:.78rem}</style><div class="aiwrap" id="ai_root"><div class="card aichat"><div id="ai_log"></div><div class="row" style="gap:.4rem;margin-top:.5rem"><input id="ai_in" class="grow" placeholder="Try: trade 5 XRP for ${esc(ctx.native())}" autocomplete="off" onkeydown="if(event.key==='Enter')window.ai.send()"><button class="pri" onclick="window.ai.send()">Send</button></div></div><div class="card" style="overflow:auto;max-height:min(70vh,40rem)"><div class="k">What you can say</div><div class="mut" style="font-size:.8rem;margin:.2rem 0">Tap any line to run it. Any wording works.</div>${legendHtml()}</div></div>`;
+  return `<style>.aiwrap{display:grid;grid-template-columns:minmax(0,3fr) minmax(15rem,1.1fr) minmax(18rem,1.5fr);gap:1rem;width:100%}.aiwrap>.card{height:calc(100vh - 8.5rem);min-height:26rem;overflow:auto}@media(max-width:1100px){.aiwrap{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}.aiwrap>.card:last-child{grid-column:1/-1;height:24rem}}@media(max-width:760px){.aiwrap{grid-template-columns:1fr}.aiwrap>.card{height:auto;max-height:70vh}}.aichat{display:flex;flex-direction:column}.aiwrap>.aichat{overflow:hidden}.ala{padding:.45rem .55rem;border:1px solid rgba(255,255,255,.12);border-radius:9px;margin:.35rem 0;font-size:.84rem}.alt{display:flex;justify-content:space-between;gap:.5rem;align-items:center}.alm{color:var(--mut);font-size:.76rem;margin-top:.15rem;word-break:break-word}.ale{display:grid;grid-template-columns:4.6rem 1fr;gap:.4rem;font-size:.78rem;padding:.18rem 0;border-bottom:1px solid rgba(255,255,255,.06)}#ai_log{flex:1;overflow:auto;display:flex;flex-direction:column;gap:.5rem;padding:.2rem}.aim{max-width:92%;padding:.5rem .7rem;border-radius:12px;line-height:1.45;font-size:.92rem}.aim.me{align-self:flex-end;background:var(--acc,#5aa9ff);color:#fff}.aim.ai{align-self:flex-start;background:rgba(255,255,255,.07)}.aic{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center;margin-top:.35rem}.aicard{margin-top:.5rem;padding:.6rem;border:1px solid rgba(255,255,255,.18);border-radius:10px}.aikv{display:flex;justify-content:space-between;gap:.6rem;font-size:.86rem;padding:.12rem 0}.aiw{margin-top:.3rem;color:#f5b84b;font-size:.82rem}.aitb td{padding:.1rem .6rem .1rem 0;font-size:.86rem}.ailg{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.2rem 0}.ailg .mut{font-size:.78rem}</style><div class="aiwrap" id="ai_root"><div class="card aichat"><div id="ai_log"></div><div class="row" style="gap:.4rem;margin-top:.5rem"><input id="ai_in" class="grow" placeholder="Try: trade 5 XRP for ${esc(ctx.native())}" autocomplete="off" onkeydown="if(event.key==='Enter')window.ai.send()"><button class="pri" onclick="window.ai.send()">Send</button></div></div><div class="card"><div class="k">What you can say</div><div class="mut" style="font-size:.8rem;margin:.2rem 0">Tap any line to run it. Any wording works.</div>${legendHtml()}</div><div class="card"><div class="row" style="align-items:center;gap:.4rem"><div class="k">Activity log</div><span class="grow"></span><select id="al_f" onchange="window.ai.alf()" style="font-size:.78rem"><option value="all">Everything</option><option value="mine">My requests</option><option value="net">Network</option><option value="err">Problems</option></select></div><div id="al_body"></div></div></div>`;
 }
+const hm = (t?: number) => t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '–';
+const dur = (a?: number, b?: number) => a && b ? ((b - a) / 1000).toFixed(1) + ' s' : '';
+const SC: Record<string, [string, string]> = { ready: ['Pending your OK', '#f5b84b'], busy: ['Sending', '#5aa9ff'], done: ['Done', '#3ddc84'], cancelled: ['Cancelled', '#9aa0aa'], failed: ['Failed', '#ff5b5b'] };
+let alFilter = 'all';
+export function alf() { alFilter = ($('al_f') as any)?.value || 'all'; paintLog(); }
+function paintLog() {
+  const b = document.getElementById('al_body'); if (!b) return;
+  const f = $('al_f') as any; if (f && f.value !== alFilter) f.value = alFilter;
+  const mine = CARDS.slice().reverse().filter(c => alFilter === 'all' || alFilter === 'mine' || (alFilter === 'err' && c.state === 'failed')).map(c => {
+    const [lab, col] = SC[c.state] || ['', '#999']; if (['done', 'failed', 'cancelled'].includes(c.state) && !c.t1) c.t1 = Date.now();
+    const ttl = c.kind === 'swap' ? `Swap ${fmt(c.data.x)} ${esc(nm(c.data.from))} → ${esc(nm(c.data.to))}` : `Send ${fmt(c.data.x)} ${esc(nm(c.data.a))}`;
+    return `<div class="ala"><div class="alt"><b>${ttl}</b><span style="color:${col};font-size:.76rem">● ${lab}</span></div><div class="alm">Asked ${hm(c.t0)}${c.t1 ? ' · finished ' + hm(c.t1) + ' · took ' + dur(c.t0, c.t1) : ' · waiting'}</div>${c.msg ? `<div class="alm">${esc(c.msg)}</div>` : ''}</div>`;
+  }).join('');
+  const evs = alFilter === 'mine' ? [] : Lg.all().slice().reverse().filter(e => alFilter === 'err' ? e.lvl === 'error' : alFilter === 'net' ? true : true).slice(0, 60).map(e => `<div class="ale"><span class="mut">${hm(e.t)}</span><span><span style="color:${e.lvl === 'error' ? '#ff5b5b' : e.lvl === 'warn' ? '#f5b84b' : e.lvl === 'ok' ? '#3ddc84' : '#9aa0aa'}">●</span> <span class="mut">${esc(e.src)}</span> ${esc(e.msg)}${e.ms != null ? ` <span class="mut">${e.ms} ms</span>` : ''}</span></div>`).join('');
+  b.innerHTML = (alFilter === 'net' || alFilter === 'err' && !mine ? '' : `<div class="mut" style="font-size:.78rem;margin:.3rem 0 .1rem">Your requests</div>${mine || '<div class="mut" style="font-size:.82rem">Nothing yet. Ask me to swap or send and it shows here with its status and times.</div>'}`) + (alFilter === 'mine' ? '' : `<div class="mut" style="font-size:.78rem;margin:.6rem 0 .1rem">Network and transactions</div>${evs || '<div class="mut" style="font-size:.82rem">No activity yet.</div>'}`);
+}
+let unsub: (() => void) | null = null;
 function paint(scroll = false) {
+  paintLog();
   const log = document.getElementById('ai_log'); if (!log) return;
   log.innerHTML = CH.map(m => `<div class="aim ${m.who}">${m.html}</div>`).join('');
   log.querySelectorAll('[data-card]').forEach(el => { const c = cardOf(Number(el.getAttribute('data-card'))); if (c) el.outerHTML = cardHtml(c); });
@@ -159,5 +178,5 @@ export async function send(text?: string) {
   const inp = $('ai_in'); const t = (text ?? inp?.value ?? '').trim(); if (!t) return; if (inp && text == null) inp.value = '';
   say(esc(t), 'me'); try { await handle(t); } catch (e: any) { say(`Something went wrong: ${esc(String(e?.message || e))}`); }
 }
-export function mount() { if (!CH.length) say(`Hi. Tell me what you want to do, in your own words. I show an estimate first and nothing happens until you press <b>Accept</b>.${chips([`trade 5 XRP for ${ctx.native()}`, 'balance', 'help'])}`); else paint(true); setTimeout(() => $('ai_in')?.focus(), 50); }
-export const api = { send, say: (t: string) => void send(t), accept, decline, slip: setSlip };
+export function mount() { unsub?.(); unsub = Lg.onChange(() => { if (document.getElementById('al_body')) paintLog(); else { unsub?.(); unsub = null; } }); paintLog(); if (!CH.length) say(`Hi. Tell me what you want to do, in your own words. I show an estimate first and nothing happens until you press <b>Accept</b>.${chips([`trade 5 XRP for ${ctx.native()}`, 'balance', 'help'])}`); else paint(true); setTimeout(() => $('ai_in')?.focus(), 50); }
+export const api = { send, say: (t: string) => void send(t), accept, decline, slip: setSlip, alf };

@@ -1500,3 +1500,5 @@ main:has(#tkpg){max-width:none}
 .brsteps{display:grid;gap:.45rem;margin:.4rem 0}
 .brsteps>div{display:flex;gap:.6rem;align-items:flex-start;font-size:.86rem;line-height:1.45}
 .brsteps b:first-child{flex:0 0 1.6rem;height:1.6rem;border-radius:50%;display:grid;place-items:center;background:var(--ok-t);color:var(--ok)}
+
+main:has(#ai_root){max-width:none;width:100%}
