@@ -25,6 +25,7 @@ import * as Hd from './live/held.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
 import * as Scan from './live/scan.ts';
+import * as Vt from './live/vaults.ts';
 import * as Social from './live/social.ts';
 import * as Bio from './live/bio.ts';
 import * as XDex from './live/xdex.ts';
@@ -315,7 +316,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'toolkit' | 'lending' | 'scan' | 'ai' | 'api' | 'airdrop' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'toolkit' | 'lending' | 'vaults' | 'scan' | 'ai' | 'api' | 'airdrop' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -896,7 +897,7 @@ export async function refreshAccount(quiet = false) {
     const sig = JSON.stringify([String(bal.drops), bal.owner, lines, st.hist.length, (st.hist[0] as any)?.tx?.hash || (st.hist[0] as any)?.hash || '', st.px, st.nfts.length, st.mpts.length]);
     const changed = sig !== lastSig;
     lastSig = sig;
-    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'checks', 'lending', 'ai', 'api', 'airdrop', 'toolkit', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
+    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'checks', 'lending', 'vaults', 'ai', 'api', 'airdrop', 'toolkit', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
     else if ((changed || !quiet) && !(quiet && /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement as HTMLElement | null)?.tagName || ''))) renderApp();   // never rebuild the page under someone who is typing
     else renderTop();
   } catch (e: any) {
@@ -1147,6 +1148,7 @@ const ICON: Record<string, string> = {
   airdrop: '<path d="M12 3a8 8 0 00-8 8h16a8 8 0 00-8-8z"/><path d="M4 11l8 9 8-9M9 11l3 9 3-9"/>',
   api: '<path d="M8 8l-5 4 5 4M16 8l5 4-5 4M14 5l-4 14"/>',
   checks: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 14h4M15 10l1.5 1.5L19 9"/>',
+  vaults: '<path d="M4 7h16v12H4zM8 7V5h8v2M12 11v4M9.5 13h5"/>',
   lending: '<path d="M3 10l9-6 9 6M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18"/>',
   scan: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/>',
   toolkit: '<path d="M14.7 6.3a4 4 0 005 5L21 13l-8 8-3-3 8-8zM3 21l5-5M7 11L3 7l3-3 4 4"/>',
@@ -1165,6 +1167,7 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['receive', 'Receive'],
   ['checks', 'Checks'],
   ['lending', 'Lending'],
+  ['vaults', 'Vaults'],
   ['scan', 'LUMA Scan'],
   ['ai', 'AI'],
   ['api', 'Developer API'],
@@ -1645,6 +1648,10 @@ export function renderApp() {
       body = Rewards.shell();
       break;
 
+    case 'vaults':
+      body = Vt.shell();
+      break;
+
     case 'scan':
       body = Scan.shell();
       break;
@@ -1875,6 +1882,7 @@ export function renderApp() {
         ${renderNavItem('receive', 'Receive')}
         ${renderNavItem('checks', 'Checks')}
         ${renderNavItem('lending', 'Lending')}
+        ${renderNavItem('vaults', 'Vaults')}
         ${renderNavItem('scan', 'LUMA Scan')}
         ${renderNavItem('ai', 'AI')}
         ${renderNavItem('airdrop', 'Air Dropper')}
@@ -1997,6 +2005,8 @@ export function renderApp() {
   else Pages.marketsUnmount();
   if (st.tab === 'bridge') Pages.bridgeMount();
   if (st.tab === 'claim') Claim.mount();
+  if (st.tab === 'vaults') Vt.mount();
+  else Vt.unmount();
   if (st.tab === 'scan') Scan.mount();
   else Scan.unmount();
   if (st.tab === 'rewards') Rewards.mount();
@@ -2421,6 +2431,7 @@ export function initWindowBindings() {
   (window as any).bn = Bn.api;
   (window as any).ck = Ck.api;
   (window as any).ld = Ld.api;
+  (window as any).vt = Vt.api;
   (window as any).ai = Ai.api;
   (window as any).dv = Dv.api;
   (window as any).ad = Ad.api;
