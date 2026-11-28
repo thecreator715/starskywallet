@@ -39,7 +39,7 @@ const num = (n: number, d = 4) => Number(n).toLocaleString('en', { maximumFracti
 
 async function holdings(): Promise<Hold[]> {
   const r: any = await ctx.req('account_lines', { account: ctx.account(), limit: 400 });
-  return ((r && r.lines) || []).filter((l: any) => Number(l.balance) > 0).map((l: any) => ({ key: akey({ c: l.currency, i: l.account }), name: hexName(l.currency), bal: Number(l.balance), a: { c: l.currency, i: l.account }, lp: !!M.lpPoolOf({ c: l.currency, i: l.account }) }));
+  return ((r && r.lines) || []).filter((l: any) => Number(l.balance) > 0).map((l: any) => ({ key: akey({ c: l.currency, i: l.account }), name: (() => { const lp = M.lpPoolOf({ c: l.currency, i: l.account }); return lp ? `${lp.a.c === 'native' ? ctx.native() : hexName(lp.a.c)}/${lp.b.c === 'native' ? ctx.native() : hexName(lp.b.c)} LP` : hexName(l.currency); })(), bal: Number(l.balance), a: { c: l.currency, i: l.account }, lp: !!M.lpPoolOf({ c: l.currency, i: l.account }) }));
 }
 async function quoteAll() {
   CV.quotes = {};

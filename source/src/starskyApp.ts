@@ -552,7 +552,12 @@ export const curName = (c: string) => {
   return b.length && b.every(x => x >= 32 && x < 127) ? String.fromCharCode(...b) : c.slice(0, 6) + '…';
 };
 
-export const aName = (a: { c: string; i?: string }) => (a.c === 'native' ? getNet().native : a.i && M.isOldUsd({ c: a.c, i: a.i }) ? 'USD (old)' : curName(a.c));
+export const aName = (a: { c: string; i?: string }): string => {
+  if (a.c === 'native') return getNet().native;
+  if (a.i && M.isOldUsd({ c: a.c, i: a.i })) return 'USD (old)';
+  const lp = a.i ? M.lpPoolOf({ c: a.c, i: a.i }) : null;   // an LP token is always shown by its pair
+  return lp ? `${aName(lp.a)}/${aName(lp.b)} LP` : curName(a.c);
+};
 
 export const aRpc = (a: { c: string; i?: string }) =>
   a.c === 'native' ? { currency: getNet().isXrpl ? 'XRP' : 'LUMA' } : { currency: a.c, issuer: a.i };

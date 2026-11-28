@@ -6,6 +6,7 @@ import * as xrpl from 'xrpl';
 import { ctx } from './ctx.ts';
 import { esc, fmt, usd } from './util.ts';
 import { base } from './nodelink.ts';
+import * as CAT from './catalog.ts';
 
 const $ = (id: string) => document.getElementById(id);
 const net = () => (ctx.netKey() === 'test' ? 'test' : 'main');
@@ -106,6 +107,7 @@ function paint() {
       </div>
       ${c.note ? `<div class="muted" style="margin-top:.6rem">${esc(c.note)}</div>` : ''}
     </div>
+    <div class="card c12"><div class="k">Also earning ${fmt(+(c.apyOther ?? 5), 2)}% a year</div><div class="muted" style="font-size:.8rem;margin:.2rem 0 .5rem">Gold, silver, copper, platinum, Anthropic (ANTX) and every currency token pay the same hold reward as any other token. Hold them and they appear in your list above.</div><div class="row" style="gap:.4rem;flex-wrap:wrap">${[...Object.keys(CAT.METALS), 'ANTX', ...Object.keys(CAT.CURRENCIES)].map(n => { const held = R.some((r: any) => String(r.name).toUpperCase() === n); return `<span class="tag ${held ? 'ok' : ''}" title="${esc(CAT.labelOf(n))}${held ? ' · you hold it' : ''}">${esc(n)} <span class="muted" style="font-size:.7rem">${esc(CAT.labelOf(n))}</span></span>`; }).join('')}</div></div>
     <div class="card c3"><div class="k">Your holdings</div><div style="font-size:1.45rem;font-weight:700;margin-top:.2rem">${fmt(totL, 2)} LUMA</div><div class="muted" style="font-size:.78rem">${usd(totU)}</div></div>
     <div class="card c3"><div class="k">LUMA price</div><div style="font-size:1.45rem;font-weight:700;margin-top:.2rem">${usd(lu)}</div><div class="muted" style="font-size:.78rem">1 LUMA</div></div>
     <div class="card c3"><div class="k">Collected so far</div><div style="font-size:1.45rem;font-weight:700;margin-top:.2rem">${fmt(d.collected || 0, 4)} LUMA</div><div class="muted" style="font-size:.78rem">${fmt(d.collects || 0, 0)} collects</div></div>

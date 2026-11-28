@@ -344,12 +344,15 @@ export { bridgeShell, bridgeMount, bridgeLoad, brApi } from './bridge.ts';
 /* =============================== PORTFOLIO: assets and tokens =============================== */
 const catOf = (r: M.TokenRow, reg: Map<string, TK.TokenMeta>): string => {
   if (isNative(r.a)) return '1 Native coin';
+  if (CAT.isCurrency(r.name)) return '5 Currencies';
+  if (CAT.isMetal(r.name)) return '6 Metals';
   if (reg.has(r.key)) return '4 Others';
   const n = r.name.toUpperCase();
-  if (/^(USD|USDC|USDT|RLUSD|DAI|XUSD|EUR|EURO)$/.test(n) || n === ctx.usdName().toUpperCase()) return '2 Dollar tokens';
+  if (/^(USD|USDC|USDT|RLUSD|DAI|XUSD|EURO)$/.test(n) || n === ctx.usdName().toUpperCase()) return '2 Dollar tokens';
   if (/^(LUMAX|XRPZ|WBTC|WETH|WXRP)$/.test(n)) return '3 Bridged and wrapped';
   return '4 Others';
 };
+import * as CAT from './catalog.ts';
 const PA: any = { tab: 'all', data: null, sort: { c: '', d: -1 } };
 const FAVK = 'starsky.favs';
 const FAV: Set<string> = (() => {
@@ -382,7 +385,7 @@ const coinIcon = (key: string, name: string) => {
   return ic ? `<img class="coinimg" src="${ic}" alt="">` : `<i>${tkLetters(name)}</i>`;
 };
 export function assetsShell() {
-  const tabs = [['all', 'All'], ['dollar', 'Dollar tokens'], ['bridged', 'Bridged'], ['others', 'Others'], ['lp', 'LP tokens'], ['pools', 'All pools'], ['fav', '★ Favorites']];
+  const tabs = [['all', 'All'], ['dollar', 'Dollar tokens'], ['bridged', 'Bridged'], ['others', 'Others'], ['currencies', 'Currencies'], ['metals', 'Metals'], ['lp', 'LP tokens'], ['pools', 'All pools'], ['fav', '★ Favorites']];
   return `<div class="card c12"><div class="row" style="align-items:center;gap:.6rem"><div class="k">Assets & tokens on the ${ctx.xrpl() ? 'XRP Ledger' : esc(ctx.native()) + ' network'}</div><span class="grow"></span><span id="pa_meta" class="mut" style="font-size:.76rem"></span><button class="sm" onclick="window.tk.openManage()">Mint, burn &amp; cap</button><button class="sm pri acc" onclick="window.tk.openCreate()">+ Create token</button></div>
     <div class="dxtabs" id="pa_tabs" style="margin-top:.5rem">${tabs.map(([k, l]) => `<button class="${PA.tab === k ? 'on' : ''}" onclick="window.pa.tab('${k}')">${l}</button>`).join('')}</div>
     <div id="pa" style="overflow:auto">${keep.pa || wait('Reading tokens…')}</div></div>`;
@@ -480,7 +483,7 @@ function renderAssets() {
   const px = t.now.usdPerNative;
   let total = 0;
   for (const x of rows) if (x.r.nativePx != null) total += x.bal * x.r.nativePx;
-  const show = rows.filter(x => PA.tab === 'all' || (PA.tab === 'dollar' && (x.cat[0] === '2' || x.cat[0] === '1')) || (PA.tab === 'bridged' && x.cat[0] === '3') || (PA.tab === 'others' && x.cat[0] === '4') || (PA.tab === 'fav' && isFav('t:' + x.r.key)));
+  const show = rows.filter(x => PA.tab === 'all' || (PA.tab === 'dollar' && (x.cat[0] === '2' || x.cat[0] === '1')) || (PA.tab === 'bridged' && x.cat[0] === '3') || (PA.tab === 'others' && x.cat[0] === '4') || (PA.tab === 'currencies' && x.cat[0] === '5') || (PA.tab === 'metals' && x.cat[0] === '6') || (PA.tab === 'fav' && isFav('t:' + x.r.key)));
 
   const nmA = (x: Asset) => M.labelOf(x);
   const poolRow = ({ ref, st }: any) => {
@@ -554,7 +557,7 @@ function renderAssets() {
         ? '<button class="sm pri acc" onclick="window.goTab(\'send\')">Send</button>'
         : `${l ? '<span class="tag ok" title="Trust line is set">trusted</span>' : `<button class="sm pri" onclick="window.mk.trust('${esc(r.key)}',this);setTimeout(window.pa.reload,2500)">Trust</button>`} <button class="sm" onclick="window.pa.trade('${esc(r.key)}')">Trade</button>${others ? ` <button class="sm" onclick="window.tk.openPool('${esc(r.key)}')">Pool</button>` : ''}`;
       const sub = isNative(r.a) ? 'native coin' : meta ? `by ${esc(short(ctx.show(meta.creator), 6, 4))}${meta.ms ? ' · ' + ago(Date.now() - meta.ms) : ''}` : esc(short(ctx.show(r.issuer), 8, 5));
-      return `${head}<tr ondblclick="window.pa.open('trade','${esc(r.key)}')" title="Double-click to open"><td><div class="coin">${star('t:' + r.key)}${coinIcon(r.key, r.name)}<div><b>${esc(r.name)}</b><div class="mut mono" style="font-size:.7rem">${sub}</div>${others && meta && (meta.desc || meta.site) ? `<div class="mut" style="font-size:.72rem;max-width:18rem;white-space:normal">${esc(meta.desc)} ${meta.site ? `<a href="${esc(meta.site)}" target="_blank" rel="noopener noreferrer">site</a>` : ''}</div>` : ''}</div></div></td><td class="r">${r.usdPx != null ? usd(r.usdPx) : r.nativePx != null ? fmt(r.nativePx) + ' ' + esc(nat) : '<span class="mut">no pool</span>'}</td><td class="r">${pctHtml(r.chg['24h'])}${r.partial['24h'] ? '<small class="mut" title="Since listing">*</small>' : ''}</td><td class="r">${l || isNative(r.a) ? fmt(bal) : '<span class="mut">–</span>'}</td><td class="r">${val != null && (l || isNative(r.a)) ? (px != null ? usd(val * px) : fmt(val) + ' ' + esc(nat)) : '<span class="mut">–</span>'}</td><td class="r">${r.supply != null ? fmt(r.supply) : '–'}</td><td class="r">${r.mcapUsd != null ? usd(r.mcapUsd) : r.mcapNative != null ? fmt(r.mcapNative) + ' ' + esc(nat) : '–'}</td><td class="r">${r.tvlUsd != null ? usd(r.tvlUsd) : r.tvlNative ? fmt(r.tvlNative) : '–'}<div class="mut" style="font-size:.7rem">${r.pools} pool${r.pools === 1 ? '' : 's'}</div></td><td class="r" style="white-space:nowrap">${act}</td></tr>`;
+      return `${head}<tr ondblclick="window.pa.open('trade','${esc(r.key)}')" title="Double-click to open"><td><div class="coin">${star('t:' + r.key)}${coinIcon(r.key, r.name)}<div><b>${esc(r.name)}</b>${CAT.labelOf(r.name) ? `<span class="tag" style="margin-left:.4rem">${esc(CAT.labelOf(r.name))}</span>` : ''}<div class="mut mono" style="font-size:.7rem">${sub}</div>${others && meta && (meta.desc || meta.site) ? `<div class="mut" style="font-size:.72rem;max-width:18rem;white-space:normal">${esc(meta.desc)} ${meta.site ? `<a href="${esc(meta.site)}" target="_blank" rel="noopener noreferrer">site</a>` : ''}</div>` : ''}</div></div></td><td class="r">${r.usdPx != null ? usd(r.usdPx) : r.nativePx != null ? fmt(r.nativePx) + ' ' + esc(nat) : '<span class="mut">no pool</span>'}</td><td class="r">${pctHtml(r.chg['24h'])}${r.partial['24h'] ? '<small class="mut" title="Since listing">*</small>' : ''}</td><td class="r">${l || isNative(r.a) ? fmt(bal) : '<span class="mut">–</span>'}</td><td class="r">${val != null && (l || isNative(r.a)) ? (px != null ? usd(val * px) : fmt(val) + ' ' + esc(nat)) : '<span class="mut">–</span>'}</td><td class="r">${r.supply != null ? fmt(r.supply) : '–'}</td><td class="r">${r.mcapUsd != null ? usd(r.mcapUsd) : r.mcapNative != null ? fmt(r.mcapNative) + ' ' + esc(nat) : '–'}</td><td class="r">${r.tvlUsd != null ? usd(r.tvlUsd) : r.tvlNative ? fmt(r.tvlNative) : '–'}<div class="mut" style="font-size:.7rem">${r.pools} pool${r.pools === 1 ? '' : 's'}</div></td><td class="r" style="white-space:nowrap">${act}</td></tr>`;
     })
     .join('');
   setHtml('pa', `<table class="dxt tok9"><thead><tr>${sth('Asset', 'name', '')}${sth('Price', 'price')}${sth('24h', 'chg')}${sth('Balance', 'bal')}${sth('Value', 'value')}${sth('Supply', 'supply')}${sth('Market cap', 'mcap')}${sth('Liquidity', 'liq')}<th></th></tr></thead><tbody>${body || `<tr><td colspan="9" class="mut" style="padding:1rem">${others ? 'No tokens have been created on this network yet. Use “Create token” to make the first one.' : 'Nothing here yet.'}</td></tr>`}</tbody></table><div class="mut" style="font-size:.74rem;margin-top:.5rem">Every token with a pool on this network, every token created here, and every trust line this wallet has. Categories go by symbol; created tokens are under Others. Wallet total: <b>${px != null ? usd(total * px) : fmt(total) + ' ' + esc(nat)}</b>. * = since the token first appeared in a pool.${TK.genesisAddr() ? '' : ' Created tokens are found through the genesis wallet: set it once in the token creator.'}</div>`);
@@ -571,7 +574,7 @@ export const paApi = {
   },
   tab(k: string) {
     PA.tab = k;
-    document.querySelectorAll('#pa_tabs button').forEach((b, i) => b.classList.toggle('on', ['all', 'dollar', 'bridged', 'others', 'lp', 'pools', 'fav'][i] === k));
+    document.querySelectorAll('#pa_tabs button').forEach((b, i) => b.classList.toggle('on', ['all', 'dollar', 'bridged', 'others', 'currencies', 'metals', 'lp', 'pools', 'fav'][i] === k));
     renderAssets();
   },
   fav(k: string) {
