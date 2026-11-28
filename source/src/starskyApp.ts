@@ -13,7 +13,11 @@ import * as Bot from './live/bot.ts';
 import * as Mg from './live/margin.ts';
 import * as PL from './live/poolinfo.ts';
 import * as Bn from './live/burn.ts';
-import * as Ck from './live/checks.ts';
+import * as Ck from './live/checks.ts'
+import * as Ld from './live/lending.ts';
+import * as Ai from './live/ai.ts';
+import * as Dv from './live/devapi.ts';
+import * as Ad from './live/airdrop.ts';
 import * as Claim from './live/claim.ts';
 import * as Rewards from './live/rewards.ts';
 import * as Social from './live/social.ts';
@@ -306,7 +310,7 @@ export const persistVault = async () => {
 };
 
 export interface AppState {
-  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
+  tab: 'home' | 'wallets' | 'dex' | 'pools' | 'markets' | 'bridge' | 'network' | 'bot' | 'margin' | 'supply' | 'burn' | 'claim' | 'rewards' | 'social' | 'nftmarket' | 'send' | 'receive' | 'checks' | 'lending' | 'ai' | 'api' | 'airdrop' | 'nfts' | 'activity' | 'holders' | 'runnode' | 'mktoken' | 'mgtoken' | 'more';
   scanSubTab: 'pulse' | 'ledgers' | 'activity' | 'pools' | 'accounts' | 'health';
   walletMode: 'luma' | 'xrpl';
   client: xrpl.Client | null;
@@ -881,7 +885,7 @@ export async function refreshAccount(quiet = false) {
     const sig = JSON.stringify([String(bal.drops), bal.owner, lines, st.hist.length, (st.hist[0] as any)?.tx?.hash || (st.hist[0] as any)?.hash || '', st.px, st.nfts.length, st.mpts.length]);
     const changed = sig !== lastSig;
     lastSig = sig;
-    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'checks', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
+    if (['dex', 'markets', 'network', 'bridge', 'supply', 'burn', 'bot', 'margin', 'nfts', 'nftmarket', 'social', 'send', 'receive', 'checks', 'lending', 'ai', 'api', 'airdrop', 'mktoken', 'mgtoken', 'runnode', 'claim'].includes(st.tab)) renderTop();   // social: a price or balance tick must not rebuild the whole feed (that was the flicker)
     else if ((changed || !quiet) && !(quiet && /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement as HTMLElement | null)?.tagName || ''))) renderApp();   // never rebuild the page under someone who is typing
     else renderTop();
   } catch (e: any) {
@@ -1143,6 +1147,10 @@ export const TABS: Array<[AppState['tab'], string]> = [
   ['send', 'Send'],
   ['receive', 'Receive'],
   ['checks', 'Checks'],
+  ['lending', 'Lending'],
+  ['ai', 'AI'],
+  ['api', 'Developer API'],
+  ['airdrop', 'Air Dropper'],
   ['markets', 'Markets & Tokens'],
   ['mktoken', 'Create Token'],
   ['mgtoken', 'Mint, Burn & Cap'],
@@ -1482,7 +1490,7 @@ export function renderApp() {
   const b = st.bal;
 
   let body = '';
-  const LUMA_ONLY = ['pools', 'network', 'supply', 'burn', 'bot', 'margin', 'holders'];
+  const LUMA_ONLY = ['lending', 'airdrop', 'pools', 'network', 'supply', 'burn', 'bot', 'margin', 'holders'];
   const blocked = st.walletMode === 'xrpl' && LUMA_ONLY.includes(st.tab);   // those pages read the LUMA network: never show them under an XRPL wallet
   switch (blocked ? '__luma_only' : st.tab) {
     case '__luma_only':
@@ -1587,6 +1595,18 @@ export function renderApp() {
       body = Supply.supplyShell();
       break;
 
+    case 'lending':
+      body = Ld.shell();
+      break;
+    case 'ai':
+      body = Ai.shell();
+      break;
+    case 'api':
+      body = Dv.shell();
+      break;
+    case 'airdrop':
+      body = Ad.shell();
+      break;
     case 'checks':
       body = Ck.shell();
       break;
@@ -1828,6 +1848,10 @@ export function renderApp() {
         ${renderNavItem('send', 'Send')}
         ${renderNavItem('receive', 'Receive')}
         ${renderNavItem('checks', 'Checks')}
+        ${renderNavItem('lending', 'Lending')}
+        ${renderNavItem('ai', 'AI')}
+        ${renderNavItem('airdrop', 'Air Dropper')}
+        ${renderNavItem('api', 'Developer API')}
         ${renderNavItem('markets', 'Markets & Tokens')}
         ${renderNavItem('mktoken', 'Create token')}
         ${renderNavItem('mgtoken', 'Mint, burn & cap')}
@@ -1922,6 +1946,10 @@ export function renderApp() {
   if (st.tab === 'holders') Hold.mount();
   if (st.tab === 'burn') Bn.pageMount();
   if (st.tab === 'checks') Ck.mount();
+  if (st.tab === 'lending') Ld.mount();
+  if (st.tab === 'ai') Ai.mount();
+  if (st.tab === 'api') Dv.mount();
+  if (st.tab === 'airdrop') void Ad.mount();
   if (st.tab === 'supply') Supply.supplyMount();
   else Supply.supplyUnmount();
   if (st.tab === 'bot') Bot.botMount();
@@ -2362,6 +2390,11 @@ export function initWindowBindings() {
   (window as any).mg = Mg.mgApi;
   (window as any).bn = Bn.api;
   (window as any).ck = Ck.api;
+  (window as any).ld = Ld.api;
+  (window as any).ai = Ai.api;
+  (window as any).dv = Dv.api;
+  (window as any).ad = Ad.api;
+  Ad.startAuto();
   (window as any).mk = Pages.mkApi;
   (window as any).br = Pages.brApi;
   (window as any).pa = Pages.paApi;
