@@ -284,9 +284,17 @@ export async function load(keepSelection = true) {
     DX.loadedMid = DX.mid + (DX.inv ? '~' : '');
     renderAll();
     const m = mkt() as M.Market;
-    const jobs: Promise<any>[] = [
-      loadBal().then(() => !stale(g) && (renderTrade(), renderTok())),
-      safeCandles(m, c2 => { if (!stale(g) && DX.mid + (DX.inv ? '~' : '') === DX.loadedMid) { DX.cd = c2; renderChart(); renderHead(); } }).then(c => {
+    // price first, on its own: seed with the last price seen for this pair (instant), then one pool read for the live one; nothing else waits for this
+    const pxKey = 'starsky.dex.px.' + JSON.stringify([m.base, m.quote]);
+    if (!DX.pc) { try { const j = JSON.parse(localStorage.getItem(pxKey) || 'null'); if (j && j.now > 0) { DX.pc = { now: j.now, ch: {} }; renderHead(); } } catch {} }
+    const priceJob = (async () => {
+      const dp = M.directPool(DX.refs, m.base, m.quote);
+      const sPool = dp ? await M.poolState(dp).catch(() => null) : null;
+      if (stale(g)) return;
+      const now = sPool ? M.poolPrice(sPool, m.base) : null;
+      if (now != null && now > 0) { DX.pc = DX.pc && DX.pc.ch && Object.keys(DX.pc.ch).length ? { ...DX.pc, now } : { now, ch: {} }; try { localStorage.setItem(pxKey, JSON.stringify({ now })); } catch {} renderHead(); renderInfo(); }
+    })();
+    const chartJob = safeCandles(m, c2 => { if (!stale(g) && DX.mid + (DX.inv ? '~' : '') === DX.loadedMid) { DX.cd = c2; renderChart(); renderHead(); } }).then(c => {
         if (stale(g)) return;
         DX.cd = c;
         renderChart();
@@ -298,7 +306,11 @@ export async function load(keepSelection = true) {
           });
         renderHead();
         renderTok();
-      }),
+      });
+    const jobs: Promise<any>[] = [
+      loadBal().then(() => !stale(g) && (renderTrade(), renderTok())),
+      priceJob,
+      chartJob,
       M.trades(m, 200).then(t => {
         if (stale(g)) return;
         DX.tr = t;
@@ -306,6 +318,7 @@ export async function load(keepSelection = true) {
         renderInfo();
         renderTok();
       }),
+      M.tokenTable([m.base, m.quote], true).then(t1 => { if (stale(g) || DX.tok) return; DX.tok = t1; if (!DX.pc || DX.pc.now == null) { const r = M.ratio(t1.now, m.base, m.quote); if (r != null) DX.pc = { now: r, ch: {} }; } renderHead(); renderTok(); }).catch(() => {}),
       M.tokenTable([m.base, m.quote]).then(async t => {
         if (stale(g)) return;
         DX.tok = t;
@@ -332,9 +345,11 @@ export async function load(keepSelection = true) {
       }),
       loadOrders().then(() => !stale(g) && DX.tab === 'orders' && renderTable()),
     ];
-    await Promise.allSettled(jobs);
+    await Promise.allSettled([priceJob, chartJob]);   // the page is live as soon as the price and chart are in; the rest keeps filling in
+    if (g === DX.gen) DX.loading = false;
     DX.last = Date.now();
     quoteNow();
+    await Promise.allSettled(jobs);
   } catch (e: any) {
     DX.err = String(e?.message || e);
     renderAll();

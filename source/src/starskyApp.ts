@@ -637,10 +637,13 @@ let lastPx = 0;
 let retryN = 0;
 let lastReplyAt = 0;
 // at most 10 reads on the wire at once: hundreds of parallel pool reads used to choke the node and the tunnel, which looked like a dropped connection
-let inflightN = 0;
-const waitQ: Array<() => void> = [];
-const slot = () => (inflightN < 10 ? (inflightN++, Promise.resolve()) : new Promise<void>(r => waitQ.push(() => { inflightN++; r(); })));
-const freeSlot = () => { inflightN--; const n = waitQ.shift(); if (n) n(); };
+// Two lanes, so a big background scan can never hold up what you are looking at: light reads (prices, balances, pool state now) always
+// get through; heavy reads (whole-ledger scans, supply of every token, history at old ledgers) share a smaller lane.
+const LANE = { light: { n: 0, max: 16, q: [] as Array<() => void> }, heavy: { n: 0, max: 5, q: [] as Array<() => void> } };
+const laneOf = (command: string, p: any): 'light' | 'heavy' =>
+  command === 'ledger_data' || command === 'gateway_balances' || (typeof p?.ledger_index === 'number' && command !== 'ledger') ? 'heavy' : 'light';
+const slot = (l: 'light' | 'heavy') => { const L = LANE[l]; return L.n < L.max ? (L.n++, Promise.resolve()) : new Promise<void>(r => L.q.push(() => { L.n++; r(); })); };
+const freeSlot = (l: 'light' | 'heavy') => { const L = LANE[l]; L.n--; const n = L.q.shift(); if (n) n(); };
 function backoff(): number { retryN++; return Math.min(15000, 600 * Math.pow(1.6, retryN - 1)); }
 function nudge() {
   if (document.hidden) return;
@@ -2460,7 +2463,8 @@ export function initWindowBindings() {
     book: () => CFG.book,
     req: async (command: string, params: any = {}) => {
       if (!st.client) throw new Error('not connected');
-      await slot();
+      const lane = laneOf(command, params);
+      await slot(lane);
       try {
       const cl: any = await chainClient();
       if (!cl.isConnected()) { try { await cl.connect(); } catch {} }   // never send while the socket is still opening
@@ -2476,7 +2480,7 @@ export function initWindowBindings() {
         }
         lastReplyAt = Date.now(); Lg.log('node', 'ok', command, performance.now() - t0); return r.result; }
       catch (e: any) { Lg.log('node', 'error', `${command} failed: ${String(e?.message || e).slice(0, 120)}`, performance.now() - t0); throw e; }
-      } finally { freeSlot(); }
+      } finally { freeSlot(lane); }
     },
     lumaReq: async (command: string, params: any = {}) => {
       if (!st.client) throw new Error('not connected');
