@@ -246,7 +246,7 @@ export function bridgeShell() {
   return `<div id="br" class="brpage" style="position:relative"><div id="br_head"></div><div id="br_pend"></div>
   <div class="card" id="br_xfer" style="margin-top:.6rem"></div>
   <div id="br_tabs" class="seg" style="margin:1rem 0 .6rem;flex-wrap:wrap"></div>
-  <div id="brp_activity" class="brpane"><div class="card"><div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Your bridge activity (read from both ledgers)</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div><div id="br_hist" style="overflow:auto"><div class="mut" style="padding:1rem">Reading…</div></div></div></div>
+  <div id="brp_activity" class="brpane"><div class="card"><div class="row" style="justify-content:space-between"><div class="k" style="margin:0">Your bridge activity (read from both ledgers)</div><button class="sm ghost" onclick="window.br.refresh()">Refresh</button></div><div id="br_hist" style="overflow:auto">${(() => { try { return localStorage.getItem('starsky.br.hist.' + ctx.netKey() + '.' + ctx.account()) || ''; } catch { return ''; } })() || '<div class="mut" style="padding:1rem">Reading…</div>'}</div></div></div>
   <div id="brp_wallets" class="brpane" style="display:none"><div id="br_bw" class="card"><div class="mut" style="padding:.8rem">Reading both bridge wallets…</div></div></div>
   <div id="brp_stats" class="brpane" style="display:none"><div id="br_stats" class="card"><div class="mut" style="padding:.8rem">Reading bridge statistics…</div></div></div>
   <div id="brp_nft" class="brpane" style="display:none"><div id="br_nft" class="card"></div></div>
@@ -561,7 +561,8 @@ async function history(g: number) {
   if (g !== gen) return;
   const lastSent = rows.find(r => /Sent to bridge/.test(r.html)), lastRecv = rows.find(r => /Received from bridge/.test(r.html));
   const waiting = lastSent && (!lastRecv || lastRecv.ms < lastSent.ms) && Date.now() - lastSent.ms < 15 * 60e3;
-  setHtml('br_hist', rows.length ? `${waiting ? '<div style="font-size:.82rem;color:#ffc400;margin-bottom:.4rem">Your latest transfer was sent and no payout has been seen yet. That is normal for a minute or two; if it stays like this, check the checklist above (relayer, trust line).</div>' : ''}<table class="dxt"><thead><tr><th>When</th><th>Ledger</th><th>Type</th><th class="r">Amount</th><th>Memo</th><th>Result</th></tr></thead><tbody>${rows.slice(0, 50).map(r => r.html).join('')}</tbody></table>` : '<div class="mut" style="padding:1rem">No transfers with the bridge from your wallets yet.</div>');
+  const __h = (rows.length ? `${waiting ? '<div style="font-size:.82rem;color:#ffc400;margin-bottom:.4rem">Your latest transfer was sent and no payout has been seen yet. That is normal for a minute or two; if it stays like this, check the checklist above (relayer, trust line).</div>' : ''}<table class="dxt"><thead><tr><th>When</th><th>Ledger</th><th>Type</th><th class="r">Amount</th><th>Memo</th><th>Result</th></tr></thead><tbody>${rows.slice(0, 50).map(r => r.html).join('')}</tbody></table>` : '<div class="mut" style="padding:1rem">No transfers with the bridge from your wallets yet.</div>');
+  setHtml('br_hist', __h); try { localStorage.setItem('starsky.br.hist.' + ctx.netKey() + '.' + ctx.account(), __h.slice(0, 400000)); } catch {}
 }
 
 /* ---------------------------------- lifecycle ---------------------------------- */

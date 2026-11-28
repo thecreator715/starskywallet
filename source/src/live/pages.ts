@@ -424,6 +424,8 @@ export async function loadAssets() {
     const [regList, bl] = await Promise.all([regP, blP]);
     const allX = [...lineAssets, ...regList.map(x => x.a), ...bl];
     // pass 1 (fast): every token with its price and balance, no supply or history reads, so the real table is on screen straight away
+    const fullP = M.tokenTable(allX);   // the full read starts now, alongside the fast one, instead of waiting behind it
+    fullP.catch(() => {});
     const [t1] = await Promise.all([M.tokenTable(allX, true), M.poolRefs().catch(() => [])]);
     if (!$('pa')) return;
     const lpLines = (MK.bal ? MK.bal.lines : []).filter((l: any) => +l.balance > 0 && M.lpPoolOf({ c: l.currency, i: l.account }));
@@ -443,7 +445,7 @@ export async function loadAssets() {
     // every pool's reserves (for the pool tabs) load alongside pass 2
     const poolsP = Pool_all(prefs).then(pools => { PA.data = { ...PA.data, pools }; if ($('pa')) renderAssets(); });
     // pass 2: supply, market cap and the 1h/24h/7d history, filled in behind it
-    const t = await M.tokenTable(allX);
+    const t = await fullP;
     if (!$('pa')) return;
     PA.data = { ...PA.data, t, reg: new Map(regList.map(x => [x.key, x])), lps };
     renderAssets();

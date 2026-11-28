@@ -68,13 +68,20 @@ async function fillCh(r: Row, ws: M.WinSnap[], un: number | null, refs: M.PoolRe
       }));
   r.chAt = Date.now();
   PL.cc.set(p.m.account, { ch, at: r.chAt });
+  ccSave();
 }
+// the per-pool changes are remembered across visits, so the columns are filled the moment the page opens and refreshed behind
+const ccKey = () => 'starsky.pl.cc.' + ctx.netKey() + (ctx.xrpl() ? 'x' : '');
+let ccT: any = null;
+function ccSave() { if (ccT) return; ccT = setTimeout(() => { ccT = null; try { localStorage.setItem(ccKey(), JSON.stringify([...PL.cc.entries()].slice(-600))); } catch {} }, 1500); }
+function ccLoad() { if (PL.ccLoaded === ccKey()) return; PL.ccLoaded = ccKey(); try { const j = JSON.parse(localStorage.getItem(ccKey()) || '[]'); for (const [k, v] of j) if (!PL.cc.has(k)) PL.cc.set(k, v); } catch {} }
 const NOSNAP: any = { px: new Map(), usdPerNative: null };
 async function compute() {
   const sn = await M.snapshot();
   return computeRows(sn);
 }
 function computeRows(sn: any) {
+  ccLoad();
   const un = sn.usdPerNative;
   const refs: M.PoolRef[] = [];
   const rows: Row[] = [];

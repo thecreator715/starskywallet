@@ -308,6 +308,23 @@ export async function tokenTable(extra: Asset[] = [], fast = false): Promise<{ r
       pools: n,
     } as TokenRow;
   });
+  // the full pass remembers what only it can read (24h change, supply, market cap, the 24h price reference); the fast pass wears it until the real numbers land
+  const TK = 'starsky.tt.' + ctx.netKey() + (ctx.xrpl() ? 'x' : '');
+  if (!fast) {
+    try {
+      const w24 = ws.find(z => z.w.k === '24h');
+      localStorage.setItem(TK, JSON.stringify({ rows: rows.map(r => [r.key, r.chg, r.partial, r.listedSeq, r.supply, r.mcapUsd, r.mcapNative]), w24: w24 ? { w: w24.w, seq: w24.seq, ageSec: w24.ageSec, clamped: w24.clamped, px: [...w24.snap.px.entries()], un: w24.snap.usdPerNative } : null }));
+    } catch {}
+  } else {
+    try {
+      const j = JSON.parse(localStorage.getItem(TK) || 'null');
+      if (j) {
+        const by = new Map<string, any[]>((j.rows || []).map((x: any[]) => [x[0], x]));
+        for (const r of rows) { const x = by.get(r.key); if (!x) continue; r.chg = x[1] || r.chg; r.partial = x[2] || r.partial; r.listedSeq = x[3]; r.supply = x[4]; r.mcapUsd = x[5]; r.mcapNative = x[6]; }
+        if (j.w24) ws.push({ w: j.w24.w, seq: j.w24.seq, ageSec: j.w24.ageSec, clamped: j.w24.clamped, snap: { seq: j.w24.seq, pools: [], px: new Map(j.w24.px), usdPerNative: j.w24.un, usdKey: null, root: '' } as any });
+      }
+    } catch {}
+  }
   rows.sort((x, y) => (y.mcapUsd ?? y.mcapNative ?? -1) - (x.mcapUsd ?? x.mcapNative ?? -1));
   return { rows, now, ws };
 }
@@ -399,14 +416,18 @@ async function priceAtSeq(m: Market, seq: number, dp: PoolRef | null): Promise<{
  * Candles built from the pool's real price at past ledgers (three readings per candle: open, middle, close).
  * Wicks therefore show where the price was at those moments, not every trade.
  */
-export async function candles(m: Market, range: RangeDef): Promise<{ list: Candle[]; first: number; clamped: boolean; note: string }> {
+export async function candles(m: Market, range: RangeDef, onPart?: (c: { list: Candle[]; first: number; clamped: boolean; note: string }) => void): Promise<{ list: Candle[]; first: number; clamped: boolean; note: string }> {
   const i = await info();
   const per = await secPerLedger();
   const nowH = await header(i.seq);
   const nowMs = nowH ? nowH.close : Date.now();
-  const first = isFinite(range.sec) ? Math.max(i.minSeq, Math.round(i.seq - range.sec / per)) : i.minSeq;
+  const refs0 = await poolRefs();
+  const dp0 = directPool(refs0, m.base, m.quote);
+  const born = dp0 ? await Promise.race([firstSeen(dp0).catch(() => 0), new Promise<number>(res => setTimeout(() => res(0), 4000))]) : 0;   // nothing exists before the pool does: don't read empty ledgers
+  let first = isFinite(range.sec) ? Math.max(i.minSeq, Math.round(i.seq - range.sec / per)) : i.minSeq;
+  if (born > 0 && born < i.seq - 5) first = Math.max(first, born);
   const clamped = isFinite(range.sec) && i.seq - range.sec / per < i.minSeq - 1;
-  const n = range.candles;
+  const n = Math.min(range.candles, Math.max(6, Math.floor((i.seq - first) / 2)));
   const stepSeq = Math.max(1, Math.round((i.seq - first) / n));
   const seqs: number[] = [];
   for (let k = 0; k <= n; k++) {   // one reading per candle edge (half the reads it used to take)
@@ -416,7 +437,15 @@ export async function candles(m: Market, range: RangeDef): Promise<{ list: Candl
   }
   const refs = await poolRefs();
   const dp = directPool(refs, m.base, m.quote);
-  const pts = await pool(seqs, 8, s => priceAtSeq(m, s, dp));
+  const part: ({ p: number | null; qres: number | null } | undefined)[] = new Array(seqs.length).fill(undefined);
+  let done = 0;
+  const emit = () => {
+    if (!onPart) return;
+    const l: Candle[] = [];
+    for (let k = 0; k < seqs.length; k++) { const x = part[k]; if (x && x.p != null && x.p > 0) l.push({ t: nowMs - (i.seq - seqs[k]) * per * 1000, o: x.p, h: x.p, l: x.p, c: x.p, flow: 0 }); }
+    if (l.length > 3) onPart({ list: l, first, clamped, note: '' });
+  };
+  const pts = await pool(seqs, 6, async s => { const r = await Promise.race([priceAtSeq(m, s, dp), new Promise<{ p: null; qres: null }>(res => setTimeout(() => res({ p: null, qres: null }), 20000))]).catch(() => ({ p: null, qres: null })) as any; part[seqs.indexOf(s)] = r; if (++done % 6 === 0) emit(); return r; });
   const list: Candle[] = [];
   let lastP: number | null = null;
   for (let c = 0; c < n; c++) {
@@ -566,7 +595,7 @@ export interface HolderRow {
   share: number | null;
   tag: string;
 }
-export async function holders(a: Asset, supply: number | null, poolAccts: Set<string>): Promise<{ count: number; top: HolderRow[]; truncated: boolean }> {
+export async function holders(a: Asset, supply: number | null, poolAccts: Set<string>, onPart?: (n: number) => void): Promise<{ count: number; top: HolderRow[]; truncated: boolean }> {
   return cached('holders' + akey(a), 60000, async () => {
     const rows: { addr: string; bal: number }[] = [];
     let truncated = false;
@@ -576,6 +605,7 @@ export async function holders(a: Asset, supply: number | null, poolAccts: Set<st
         const r: any = await req('ledger_data', { type: 'account', ledger_index: 'validated', limit: 400, ...(marker ? { marker } : {}) });
         for (const o of r.state || []) if (o.LedgerEntryType === 'AccountRoot' && Number(o.Balance) > 0) rows.push({ addr: o.Account, bal: Number(o.Balance) / 1e6 });
         marker = r.marker;
+        if (onPart && page % 2 === 1) onPart(rows.length);
         if (!marker) break;
         if (page === 29) truncated = true;
       }
@@ -701,7 +731,7 @@ export async function growth(sec: number, points: number): Promise<{ ms: number;
 /** Fast candles for short ranges: built from the pool's own recent swaps plus its current price (a handful of requests instead of dozens of history lookups). Empty periods repeat the last price. */
 export async function quickCandles(m: Market, range: RangeDef): Promise<{ list: Candle[]; first: number; clamped: boolean; note: string } | null> {
   const refs = await poolRefs(), dp = directPool(refs, m.base, m.quote);
-  if (!dp || !isFinite(range.sec)) return null;
+  if (!dp || !isFinite(range.sec) || range.sec > 3 * 86400) return null;   // long ranges need real history, not just the latest trades
   const nowMs = Date.now(), span = range.sec * 1000, start = nowMs - span, step = span / range.candles;
   const [st, trs] = await Promise.all([poolState(dp).catch(() => null), tradesSince(m, start, 2).catch(() => [] as Trade[])]);
   const pts = trs.filter(t => (t.kind === 'buy' || t.kind === 'sell') && t.price != null && t.price > 0 && t.ms > 0).sort((a, b) => a.ms - b.ms);

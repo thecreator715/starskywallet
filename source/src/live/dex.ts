@@ -95,7 +95,7 @@ const nm = (a: Asset) => M.labelOf(a);
 async function safeCandles(m: M.Market, up?: (c: any) => void): Promise<any> {
   const r0 = RANGE();
   const key = 'cd2|' + m.id + '|' + JSON.stringify([m.base, m.quote]) + '|' + r0.k;
-  const slow = async () => { const r = RANGE(); return M.candles(m, r); };
+  const slow = async (part?: (c: any) => void) => { const r = RANGE(); return M.candles(m, r, part); };
   const quick = async () => { const r = RANGE(); const q = await Promise.race([M.quickCandles(m, r).catch(() => null), new Promise<null>(res => setTimeout(() => res(null), 6000))]); return q && q.list.length > 1 ? q : null; };
   let to: any;
   try {
@@ -114,7 +114,14 @@ async function safeCandles(m: M.Market, up?: (c: any) => void): Promise<any> {
       if (up && r0.sec > 3600) Promise.race([slow(), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('slow')), 60000); })]).then((c: any) => c && c.list && c.list.length > 3 && c.list.length >= q.list.length * 0.6 && up(c)).catch(() => {}).finally(() => clearTimeout(to));
       return q;
     }
-    return await Promise.race([slow(), new Promise((_, rej) => { to = setTimeout(() => rej(new Error('The node took too long to answer.')), 40000); })]);
+    // no saved chart and no trade data: read real history, showing the first points the moment they arrive and finishing behind them
+    let first: any = null; let wake: (c: any) => void = () => {};
+    const firstP = new Promise<any>(res => { wake = res; });
+    const full = slow(c => { first = c; wake(c); }).then(c => { if (c && c.list && c.list.length > 1) { try { localStorage.setItem('starsky.cc.cdq|' + key, JSON.stringify({ t: Date.now(), v: c })); } catch {} } wake(c); return c; });
+    const got: any = await Promise.race([firstP, new Promise((_, rej) => { to = setTimeout(() => rej(new Error('The node took too long to answer.')), 45000); })]);
+    if (got !== undefined && got !== null && !(got.list && got.list.length > 1 && got === first)) return got;
+    full.then(c => c && c.list && c.list.length > 1 && up && up(c)).catch(() => {});
+    return got;
   } catch (e: any) {
     return { list: [], first: 0, clamped: false, note: 'Could not read price history: ' + String(e?.message || e) + ' Tap a range to retry.' };
   } finally { clearTimeout(to); }
@@ -325,7 +332,7 @@ export async function load(keepSelection = true) {
         DX.mini = { supply: sup, tvlQ }; lsSet('mini', DX.mini); renderTok();
         // holders after supply
         const pools = new Set<string>(DX.refs.map((q: M.PoolRef) => q.account));
-        const h = await M.holders(m.base, sup, pools).catch(() => null);
+        const h = await M.holders(m.base, sup, pools, n => { if (!stale(g) && !DX.hold) { DX.hold = { count: n, top: [], truncated: true } as any; renderTok(); DX.hold = null; } }).catch(() => null);
         if (stale(g) || !h) return; DX.hold = h; DX.holdAt = Date.now(); try { lsSet('hold', h); } catch {} renderTok(); if (DX.tab === 'holders') renderTable();
       })().catch(() => {});
       await Promise.all([chgP, miniP]);
